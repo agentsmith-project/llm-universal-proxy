@@ -10,6 +10,21 @@ def read_doc(relative_path: str) -> str:
     return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
 
 
+def active_public_markdown_docs() -> list[pathlib.Path]:
+    docs = [REPO_ROOT / "README.md", REPO_ROOT / "README_CN.md"]
+    for path in sorted((REPO_ROOT / "docs").rglob("*.md")):
+        relative_parts = path.relative_to(REPO_ROOT).parts
+        if relative_parts[:2] == ("docs", "engineering"):
+            continue
+        if relative_parts[:3] in (
+            ("docs", "protocol-baselines", "audits"),
+            ("docs", "protocol-baselines", "snapshots"),
+        ):
+            continue
+        docs.append(path)
+    return docs
+
+
 def table_row(text: str, first_cell: str) -> str:
     pattern = re.compile(rf"^\|\s*{re.escape(first_cell)}\s*\|.*$", re.MULTILINE)
     match = pattern.search(text)
@@ -45,26 +60,26 @@ class ProtocolDocsContractTests(unittest.TestCase):
 
         self.assertNotIn("same-protocol paths stay native", text)
         for snippet in (
-            "raw same-protocol passthrough",
+            "raw same-protocol forwarding",
             "maximum safe compatibility",
-            "not a user-selectable compatibility level",
+            "zero-transformation forwarding optimization",
             "MUST NOT introduce a `llmup` cache store",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
 
-    def test_prd_translation_pipeline_records_raw_lane_as_pre_ga_target(self):
+    def test_prd_translation_pipeline_records_raw_forwarding_as_pre_ga_target(self):
         text = read_doc("docs/PRD.md")
         pipeline = text.split("### 4.2 Translation Pipeline", 1)[1].split(
             "\n### 4.3", 1
         )[0]
 
         for snippet in (
-            "raw same-protocol passthrough execution lane",
+            "byte-preserving raw same-protocol forwarding optimization",
             "avoid body mutation and response normalization",
-            "single maximum-compatible translation lane",
+            "single maximum safe compatibility strategy",
             "Apply hard portability boundaries before upstream",
-            "pre-GA implementation target and engineering lane",
+            "pre-GA implementation target and request processing fact",
             "may still pass through compatibility machinery",
         ):
             with self.subTest(snippet=snippet):
@@ -75,9 +90,10 @@ class ProtocolDocsContractTests(unittest.TestCase):
 
         for snippet in (
             "single maximum safe compatibility",
-            "Raw Passthrough Is An Execution Lane",
-            "not a product tier",
+            "Raw Forwarding Is A Zero-Transformation Optimization",
+            "not a separate product behavior",
             "conversation_state_bridge.mode=memory",
+            "explicit transcript expansion adapter",
             "memory-only",
             "resp_llmup_*",
             "process restart",
@@ -88,27 +104,54 @@ class ProtocolDocsContractTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
 
-    def test_active_docs_and_python_contracts_reject_old_tiered_language(self):
+    def test_public_product_docs_and_python_contracts_reject_old_product_strategy_language(self):
         paths = [
-            REPO_ROOT / "README.md",
-            REPO_ROOT / "README_CN.md",
-            *sorted((REPO_ROOT / "docs").rglob("*.md")),
+            *active_public_markdown_docs(),
             REPO_ROOT / "tests" / "test_protocol_docs_contract.py",
             REPO_ROOT / "tests" / "test_docs_homepage_contract.py",
             REPO_ROOT / "tests" / "test_ga_docs_contract.py",
             REPO_ROOT / "tests" / "test_release_gates.py",
-            REPO_ROOT / "tests" / "test_real_cli_matrix.py",
         ]
         forbidden = (
+            "execution " + "lane",
+            "translation " + "lane",
+            "primary execution " + "path",
+            "Raw" + "Provider" + "Passthrough",
+            "Maximum" + "Compatibility" + "Translation",
+            "Provider" + "Prompt" + "Cache" + "Optimized",
+            "compatibility " + "tier",
+            "compatibility " + "level",
+            "product " + "tier",
+            "primary " + "lane",
+            "intended " + "lane",
+            "proxy " + "lanes",
+            "OpenAI-compatible " + "lane",
+            "Anthropic-compatible " + "lane",
+            "MiniMax is an OpenAI-compatible " + "lane",
+            "raw provider " + "passthrough",
+            "raw " + "passthrough",
+            "native " + "passthrough",
+            "Native Responses " + "passthrough",
+            "native Responses " + "passthrough",
+            "Native OpenAI Responses " + "passthrough",
+            "native OpenAI Responses " + "passthrough",
+            "raw/native " + "passthrough",
+            "raw same-protocol " + "passthrough",
+            "passthrough " + "lane",
+            "passthrough " + "lanes",
+            "passthrough " + "only",
+            "passthrough " + "path",
+            "passthrough " + "paths",
+            "raw/native " + "lane",
+            "lane " + "is available",
             "strict" + "/balanced",
             "default" + "/" + "max" + "_compat",
-            "compatible " + "same-protocol lane",
-            "same" + "-provider/native passthrough",
-            "same" + "-provider native passthrough",
+            "compatible " + "same-protocol " + "lane",
+            "same" + "-provider/native " + "passthrough",
+            "same" + "-provider native " + "passthrough",
             "compatibility" + "_mode",
-            "Provider" + "PromptCacheOptimized",
             "provider prompt-cache optimized " + "lane",
-            "raw passthrough, provider prompt-cache optimization, "
+            "raw " + "passthrough, provider prompt-cache optimization, "
             + "or maximum-compatible translation",
         )
 
@@ -116,12 +159,6 @@ class ProtocolDocsContractTests(unittest.TestCase):
             relative_path = path.relative_to(REPO_ROOT)
             text = path.read_text(encoding="utf-8")
             for snippet in forbidden:
-                if (
-                    snippet == "compatibility" + "_mode"
-                    and str(relative_path)
-                    == "docs/engineering/max-compat-development-plan.md"
-                ):
-                    continue
                 with self.subTest(path=str(relative_path), snippet=snippet):
                     self.assertNotIn(snippet, text)
 
@@ -150,7 +187,8 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "`promptTokenCount/candidatesTokenCount`",
             "`thought` parts (Gemini)",
             "Data plane HTTP API for OpenAI, Anthropic, and Google/Gemini-compatible clients",
-            "Main request execution path for OpenAI, Anthropic, and Gemini surfaces",
+            "Main request execution "
+            + "path for OpenAI, Anthropic, and Gemini surfaces",
             "Gemini GenerateContent unary",
             "official Gemini live smoke",
             "Gemini `replace`",
@@ -242,31 +280,31 @@ class ProtocolDocsContractTests(unittest.TestCase):
                     ),
                 )
 
-    def test_tools_baseline_preserves_hosted_tools_only_on_native_or_shim_lanes(self):
+    def test_tools_baseline_preserves_hosted_tools_only_on_native_or_shimmed_passthrough(self):
         text = read_doc("docs/protocol-baselines/capabilities/tools.md")
         row = table_row(text, "Hosted / server tools")
 
         self.assertNotIn("Preserve same-protocol hosted tools only", row)
-        self.assertIn(
-            "Preserve hosted/server tools only on raw/native passthrough lanes or through explicit compatibility shims. Cross-provider translation should warn/drop or fail closed when the target cannot represent the tool safely.",
-            row,
-        )
-        self.assertIn(
-            "Gate hosted/server tools behind raw/native passthrough or explicit compatibility shims.",
-            text,
-        )
+        for snippet in (
+            "raw/native forwarding",
+            "explicit compatibility shims",
+            "Cross-provider translation should warn/drop or fail closed",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, row)
+        self.assertIn("Gate hosted/server tools behind raw/native forwarding", text)
 
     def test_maximum_compatibility_design_uses_single_strategy_and_raw_passthrough_boundary(self):
         text = read_doc("docs/max-compat-design.md")
 
-        self.assertNotIn("same-protocol paths: native passthrough", text)
+        self.assertNotIn("same-protocol paths: native " + "passthrough", text)
         for snippet in (
             "one client-first translation strategy: maximum safe compatibility",
-            "Not Tiered",
-            "raw same-protocol passthrough",
+            "Single Product Behavior",
+            "raw same-protocol forwarding",
             "hard portability boundary",
-            "provider prompt-cache optimization is a provider-native request-control step",
-            "not a third primary lane",
+            "provider prompt-cache support is provider-native request-control support",
+            "not a separate product behavior",
             "Legacy compatibility config input is accepted only as no-op parsing compatibility",
         ):
             with self.subTest(snippet=snippet):
@@ -277,8 +315,8 @@ class ProtocolDocsContractTests(unittest.TestCase):
 
         for snippet in (
             "Translated paths should use the maximum safe representation",
-            "Same-format raw passthrough",
-            "Native Responses passthrough preserves `context_management`",
+            "Same-format zero-transform forwarding",
+            "Native Responses zero-transform forwarding preserves `context_management`",
             "`include` values such as `reasoning.encrypted_content`",
             "input reasoning and compaction items with `encrypted_content`",
             "exactly one native OpenAI Responses upstream",
@@ -301,7 +339,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "opaque-only reasoning",
             "opaque-only compaction",
             "one summarized compaction item does not permit another opaque-only compaction item",
-            "native Responses passthrough",
+            "native Responses forwarding",
             "response-side reasoning encrypted_content",
             "Anthropic carrier recovery path",
         ):
@@ -401,7 +439,8 @@ class ProtocolDocsContractTests(unittest.TestCase):
                 self.assertIn(snippet, text)
         self.assertNotIn("Legacy compatibility-policy plumbing exists in the runtime", text)
         self.assertNotIn(
-            "Status: delivered as internal plumbing; no longer a product-facing tier model.",
+            "Status: delivered as internal plumbing; no longer a product-facing "
+            + "tier model.",
             text,
         )
 

@@ -586,7 +586,7 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
             "release-compatible-provider",
             "portable-core production GA",
             "single maximum safe compatibility with hard portability boundaries",
-            "Raw/native passthrough is an intended pre-GA execution lane",
+            "Raw/native forwarding is a byte-preserving optimization",
             "pass through compatibility machinery",
         ):
             with self.subTest(snippet=snippet):
@@ -595,7 +595,7 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
         self.assertIn("CLI wrapper matrix", clients)
         self.assertIn("hermetic scripted interactive Codex wrapper gate", clients)
         self.assertIn("not a full live multi-client/provider matrix", clients)
-        self.assertIn("MiniMax is an OpenAI-compatible lane", clients)
+        self.assertIn("MiniMax is only a replaceable OpenAI-compatible example", clients)
         self.assertIn("CLI wrapper matrix", container)
         self.assertIn("structure gate", container)
         self.assertIn("hermetic scripted interactive Codex wrapper gate", container)
@@ -624,39 +624,42 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
                 "maximum safe compatibility",
                 "visible summary",
                 "opaque-only",
-                "raw/native passthrough",
+                "raw/native forwarding",
             ),
             "reasoning": (
                 "reasoning.encrypted_content",
                 "maximum-compatible",
                 "visible summary",
                 "opaque-only reasoning fails closed",
+                "raw/native forwarding",
             ),
             "state": (
                 "context_management",
                 "request-side compaction input",
                 "maximum-compatible",
                 "opaque-only",
-                "native Responses passthrough",
+                "native Responses forwarding",
+                "raw/native forwarding",
             ),
             "field_mapping": (
                 "Reasoning opaque state",
                 "maximum-compatible",
                 "Compaction",
                 "opaque-only compaction",
+                "raw/native forwarding",
             ),
             "responses": (
                 "context_management",
                 "request-side compaction",
                 "visible portable transcript",
                 "Opaque-only compaction input",
-                "Native OpenAI Responses passthrough",
+                "Native OpenAI Responses forwarding",
             ),
             "ga_review": (
                 "maximum safe compatibility",
                 "visible summary",
                 "opaque-only",
-                "raw/native passthrough",
+                "raw/native forwarding",
             ),
         }
 

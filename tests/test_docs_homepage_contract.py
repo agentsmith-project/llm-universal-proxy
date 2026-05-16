@@ -35,7 +35,7 @@ REASONING_COMPACTION_BOUNDARY_SNIPPETS = (
     "opaque-only reasoning",
     "opaque-only compaction",
     "hard portability boundary",
-    "raw/native passthrough",
+    "raw/native forwarding",
     "provider-owned state",
 )
 
@@ -227,17 +227,17 @@ class DocsHomepageContractTests(unittest.TestCase):
             text = self.read_text(relative_path)
             for snippet in REASONING_COMPACTION_BOUNDARY_SNIPPETS:
                 with self.subTest(path=relative_path, snippet=snippet):
-                    self.assertIn(snippet, text)
+                    self.assertIn(snippet.casefold(), text.casefold())
 
     def test_readmes_use_single_maximum_safe_compatibility_boundary(self):
         readme = self.read_text("README.md")
         readme_cn = self.read_text("README_CN.md")
 
         self.assertNotIn("same-protocol paths stay native when possible", readme)
-        self.assertNotIn("同协议路径尽量保持 native passthrough", readme_cn)
+        self.assertNotIn("同协议路径尽量保持 native " + "passthrough", readme_cn)
 
         english_snippets = (
-            "raw same-protocol passthrough is the intended pre-GA execution lane",
+            "raw same-protocol forwarding is a byte-preserving optimization",
             "single maximum safe compatibility strategy",
             "fail-closed behavior is a hard portability boundary",
         )
@@ -246,7 +246,7 @@ class DocsHomepageContractTests(unittest.TestCase):
                 self.assertIn(snippet, readme)
 
         chinese_snippets = (
-            "raw same-protocol passthrough 是 pre-GA intended execution lane",
+            "raw same-protocol forwarding 是 byte-preserving optimization",
             "maximum safe compatibility strategy",
             "fail-closed 是 hard portability boundary",
         )

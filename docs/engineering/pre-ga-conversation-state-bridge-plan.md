@@ -26,7 +26,7 @@
 - 展开后的上下文继续走现有协议转换器，目标 provider 看到的是完整 transcript，而不是 OpenAI Responses 的状态句柄。
 - 状态桥只保存会话重放所需的输入/输出事件，不缓存或复用模型响应。
 - 默认行为保持 fail closed；只有显式配置启用状态桥的路由才改变现有边界。
-- 状态桥不进入 `RawProviderPassthrough` raw execution path。它属于有状态翻译增强，必须在 trace 和 warnings 中可见。
+- 状态桥是最大安全兼容策略下的显式 state expansion。它会使请求需要构造/转换，必须在 trace 和 warnings 中可见；它不是独立产品行为或用户可选项。
 
 一句话边界：这是 `ConversationStateBridge`，不是 cache。
 
@@ -96,7 +96,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 3. 只保存可重放会话事件，不保存可直接返回给用户的响应缓存条目。
 4. 不服务缓存响应。每次客户端请求都必须调用目标 provider 生成新响应。
 5. 不反解 provider-private state。`encrypted_content`、opaque reasoning、provider compact state 等不能跨协议重建。
-6. 不在 raw passthrough 中启用。native OpenAI Responses upstream 继续透传 provider state；状态桥只服务 maximum-compatible translated route。
+6. 不在 zero-transform forwarding 中启用。native OpenAI Responses upstream 继续透传 provider state；状态桥只在需要请求构造/转换的路径上展开本地 state。
 7. 明确最小 owner 边界。namespace 和认证主体必须参与状态隔离，避免不同调用方互相读取状态。
 8. 只实现简单 TTL 和全局最大内存占用。状态过期、进程重启、状态不存在时直接 fail closed。
 9. `store: false` 默认不保存状态。
@@ -104,7 +104,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 
 状态类型必须分清：
 
-- `ProviderNativeHandle`：OpenAI provider 的真实 `resp_*` / `conv_*`、Anthropic thinking signature、以及待删除 native Gemini 实现里的 `thoughtSignature` / `cachedContent` 等 provider-owned handle。只在原生 passthrough 或 retired native route 中保留，不能被状态桥导入。
+- `ProviderNativeHandle`：OpenAI provider 的真实 `resp_*` / `conv_*`、Anthropic thinking signature、以及待删除 native Gemini 实现里的 `thoughtSignature` / `cachedContent` 等 provider-owned handle。只在 provider-native forwarding 或 retired native route 中保留，不能被状态桥导入。
 - `LlmupOwnedTranscript`：`llmup` 自己保存的短期内存 transcript，可跨协议 replay。
 - `OpaqueCarrier`：`encrypted_content`、opaque compaction、不可见 reasoning carrier 等。不能跨协议展开。
 
@@ -127,14 +127,14 @@ conversation_state_bridge:
 - `max_bytes` 是全局内存上限，不做 per-tenant/per-conversation 细分。
 - `store: false` 优先于 bridge 保存，但这是固定语义，不做成配置项。
 
-## 执行路径
+## 请求处理观测
 
-不新增单独主 path；使用 passthrough/cache 计划里的 primary `MaximumCompatibilityTranslation` path，并增加 state-bridge modifier。这里的 `MaximumCompatibilityTranslation` 表示单一最大兼容翻译策略，不是用户可选兼容档位；provider prompt-cache 合成仍只是 provider-native request-control modifier，不是第三个主 path：
+不新增单独主路径、模式或用户可选项。状态桥启用时，请求处理观测为 `RequestTransformationRequired`，并暴露 `state_bridge` 字段；这表示请求需要显式 state expansion 后再构造/转换，仍属于单一最大安全兼容策略。provider-native prompt-cache 合成仍只是 provider-native request-control support：
 
 ```rust
-enum PrimaryExecutionPath {
-    RawProviderPassthrough,
-    MaximumCompatibilityTranslation,
+enum RequestProcessing {
+    RequestTransformationNotRequired,
+    RequestTransformationRequired,
 }
 
 enum StateBridgeModifier {
@@ -144,7 +144,7 @@ enum StateBridgeModifier {
 }
 ```
 
-`state_bridge` modifier 有两个入口：
+`state_bridge` 字段有两个入口：
 
 `BridgeCaptureCandidate`：
 
@@ -232,7 +232,7 @@ struct BridgeResponse {
 规则：
 
 - translated route 上返回给 OpenAI Responses client 的 ID 必须是 `llmup` ID，不能冒充 provider 真实 `resp_*`。
-- native OpenAI Responses passthrough 保留 provider ID，不导入本地状态。
+- native OpenAI Responses forwarding 保留 provider ID，不导入本地状态。
 - 如果客户端传入的 `previous_response_id` 不是本地已知 ID，fail closed。
 - ID 不编码 owner、prompt、模型或 provider 信息。
 
@@ -260,7 +260,7 @@ MVP 不支持本地 `conversation` bridge。
 
 行为：
 
-- native OpenAI Responses passthrough 保持现状。
+- native OpenAI Responses forwarding 保持现状。
 - translated route 上继续 fail closed。
 - 后续如果需要支持，只做本地 `conv_llmup_*`，不导入外部 OpenAI `conv_*`。
 - `previous_response_id` 和 `conversation` 不能同时使用；这个官方限制需要继续保留。
@@ -301,7 +301,7 @@ MVP 不支持本地 `conversation` bridge。
 
 行为：
 
-- native OpenAI Responses passthrough 保持现状。
+- native OpenAI Responses forwarding 保持现状。
 - translated route 上继续 fail closed，除非未来实现显式本地 compact adapter。
 - request-side compaction item 只有在已有可见 summary/text 可重放时，才沿用现有 degrade 规则。
 
@@ -354,10 +354,10 @@ Post-MVP 支持：
 
 ## 与 Prompt Cache 支持的关系
 
-状态桥与 prompt cache optimizer 是相邻但不同的能力：
+状态桥与 provider-native prompt-cache request-control support 是相邻但不同的能力：
 
 - 状态桥负责把缺失的 conversation context 展开成完整 target prompt。
-- prompt cache optimizer 可以在 target prompt 构造完成之后，再添加目标 provider 的 cache request controls。
+- provider-native prompt-cache request-control support 可以在 target prompt 构造完成之后，再添加目标 provider 的 cache request controls。
 - 状态桥本身不决定哪些内容应该被 provider cache。
 - 状态展开后的稳定 prefix 可以作为 `prompt_cache_key` 或 Anthropic breakpoint 策略的输入，但必须通过前一份 prompt-cache plan 的策略和 trace 规则。
 
@@ -512,8 +512,8 @@ MVP 必须覆盖：
 | max_bytes | 超过全局内存上限时不提交 state，且有 warning/trace |
 | store:false | 不保存、不 replay、不泄露内容 |
 | detector 统一 | Responses stateful controls 在 resolver、bridge preprocessor、translation boundary 上一致 fail/route |
-| Native passthrough | OpenAI Responses native routes 不被本地 bridge 改写 |
-| Prompt cache 顺序 | state 展开先于 provider prompt-cache optimizer |
+| Native forwarding | OpenAI Responses native routes 不被本地 bridge 改写 |
+| Prompt cache 顺序 | state 展开先于 provider-native prompt-cache request-control support |
 
 Post-MVP 覆盖：
 
@@ -534,7 +534,7 @@ Post-MVP 覆盖：
 5. TTL 清理、trace metadata、hook/debug 泄露检查、Responses stateful-control detector 统一。
 6. 工具调用 replay。
 7. 流式响应捕获。
-8. 与 prompt-cache optimizer 的执行顺序和 trace 集成。
+8. 与 provider-native prompt-cache request-control support 的执行顺序和 trace 集成。
 9. 后续再评估本地 Conversations API bridge。
 
 主要代码区域：
@@ -575,4 +575,4 @@ Post-MVP 覆盖：
 
 - [docs/protocol-baselines/capabilities/state-continuity.md](../protocol-baselines/capabilities/state-continuity.md)
 - [docs/protocol-compatibility-matrix.md](../protocol-compatibility-matrix.md)
-- [Raw provider passthrough and prompt-cache support plan](./pre-ga-strict-passthrough-prompt-cache-support-plan.md)
+- [Zero-transform forwarding and provider-native prompt-cache request-control plan](./pre-ga-strict-passthrough-prompt-cache-support-plan.md)

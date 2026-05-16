@@ -9,7 +9,7 @@ It is not the product-spec source of truth and it is not a protocol-fidelity con
 - Product and behavioral requirements live in [PRD.md](./PRD.md) and [CONSTITUTION.md](./CONSTITUTION.md).
 - Field-level portability, downgrade, and reject rules live in [protocol-compatibility-matrix.md](./protocol-compatibility-matrix.md) and the protocol baselines under [protocol-baselines/](./protocol-baselines/README.md).
 
-Earlier versions of this document described a much smaller v0 proxy with a single upstream, a mostly single-file server, and discovery/passthrough as the dominant architectural concern. The codebase has moved well past that shape. Keeping this document as a "current architecture map" is more useful than preserving the older plan as if it were still live.
+Earlier versions of this document described a much smaller v0 proxy with a single upstream, a mostly single-file server, and discovery/forwarding as the dominant architectural concern. The codebase has moved well past that shape. Keeping this document as a "current architecture map" is more useful than preserving the older plan as if it were still live.
 
 ## System Shape
 

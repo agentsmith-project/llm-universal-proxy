@@ -16,10 +16,10 @@ This is not a provider-certified compatibility claim. The compatibility promise
 is single maximum safe compatibility with hard portability boundaries:
 supported mappings are documented, high-risk unsupported fields fail before
 upstream calls, and low-risk degradation must be visible rather than silent.
-Raw/native passthrough is an intended pre-GA execution lane for preserving
-native fields and lifecycle resources when the route can avoid body mutation and
-response normalization; until that lane lands, same-protocol traffic may still
-pass through compatibility machinery.
+Raw/native forwarding is a byte-preserving optimization for preserving native
+fields and lifecycle resources when the route can avoid body mutation and
+response normalization; until that zero-transformation forwarding work lands,
+same-protocol traffic may still pass through compatibility machinery.
 
 ## Completed Local Baseline
 
@@ -58,7 +58,7 @@ pass through compatibility machinery.
 
 ### OpenAI Responses
 
-OpenAI Responses lifecycle and state resource endpoints target raw/native passthrough only when the lane is implemented and the route can avoid mutation.
+OpenAI Responses lifecycle and state resource endpoints target raw/native forwarding only when zero-transformation handling is implemented and the route can avoid mutation.
 Cross-provider reconstruction of provider-managed state,
 conversation continuity, `context_management`, compact resources, or opaque
 lifecycle resources must fail closed unless a future mapping is explicitly
@@ -68,8 +68,8 @@ Request-side opaque reasoning and compaction input items follow the single
 maximum safe compatibility strategy: opaque carriers such as
 `encrypted_content` may be warned and dropped only when visible summary text or
 visible transcript history remains. Opaque-only reasoning or compaction state
-always fails closed, and native Responses passthrough should preserve the native
-item unchanged when the raw/native lane is available.
+always fails closed, and native Responses forwarding should preserve the native
+item unchanged when raw/native forwarding is available.
 
 ### Anthropic Messages
 
@@ -84,9 +84,9 @@ Gemini models remain in scope only through Google's OpenAI-compatible endpoint.
 Native Gemini `generateContent` state such as `thoughtSignature`,
 `cachedContent`, and `safetySettings` is retired from the active proxy surface.
 
-### Compatible Provider Lane
+### Compatible Provider Evidence
 
-MiniMax is only an example of an OpenAI-compatible lane chosen by a user, not a
+MiniMax is only an example of an OpenAI-compatible provider chosen by a user, not a
 GA-required provider and not an OpenAI Responses certified clone. Release smoke
 evidence should prefer provider-neutral `COMPAT_*` configuration and prove the
 OpenAI-compatible chat-completions route `/openai/v1/chat/completions` and the
@@ -138,7 +138,7 @@ and the protected provider-neutral compatible live smoke.
 
 It does not mean every provider-specific feature is equivalent across every
 target. The promise is maximum safe compatibility with hard fail-closed
-boundaries, plus raw/native passthrough as the intended execution lane when a
+boundaries, plus raw/native forwarding as a byte-preserving optimization when a
 route can avoid mutation and normalization.
 
 ## Official References

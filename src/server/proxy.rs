@@ -23,6 +23,9 @@ use crate::hooks::{
     capture_headers, json_response_headers, new_request_id, now_timestamp_ms, sse_response_headers,
     HeaderEntry, HookRequestContext,
 };
+use crate::request_processing::{
+    classify_request_processing, RequestProcessingInput, StateBridgeModifier,
+};
 use crate::streaming::{needs_stream_translation, GuardedSseStream, TranslateSseStream};
 use crate::translate::{
     assess_request_translation_with_surface, translate_request_with_policy,
@@ -880,6 +883,7 @@ async fn handle_request_core_with_downstream_cancellation(
         }
     }
 
+    let bridge_was_expanded = preloaded_bridge_response.is_some();
     let bridge_capture_candidate = match prepare_conversation_state_bridge(
         &namespace_state,
         &namespace,
@@ -908,6 +912,28 @@ async fn handle_request_core_with_downstream_cancellation(
 
     let original_body = body.clone();
     let stateful_responses_controls = responses_stateful_request_controls(&original_body);
+    let state_bridge = if bridge_was_expanded {
+        StateBridgeModifier::Expanded
+    } else if bridge_capture_candidate.is_some() {
+        StateBridgeModifier::CaptureCandidate
+    } else {
+        StateBridgeModifier::Off
+    };
+    let llmup = classify_request_processing(RequestProcessingInput {
+        client_format,
+        upstream_format,
+        body: &original_body,
+        requested_model: &requested_model,
+        upstream_model: &resolved_model.upstream_model,
+        stream,
+        route_policy_requires_body_mutation: request_translation_policy_requires_body_mutation(
+            upstream_format,
+            &original_body,
+            &request_translation_policy,
+        ),
+        state_bridge,
+    });
+    tracker.set_request_processing(llmup);
 
     let mut compatibility_warnings = match classify_request_boundary_with_policy(
         client_format,
@@ -1010,6 +1036,7 @@ async fn handle_request_core_with_downstream_cancellation(
         upstream_model: redacted_metadata.upstream_model.clone(),
         client_format,
         upstream_format,
+        llmup,
         credential_source: effective_credential.source,
         credential_fingerprint: effective_credential.fingerprint.clone(),
         client_request_headers: redacted_original_headers,
@@ -1028,6 +1055,7 @@ async fn handle_request_core_with_downstream_cancellation(
             upstream_model: redacted_metadata.upstream_model.clone(),
             client_format,
             upstream_format,
+            llmup,
         });
     if let (Some(recorder), Some(ctx)) = (namespace_state.debug_trace.as_ref(), debug_ctx.as_ref())
     {
@@ -1858,4 +1886,85 @@ fn request_translation_policy(
         });
 
     RequestTranslationPolicy { surface }
+}
+
+pub(super) fn request_translation_policy_requires_body_mutation(
+    target_format: UpstreamFormat,
+    body: &Value,
+    policy: &RequestTranslationPolicy,
+) -> bool {
+    request_translation_policy_default_output_limit_would_apply(target_format, body, policy)
+        || request_translation_policy_parallel_tool_gate_would_apply(target_format, body, policy)
+}
+
+fn request_translation_policy_default_output_limit_would_apply(
+    target_format: UpstreamFormat,
+    body: &Value,
+    policy: &RequestTranslationPolicy,
+) -> bool {
+    policy
+        .surface
+        .limits
+        .as_ref()
+        .and_then(|limits| limits.max_output_tokens)
+        .is_some()
+        && !request_body_has_explicit_output_limit(target_format, body)
+}
+
+fn request_translation_policy_parallel_tool_gate_would_apply(
+    target_format: UpstreamFormat,
+    body: &Value,
+    policy: &RequestTranslationPolicy,
+) -> bool {
+    policy
+        .surface
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.supports_parallel_calls)
+        == Some(false)
+        && !request_body_has_explicit_parallel_tool_calls_preference(target_format, body)
+        && request_body_has_tool_definitions(target_format, body)
+}
+
+fn request_body_has_explicit_output_limit(target_format: UpstreamFormat, body: &Value) -> bool {
+    let Some(obj) = body.as_object() else {
+        return false;
+    };
+
+    match target_format {
+        UpstreamFormat::Anthropic => obj.get("max_tokens").is_some(),
+        UpstreamFormat::OpenAiCompletion => {
+            obj.get("max_completion_tokens").is_some() || obj.get("max_tokens").is_some()
+        }
+        UpstreamFormat::OpenAiResponses => obj.get("max_output_tokens").is_some(),
+    }
+}
+
+fn request_body_has_explicit_parallel_tool_calls_preference(
+    target_format: UpstreamFormat,
+    body: &Value,
+) -> bool {
+    match target_format {
+        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => body
+            .get("parallel_tool_calls")
+            .and_then(Value::as_bool)
+            .is_some(),
+        UpstreamFormat::Anthropic => body
+            .get("tool_choice")
+            .and_then(Value::as_object)
+            .and_then(|tool_choice| tool_choice.get("disable_parallel_tool_use"))
+            .and_then(Value::as_bool)
+            .is_some(),
+    }
+}
+
+fn request_body_has_tool_definitions(target_format: UpstreamFormat, body: &Value) -> bool {
+    match target_format {
+        UpstreamFormat::OpenAiCompletion
+        | UpstreamFormat::OpenAiResponses
+        | UpstreamFormat::Anthropic => body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty()),
+    }
 }

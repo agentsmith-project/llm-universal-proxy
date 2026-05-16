@@ -14,6 +14,7 @@ use tracing::warn;
 
 use crate::config::DebugTraceConfig;
 use crate::formats::UpstreamFormat;
+use crate::request_processing::RequestProcessingInfo;
 use crate::streaming::take_one_sse_event;
 
 #[derive(Clone)]
@@ -55,6 +56,7 @@ pub struct DebugTraceContext {
     pub upstream_model: String,
     pub client_format: UpstreamFormat,
     pub upstream_format: UpstreamFormat,
+    pub llmup: RequestProcessingInfo,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -369,6 +371,7 @@ impl DebugTraceRecorder {
             "client_model": ctx.client_model,
             "upstream_name": ctx.upstream_name,
             "upstream_model": ctx.upstream_model,
+            "llmup": ctx.llmup,
             "request": {
                 "new_items": extract_request_delta(ctx.client_format, body, self.max_text_chars)
             }
@@ -392,6 +395,7 @@ impl DebugTraceRecorder {
             "client_model": ctx.client_model,
             "upstream_name": ctx.upstream_name,
             "upstream_model": ctx.upstream_model,
+            "llmup": ctx.llmup,
             "request": {
                 "new_items": extract_request_delta(ctx.client_format, original_body, self.max_text_chars),
                 "client_summary": summarize_request_body(ctx.client_format, original_body, self.max_text_chars),
@@ -412,6 +416,7 @@ impl DebugTraceRecorder {
             "client_model": ctx.client_model,
             "upstream_name": ctx.upstream_name,
             "upstream_model": ctx.upstream_model,
+            "llmup": ctx.llmup,
             "response": summarize_non_stream_response(ctx.client_format, body, self.max_text_chars),
             "http_status": status,
             "outcome": TraceOutcome::Completed,
@@ -460,6 +465,7 @@ impl DebugTraceRecorder {
             "client_model": ctx.client_model,
             "upstream_name": ctx.upstream_name,
             "upstream_model": ctx.upstream_model,
+            "llmup": ctx.llmup,
             "http_status": status,
             "outcome": outcome,
             "transport_outcome": transport_outcome,
@@ -1230,6 +1236,7 @@ mod tests {
                 upstream_model: "gpt-4.1".to_string(),
                 client_format: UpstreamFormat::OpenAiCompletion,
                 upstream_format: UpstreamFormat::OpenAiCompletion,
+                llmup: RequestProcessingInfo::default(),
             },
             200,
             &json!({
@@ -1282,6 +1289,7 @@ mod tests {
             upstream_model: "gpt-4.1".to_string(),
             client_format: UpstreamFormat::OpenAiCompletion,
             upstream_format: UpstreamFormat::OpenAiCompletion,
+            llmup: RequestProcessingInfo::default(),
         };
         let body = json!({
             "choices": [{

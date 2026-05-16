@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::config::Config;
+use crate::request_processing::RequestProcessingInfo;
 
 const MAX_RECENT_REQUESTS: usize = 12;
 
@@ -52,6 +53,7 @@ pub struct RecentRequest {
     pub status: u16,
     pub outcome: RequestOutcome,
     pub duration_ms: u128,
+    pub llmup: RequestProcessingInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +81,7 @@ pub struct RequestTracker {
     upstream_name: Option<String>,
     upstream_model: Option<String>,
     stream: bool,
+    llmup: RequestProcessingInfo,
     finished: bool,
 }
 
@@ -115,6 +118,7 @@ impl RuntimeMetrics {
             upstream_name: None,
             upstream_model: None,
             stream,
+            llmup: RequestProcessingInfo::default(),
             finished: false,
         }
     }
@@ -178,6 +182,10 @@ impl RequestTracker {
         self.finish_with(RequestOutcome::Success, status);
     }
 
+    pub fn set_request_processing(&mut self, llmup: RequestProcessingInfo) {
+        self.llmup = llmup;
+    }
+
     pub fn finish_error(&mut self, status: u16) {
         self.finish_with(RequestOutcome::Error, status);
     }
@@ -235,6 +243,7 @@ impl RequestTracker {
             status,
             outcome,
             duration_ms,
+            llmup: self.llmup,
         });
         while inner.recent_requests.len() > MAX_RECENT_REQUESTS {
             inner.recent_requests.pop_back();

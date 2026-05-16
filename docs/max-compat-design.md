@@ -5,7 +5,7 @@ Last updated: 2026-05-16
 
 ## Summary
 
-`llm-universal-proxy` uses one client-first translation strategy: maximum safe compatibility. The core architecture stays protocol-first, and fail-closed portability boundaries remain hard safety contracts rather than lower compatibility tiers.
+`llm-universal-proxy` uses one client-first translation strategy: maximum safe compatibility. The core architecture stays protocol-first, and fail-closed portability boundaries remain hard safety contracts rather than alternate product settings.
 
 This means:
 
@@ -35,7 +35,7 @@ The current system has the architectural seams for this work:
 The proxy already detects the client contract from request path and body shape:
 
 - request format detection is protocol-first in `src/detect.rs`
-- passthrough vs translation target selection is protocol-first in `src/discovery.rs`
+- forwarding vs translation target selection is protocol-first in `src/discovery.rs`
 - request execution is protocol-first in `src/server/proxy.rs`
 
 So a core field like:
@@ -53,14 +53,14 @@ That is too coarse for the data plane.
 
 The correct core abstractions are:
 
-- primary execution path
+- request handling decision
 - `capability_surface`
 - provider-native request-control modifiers
 - hard portability boundary
 
 where:
 
-- primary execution path answers "strict raw passthrough or maximum-compatible request construction?"
+- request handling decision answers "byte-preserving raw forwarding or maximum-safe request construction?"
 - `capability_surface` answers "what client-visible contract should this local alias advertise and preserve?"
 - provider-native request-control modifiers answer "what explicit target-provider controls may be preserved or synthesized after the target request shape is known?"
 - hard portability boundary answers "what must fail closed because it cannot be represented safely?"
@@ -69,12 +69,12 @@ Client brand names can still exist in wrappers, real-client test matrix labels, 
 
 ## Product Direction
 
-The product promise is bounded: protocol coverage means raw same-protocol passthrough where the proxy can forward bytes without body mutation, and maximum safe translation for mismatched protocol paths. It is not full-fidelity provider equivalence, and it is not a menu of weaker or stronger product tiers.
+The product promise is bounded: protocol coverage means raw same-protocol forwarding where the proxy can forward bytes without body mutation, and maximum safe translation for mismatched protocol pairs. It is not full-fidelity provider equivalence, and it is not a menu of weaker or stronger product settings.
 
-- raw same-protocol passthrough path: preserve the original provider payload within proxy routing, auth, and observability boundaries
-- provider prompt-cache optimization: synthesize only explicit provider-native cache request controls as a request-control modifier; this is not a user-facing compatibility tier, not `llmup` caching, and not a third primary lane
+- raw same-protocol forwarding optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries
+- provider prompt-cache support is provider-native request-control support: synthesize only explicit provider-native cache request controls as a request-control modifier; this is not `llmup` caching and not a separate product behavior
 - translated paths: preserve the maximum safe portable representation and warn when a safe degradation is visible
-- provider-native state and native extensions: native passthrough only unless a documented, explicit shim exists
+- provider-native state and native extensions: raw/native forwarding only unless a documented, explicit shim exists
 
 Portable core:
 
@@ -96,11 +96,11 @@ Native extensions:
 
 Current implementation facts:
 
-- The implementation has removed user-selectable compatibility tiers.
+- The implementation has removed user-selectable compatibility settings.
 - Translated paths should use the maximum safe representation by default and as the only product behavior.
 - Legacy compatibility config input is accepted only as no-op parsing compatibility and is not stored, serialized, or exposed.
-- Same-format raw passthrough preserves native fields when the source and upstream use the same wire protocol and the route does not require body mutation.
-- Native Responses passthrough preserves `context_management`, `include` values such as `reasoning.encrypted_content`, and input reasoning and compaction items with `encrypted_content` unchanged.
+- Same-format zero-transform forwarding preserves native fields when the source and upstream use the same wire protocol and the route does not require body mutation.
+- Native Responses zero-transform forwarding preserves `context_management`, `include` values such as `reasoning.encrypted_content`, and input reasoning and compaction items with `encrypted_content` unchanged.
 - Responses lifecycle/resource endpoints require exactly one native OpenAI Responses upstream and the proxy does not reconstruct provider state.
 
 Request-side reasoning encrypted_content rules:
@@ -114,7 +114,7 @@ Request-side compaction input rules:
 - For request-side compaction input, a compaction item may warn/drop opaque carrier fields only when that compaction item has an explicit visible summary, or when the request contains non-compaction visible portable transcript/history that can carry the context forward.
 - In the same request, one summarized compaction item does not permit another opaque-only compaction item to be silently dropped.
 - Opaque-only compaction always fails closed.
-- The native Responses passthrough path preserves compaction items unchanged.
+- The native Responses forwarding behavior preserves compaction items unchanged.
 
 Response-side reasoning encrypted_content is a separate translation concern. There is a dedicated Anthropic carrier recovery path for response-side reasoning encrypted_content; the request-side continuity rules above must not be generalized into a blanket rule for all response translation.
 
@@ -142,15 +142,15 @@ Provider/model availability still comes from configuration. Do not mark a live u
 
 Unsupported media and unsupported source transports are hard boundaries. HTTP(S) URLs are distinct from provider-native or local URIs: an HTTP(S) image or PDF URL may pass only on a path with an explicit target representation, while provider-owned identifiers and URIs such as `file_id`, `gs://`, `file://`, and `s3://` are not portable unless a documented adapter says otherwise. Unknown typed parts, media source forms that the target translator cannot represent, and media missing from the effective surface must be rejected before the upstream call instead of being silently dropped.
 
-MIME provenance is part of that boundary. OpenAI Chat `file` and OpenAI Responses `input_file` parts may carry explicit `mime_type` / `mimeType`, MIME-bearing `file_data` data URIs, and filename-derived hints. The proxy treats disagreement between those sources as unsafe and rejects the request before translation, including same-format Responses passthrough. That prevents a request from passing a PDF-only surface gate while the translator later emits video, audio, image, or another concrete media type from the actual data URI.
+MIME provenance is part of that boundary. OpenAI Chat `file` and OpenAI Responses `input_file` parts may carry explicit `mime_type` / `mimeType`, MIME-bearing `file_data` data URIs, and filename-derived hints. The proxy treats disagreement between those sources as unsafe and rejects the request before translation, including same-format Responses forwarding. That prevents a request from passing a PDF-only surface gate while the translator later emits video, audio, image, or another concrete media type from the actual data URI.
 
-## Compatibility Is Not Tiered
+## Single Product Behavior
 
 The product behavior is intentionally singular:
 
-- raw same-protocol passthrough remains a strict execution path for routes that can avoid body mutation
+- raw same-protocol forwarding remains a byte-preserving optimization for routes that can avoid body mutation
 - translated paths use maximum safe compatibility
-- provider prompt-cache optimization is a provider-native request-control step, not a `llmup` cache, not a compatibility tier, and not a third primary lane
+- provider prompt-cache support is provider-native request-control support, not a `llmup` cache and not a separate product behavior
 - hard portability boundaries fail closed before upstream when the proxy cannot preserve or safely degrade semantics
 
 Hard boundaries:
@@ -360,7 +360,7 @@ Delivered:
 
 Remaining work:
 
-- broaden real-client coverage beyond the current public tool enumeration and supported workspace-edit lanes.
+- broaden real-client coverage beyond the current public tool enumeration and supported workspace-edit cases.
 - extend `ModelSurface` only after the runtime supports additional reasoning, session, or transport fields.
 - keep protocol baseline docs aligned with maximum-compatible translation behavior for tools, state continuity, and streaming.
 - expand arbitrary structured-tool behavior coverage without relaxing the visible tool identity contract.

@@ -12,6 +12,8 @@ pub(crate) mod downstream;
 pub mod formats;
 pub mod hooks;
 pub(crate) mod internal_artifacts;
+#[doc(hidden)]
+pub mod request_processing;
 pub mod server;
 pub mod streaming;
 pub mod telemetry;

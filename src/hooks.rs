@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::config::{sanitize_url_for_admin, HookConfig, HookEndpointConfig};
 use crate::formats::UpstreamFormat;
+use crate::request_processing::RequestProcessingInfo;
 use crate::streaming::take_one_sse_event;
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -419,6 +420,7 @@ pub struct HookRequestContext {
     pub upstream_model: String,
     pub client_format: UpstreamFormat,
     pub upstream_format: UpstreamFormat,
+    pub llmup: RequestProcessingInfo,
     pub credential_source: CredentialSource,
     pub credential_fingerprint: Option<String>,
     pub client_request_headers: Vec<HeaderEntry>,
@@ -789,6 +791,7 @@ impl HookDispatcher {
             "upstream_model": ctx.upstream_model,
             "client_format": ctx.client_format,
             "upstream_format": ctx.upstream_format,
+            "llmup": ctx.llmup,
             "credential_source": ctx.credential_source,
             "credential_fingerprint": ctx.credential_fingerprint,
             "transport_outcome": observation.transport_outcome,
@@ -930,6 +933,7 @@ impl ExchangeHookPayload {
             "client_model": self.ctx.client_model,
             "upstream_name": self.ctx.upstream_name,
             "upstream_model": self.ctx.upstream_model,
+            "llmup": self.ctx.llmup,
             "credential_source": self.ctx.credential_source,
             "credential_fingerprint": self.ctx.credential_fingerprint,
             "completed": legacy.completed,
@@ -2190,6 +2194,7 @@ mod tests {
             upstream_name: "default".to_string(),
             upstream_model: "gpt-4".to_string(),
             credential_source: CredentialSource::Server,
+            llmup: RequestProcessingInfo::default(),
             credential_fingerprint: Some("abc".to_string()),
             client_request_headers: vec![],
             client_request_body: json!({"model":"gpt-4"}),
@@ -2241,6 +2246,7 @@ mod tests {
             upstream_name: "default".to_string(),
             upstream_model: "gpt-4.1".to_string(),
             credential_source: CredentialSource::Server,
+            llmup: RequestProcessingInfo::default(),
             credential_fingerprint: Some("abc".to_string()),
             client_request_headers: vec![],
             client_request_body: json!({"model":"gpt-4.1","stream":true}),
@@ -2525,6 +2531,7 @@ mod tests {
                 upstream_name: "default".to_string(),
                 upstream_model: "gpt-4.1".to_string(),
                 credential_source: CredentialSource::Server,
+                llmup: RequestProcessingInfo::default(),
                 credential_fingerprint: Some("fp".to_string()),
                 client_request_headers: vec![],
                 client_request_body: json!({"model":"gpt-4.1","stream":true}),

@@ -274,7 +274,7 @@ Resource boundaries for client request bodies, upstream response bodies, and str
 
 Translated paths use one product behavior: maximum safe compatibility. The proxy preserves the most complete client-visible representation it can, emits warnings for safe degradations, and rejects requests before upstream when a field would require unsafe approximation.
 
-Fail-closed behavior is a hard portability boundary, not a lower compatibility setting. Responses reasoning or compaction carriers may be warned and dropped only when visible summary text or visible transcript history remains. Requests with opaque-only reasoning, opaque-only compaction, provider-owned state, unsupported media, and unsupported source transports fail closed. In raw/native passthrough, the proxy preserves provider-owned state when the route does not require body mutation.
+Fail-closed behavior is a hard portability boundary, not a lower compatibility setting. Responses reasoning or compaction carriers may be warned and dropped only when visible summary text or visible transcript history remains. Requests with opaque-only reasoning, opaque-only compaction, provider-owned state, unsupported media, and unsupported source transports fail closed. Raw/native forwarding preserves provider-owned state only when the route does not require body mutation.
 
 ### `conversation_state_bridge`
 
@@ -294,7 +294,7 @@ Boundaries:
 - default `off` preserves the existing fail-closed behavior for translated `previous_response_id` and `store: true`
 - `store: false` is honored and does not save replay state
 - unknown, expired, non-local, or owner-mismatched local IDs fail closed
-- native OpenAI Responses passthrough keeps provider IDs and provider-owned state unchanged
+- native OpenAI Responses forwarding keeps provider IDs and provider-owned state unchanged
 - there is no persistence, streaming capture, conversation API bridge, background lifecycle emulation, tool/reasoning/compact replay, or Gemini-specific state bridge
 
 ### `upstreams`

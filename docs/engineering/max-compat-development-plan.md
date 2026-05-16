@@ -66,7 +66,7 @@ Current contract:
 - legacy `compatibility_mode` input is parsed only as no-op migration compatibility and must not affect runtime policy
 - fail-closed behavior is a hard portability boundary, not a lower compatibility setting
 - visible tool identity is enforced on live request and response surfaces
-- maximum-compatible translation may warn and bridge portable semantics, but it still rejects provider-state reconstruction and unsafe non-portable shapes
+- maximum-safe translation may warn and bridge portable semantics, but it still rejects provider-state reconstruction and unsafe non-portable shapes
 
 ### Phase 3: Unified Capability Surface
 
@@ -102,7 +102,7 @@ Current contract:
 
 Status: partially delivered.
 
-Current real-client matrix coverage is intentionally narrow: the public tool enumeration contract proves each client's stable public editing tool name is surfaced without proxy rewriting, and workspace-edit execution proves the edit path still works on supported lanes. It is not yet a full behavioral matrix for arbitrary structured tool use.
+Current real-client matrix coverage is intentionally narrow: the public tool enumeration contract proves each client's stable public editing tool name is surfaced without proxy rewriting, and workspace-edit execution proves the edit path still works on supported request scenarios. It is not yet a full behavioral matrix for arbitrary structured tool use.
 
 v0.2.13 Codex verifier note: the prework-signal checks are real-client matrix/prework validation constraints, not a data-plane protocol contract. Read-only evidence intentionally fails closed: the verifier trusts only direct system command paths from its allowlist, plus isolated `python3 -I -S -c` snippets that pass explicit parser allowlists. Shell wrappers, aliases, and bare `PATH` resolution are not treated as read-only evidence by default.
 
@@ -118,7 +118,7 @@ Delivered coverage:
 
 ## Remaining Roadmap
 
-1. Broaden structured-tool behavior coverage beyond the current public tool enumeration and supported workspace-edit lanes.
+1. Broaden structured-tool behavior coverage beyond the current public tool enumeration and supported workspace-edit scenarios.
 2. Keep protocol baseline docs aligned with maximum safe compatibility behavior for tools, state continuity, and streaming.
 3. Add more translated streaming regressions where bridge context, terminal events, and tool-call finalization interact.
 4. Continue tightening docs/example contract tests when wrapper live-profile requirements evolve.

@@ -2076,6 +2076,9 @@ pub(super) fn responses_stateful_request_controls(body: &Value) -> Vec<&'static 
     if body.get("prompt").is_some() {
         controls.push("prompt");
     }
+    if body.get("context_management").is_some() {
+        controls.push("context_management");
+    }
     controls
 }
 

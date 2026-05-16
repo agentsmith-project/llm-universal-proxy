@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::proxy::request_translation_policy_requires_body_mutation;
 
 const INTERNAL_TOOL_BRIDGE_CONTEXT_FIELD: &str = "_llmup_tool_bridge_context";
 
@@ -162,6 +163,47 @@ async fn spawn_hook_capture_mock() -> (String, CapturedHookPayloads, tokio::task
     (format!("http://{addr}"), captured, server)
 }
 
+async fn spawn_exchange_usage_hook_capture_mock() -> (
+    String,
+    CapturedHookPayloads,
+    CapturedHookPayloads,
+    tokio::task::JoinHandle<()>,
+) {
+    async fn exchange_handler(
+        State((exchange, _usage)): State<(CapturedHookPayloads, CapturedHookPayloads)>,
+        Json(body): Json<Value>,
+    ) -> Response<Body> {
+        exchange.push(body).await;
+        (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
+    }
+
+    async fn usage_handler(
+        State((_exchange, usage)): State<(CapturedHookPayloads, CapturedHookPayloads)>,
+        Json(body): Json<Value>,
+    ) -> Response<Body> {
+        usage.push(body).await;
+        (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
+    }
+
+    let exchange = CapturedHookPayloads::default();
+    let usage = CapturedHookPayloads::default();
+    let app = Router::new()
+        .route("/exchange", post(exchange_handler))
+        .route("/usage", post(usage_handler))
+        .with_state((exchange.clone(), usage.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind exchange/usage hook capture mock");
+    let addr = listener.local_addr().expect("hook capture local addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("exchange/usage hook capture mock server");
+    });
+
+    (format!("http://{addr}"), exchange, usage, server)
+}
+
 async fn enable_exchange_hook_for_default_namespace(state: &Arc<AppState>, hook_base: &str) {
     let dispatcher = crate::hooks::HookDispatcher::new(&crate::config::HookConfig {
         max_pending_bytes: 4 * 1024 * 1024,
@@ -173,6 +215,32 @@ async fn enable_exchange_hook_for_default_namespace(state: &Arc<AppState>, hook_
             authorization: None,
         }),
         usage: None,
+    })
+    .expect("hook dispatcher");
+    state
+        .runtime
+        .write()
+        .await
+        .namespaces
+        .get_mut(DEFAULT_NAMESPACE)
+        .expect("default namespace")
+        .hooks = Some(dispatcher);
+}
+
+async fn enable_exchange_usage_hooks_for_default_namespace(state: &Arc<AppState>, hook_base: &str) {
+    let dispatcher = crate::hooks::HookDispatcher::new(&crate::config::HookConfig {
+        max_pending_bytes: 4 * 1024 * 1024,
+        timeout: std::time::Duration::from_secs(5),
+        failure_threshold: 3,
+        cooldown: std::time::Duration::from_secs(1),
+        exchange: Some(crate::config::HookEndpointConfig {
+            url: format!("{hook_base}/exchange"),
+            authorization: None,
+        }),
+        usage: Some(crate::config::HookEndpointConfig {
+            url: format!("{hook_base}/usage"),
+            authorization: None,
+        }),
     })
     .expect("hook dispatcher");
     state
@@ -1545,6 +1613,115 @@ async fn request_metadata_redacts_client_provider_key_in_hook_debug_logs_and_met
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics() {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_request_processing",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, _requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let (hook_base, exchange_payloads, usage_payloads, hook_server) =
+        spawn_exchange_usage_hook_capture_mock().await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    enable_exchange_usage_hooks_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let response = handle_request_core(
+        state.clone(),
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/chat/completions".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "prompt_cache_key": "stable-prefix",
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response_text(response).await;
+
+    let trace = wait_for_debug_trace_response(&trace_path).await;
+    let request_entry = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| entry.get("phase").and_then(Value::as_str) == Some("request"))
+        .expect("trace should contain request entry");
+    for payload in [
+        request_entry,
+        wait_for_hook_payload(&exchange_payloads).await,
+        wait_for_hook_payload(&usage_payloads).await,
+    ] {
+        assert_eq!(
+            payload["llmup"]["request_processing"], "request_transformation_not_required",
+            "payload = {payload:?}"
+        );
+        assert_eq!(
+            payload["llmup"]["zero_transform_forwarding_active"], false,
+            "payload = {payload:?}"
+        );
+        assert_eq!(
+            payload["llmup"]["state_bridge"], "off",
+            "payload = {payload:?}"
+        );
+        assert_eq!(
+            payload["llmup"]["provider_native_prompt_cache"], "preserved",
+            "payload = {payload:?}"
+        );
+        let llmup = payload["llmup"]
+            .as_object()
+            .expect("llmup observability object");
+        assert_eq!(llmup.len(), 4, "payload = {payload:?}");
+    }
+
+    let config = state
+        .runtime
+        .read()
+        .await
+        .namespaces
+        .get(DEFAULT_NAMESPACE)
+        .expect("default namespace")
+        .config
+        .clone();
+    let snapshot = state.metrics.snapshot(&config);
+    let recent = snapshot
+        .recent_requests
+        .first()
+        .expect("recent request should be recorded");
+    assert_eq!(
+        recent.llmup.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationNotRequired
+    );
+    assert!(!recent.llmup.zero_transform_forwarding_active);
+    assert_eq!(
+        recent.llmup.state_bridge,
+        crate::request_processing::StateBridgeModifier::Off
+    );
+    assert_eq!(
+        recent.llmup.provider_native_prompt_cache,
+        crate::request_processing::PromptCacheRequestControl::Preserved
+    );
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn request_metadata_redacts_proxy_and_provider_keys_in_hook_debug_logs_and_metrics() {
     let provider_secret = PROVIDER_INLINE_REDACTION_SECRET;
     let proxy_secret = PROXY_INLINE_REDACTION_SECRET;
@@ -1925,6 +2102,383 @@ fn classify_request_boundary_keeps_warning_path_for_allowed_degradation() {
     assert!(warnings
         .iter()
         .any(|warning| warning.contains("non-function Responses tools")));
+}
+
+fn request_processing_input<'a>(
+    client_format: crate::formats::UpstreamFormat,
+    upstream_format: crate::formats::UpstreamFormat,
+    body: &'a Value,
+) -> crate::request_processing::RequestProcessingInput<'a> {
+    let model = body.get("model").and_then(Value::as_str).unwrap_or("model");
+    crate::request_processing::RequestProcessingInput {
+        client_format,
+        upstream_format,
+        body,
+        requested_model: model,
+        upstream_model: model,
+        stream: false,
+        route_policy_requires_body_mutation: false,
+        state_bridge: crate::request_processing::StateBridgeModifier::Off,
+    }
+}
+
+#[test]
+fn classify_request_processing_marks_same_protocol_without_fields_as_transformation_not_required() {
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "Hi" }]
+    });
+
+    let info = crate::request_processing::classify_request_processing(request_processing_input(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body,
+    ));
+
+    assert_eq!(
+        info.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationNotRequired
+    );
+    assert!(
+        !info.zero_transform_forwarding_active,
+        "phase 1 only classifies zero-transform forwarding eligibility; data-plane raw bytes are not active"
+    );
+    assert_eq!(
+        info.state_bridge,
+        crate::request_processing::StateBridgeModifier::Off
+    );
+    assert_eq!(
+        info.provider_native_prompt_cache,
+        crate::request_processing::PromptCacheRequestControl::None
+    );
+}
+
+#[test]
+fn classify_request_processing_marks_translation_and_route_mutation_as_transformation_required() {
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "Hi" }]
+    });
+    let cross_format =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::Anthropic,
+            &body,
+        ));
+    assert_eq!(
+        cross_format.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationRequired
+    );
+
+    let mut alias_rewrite = request_processing_input(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    alias_rewrite.requested_model = "alias-model";
+    alias_rewrite.upstream_model = "gpt-4o-mini";
+    let alias_rewrite = crate::request_processing::classify_request_processing(alias_rewrite);
+    assert_eq!(
+        alias_rewrite.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationRequired
+    );
+
+    let mut surface_policy = request_processing_input(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    surface_policy.route_policy_requires_body_mutation = true;
+    let surface_policy = crate::request_processing::classify_request_processing(surface_policy);
+    assert_eq!(
+        surface_policy.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationRequired
+    );
+}
+
+#[test]
+fn classify_request_processing_marks_same_format_openai_chat_coalescing_as_transformation_required()
+{
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [
+            { "role": "user", "content": "Part one" },
+            { "role": "user", "content": "Part two" }
+        ]
+    });
+
+    let info = crate::request_processing::classify_request_processing(request_processing_input(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body,
+    ));
+
+    assert_eq!(
+        info.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationRequired
+    );
+}
+
+#[test]
+fn classify_request_processing_marks_model_insertion_without_hitting_native_responses_stateful() {
+    let chat_without_model = serde_json::json!({
+        "messages": [{ "role": "user", "content": "Hi" }]
+    });
+    let chat = crate::request_processing::classify_request_processing(request_processing_input(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &chat_without_model,
+    ));
+    assert_eq!(
+        chat.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationRequired
+    );
+
+    let responses_stateful_without_model = serde_json::json!({
+        "previous_response_id": "resp_provider_123",
+        "input": "Continue"
+    });
+    let responses = crate::request_processing::classify_request_processing(
+        crate::request_processing::RequestProcessingInput {
+            client_format: crate::formats::UpstreamFormat::OpenAiResponses,
+            upstream_format: crate::formats::UpstreamFormat::OpenAiResponses,
+            body: &responses_stateful_without_model,
+            requested_model: "",
+            upstream_model: "",
+            stream: false,
+            route_policy_requires_body_mutation: false,
+            state_bridge: crate::request_processing::StateBridgeModifier::Off,
+        },
+    );
+    assert_eq!(
+        responses.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationNotRequired
+    );
+
+    let responses_stateful_with_empty_model = serde_json::json!({
+        "model": "",
+        "previous_response_id": "resp_provider_123",
+        "input": "Continue"
+    });
+    let responses = crate::request_processing::classify_request_processing(
+        crate::request_processing::RequestProcessingInput {
+            client_format: crate::formats::UpstreamFormat::OpenAiResponses,
+            upstream_format: crate::formats::UpstreamFormat::OpenAiResponses,
+            body: &responses_stateful_with_empty_model,
+            requested_model: "",
+            upstream_model: "",
+            stream: false,
+            route_policy_requires_body_mutation: false,
+            state_bridge: crate::request_processing::StateBridgeModifier::Off,
+        },
+    );
+    assert_eq!(
+        responses.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationRequired
+    );
+}
+
+#[test]
+fn classify_request_processing_exposes_state_bridge_fields_as_transformation_required() {
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "input": "Hi"
+    });
+    for state_bridge in [
+        crate::request_processing::StateBridgeModifier::CaptureCandidate,
+        crate::request_processing::StateBridgeModifier::Expanded,
+    ] {
+        let mut input = request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiResponses,
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            &body,
+        );
+        input.state_bridge = state_bridge;
+
+        let info = crate::request_processing::classify_request_processing(input);
+
+        assert_eq!(
+            info.request_processing,
+            crate::request_processing::RequestProcessing::RequestTransformationRequired
+        );
+        assert_eq!(info.state_bridge, state_bridge);
+    }
+}
+
+#[test]
+fn classify_request_processing_preserves_native_prompt_cache_field_only_on_same_protocol() {
+    let openai_body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "prompt_cache_key": "stable-prefix",
+        "prompt_cache_retention": "24h"
+    });
+    let openai_same =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            &openai_body,
+        ));
+    assert_eq!(
+        openai_same.provider_native_prompt_cache,
+        crate::request_processing::PromptCacheRequestControl::Preserved
+    );
+
+    let openai_cross =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::Anthropic,
+            &openai_body,
+        ));
+    assert_eq!(
+        openai_cross.provider_native_prompt_cache,
+        crate::request_processing::PromptCacheRequestControl::None
+    );
+
+    let anthropic_body = serde_json::json!({
+        "model": "claude-3-7-sonnet",
+        "system": [{ "type": "text", "text": "System", "cache_control": { "type": "ephemeral" } }],
+        "messages": [{
+            "role": "user",
+            "content": [{ "type": "text", "text": "Hi" }]
+        }],
+        "tools": [{ "name": "lookup", "input_schema": { "type": "object" }, "cache_control": { "type": "ephemeral" } }]
+    });
+    let anthropic_same =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::Anthropic,
+            crate::formats::UpstreamFormat::Anthropic,
+            &anthropic_body,
+        ));
+    assert_eq!(
+        anthropic_same.provider_native_prompt_cache,
+        crate::request_processing::PromptCacheRequestControl::Preserved
+    );
+}
+
+#[test]
+fn classify_request_processing_preserves_openai_family_prompt_cache_across_translation() {
+    let chat_body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "prompt_cache_key": "stable-prefix"
+    });
+    let chat_to_responses =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiResponses,
+            &chat_body,
+        ));
+    assert_eq!(
+        chat_to_responses.provider_native_prompt_cache,
+        crate::request_processing::PromptCacheRequestControl::Preserved
+    );
+
+    let responses_body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "input": "Hi",
+        "prompt_cache_retention": "24h"
+    });
+    let responses_to_chat =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiResponses,
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            &responses_body,
+        ));
+    assert_eq!(
+        responses_to_chat.provider_native_prompt_cache,
+        crate::request_processing::PromptCacheRequestControl::Preserved
+    );
+
+    let chat_to_anthropic =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::Anthropic,
+            &chat_body,
+        ));
+    assert_eq!(
+        chat_to_anthropic.provider_native_prompt_cache,
+        crate::request_processing::PromptCacheRequestControl::None
+    );
+}
+
+#[test]
+fn request_translation_policy_requires_body_mutation_only_for_injecting_policy_hooks() {
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "Hi" }]
+    });
+    let gate_only = crate::translate::RequestTranslationPolicy {
+        surface: crate::config::ModelSurface {
+            limits: Some(crate::config::ModelLimits {
+                context_window: Some(128_000),
+                max_output_tokens: None,
+            }),
+            modalities: Some(crate::config::ModelModalities {
+                input: Some(vec![crate::config::ModelModality::Text]),
+                output: None,
+            }),
+            tools: Some(crate::config::ModelToolSurface {
+                supports_search: Some(true),
+                supports_view_image: None,
+                apply_patch_transport: None,
+                supports_parallel_calls: Some(true),
+            }),
+        },
+    };
+    assert!(!request_translation_policy_requires_body_mutation(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body,
+        &gate_only
+    ));
+
+    let output_limit = crate::translate::RequestTranslationPolicy {
+        surface: crate::config::ModelSurface {
+            limits: Some(crate::config::ModelLimits {
+                context_window: None,
+                max_output_tokens: Some(4096),
+            }),
+            modalities: None,
+            tools: None,
+        },
+    };
+    assert!(request_translation_policy_requires_body_mutation(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body,
+        &output_limit
+    ));
+
+    let parallel_gate = crate::translate::RequestTranslationPolicy {
+        surface: crate::config::ModelSurface {
+            limits: None,
+            modalities: None,
+            tools: Some(crate::config::ModelToolSurface {
+                supports_search: None,
+                supports_view_image: None,
+                apply_patch_transport: None,
+                supports_parallel_calls: Some(false),
+            }),
+        },
+    };
+    assert!(!request_translation_policy_requires_body_mutation(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body,
+        &parallel_gate
+    ));
+
+    let body_with_tools = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "tools": [{
+            "type": "function",
+            "function": { "name": "lookup", "parameters": { "type": "object" } }
+        }]
+    });
+    assert!(request_translation_policy_requires_body_mutation(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body_with_tools,
+        &parallel_gate
+    ));
 }
 
 #[tokio::test]

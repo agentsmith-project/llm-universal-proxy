@@ -1255,7 +1255,8 @@ fn responses_stateful_request_controls_detect_provider_owned_fields() {
         "conversation": { "id": "conv_1" },
         "background": true,
         "store": true,
-        "prompt": { "id": "pmpt_1" }
+        "prompt": { "id": "pmpt_1" },
+        "context_management": { "type": "auto" }
     }));
 
     assert_eq!(
@@ -1265,7 +1266,8 @@ fn responses_stateful_request_controls_detect_provider_owned_fields() {
             "conversation",
             "background",
             "store",
-            "prompt"
+            "prompt",
+            "context_management"
         ]
     );
 }

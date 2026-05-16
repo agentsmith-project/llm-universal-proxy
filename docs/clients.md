@@ -6,10 +6,10 @@ Use the wrapper scripts first. They are the least fragile path because they isol
 
 The quickstart config source used throughout this guide is [examples/quickstart-provider-neutral.yaml](../examples/quickstart-provider-neutral.yaml). Its stable aliases are:
 
-- `preset-openai-compatible` for the OpenAI-compatible lane
-- `preset-anthropic-compatible` for the Anthropic-compatible lane
+- `preset-openai-compatible` for OpenAI-compatible providers
+- `preset-anthropic-compatible` for Anthropic-compatible providers
 
-MiniMax is an OpenAI-compatible lane when a user chooses it. MiniMax is only a replaceable OpenAI-compatible example, not a GA-required provider and not the main CLI-wrapper preset path. Release/GA live evidence should use provider-neutral compatible configuration rather than treating any named provider as required.
+MiniMax is only a replaceable OpenAI-compatible example when a user chooses it, not a GA-required provider and not the main CLI-wrapper preset path. Release/GA live evidence should use provider-neutral compatible configuration rather than treating any named provider as required.
 
 ## Preset Environment
 
@@ -107,7 +107,7 @@ That is why the homepage no longer presents one flat endpoint table for manual c
 
 Reasoning effort such as `xhigh` is still a request-side or client-side setting. Keep that out of the alias name.
 
-Responses reasoning/compaction continuity is intentionally bounded for cross-provider routes: the single maximum safe compatibility strategy may warn and drop an opaque carrier only when visible summary text or visible transcript history remains. opaque-only reasoning and opaque-only compaction fail closed as a hard portability boundary, and raw/native passthrough preserves provider-owned state.
+Responses reasoning/compaction continuity is intentionally bounded for cross-provider routes: the single maximum safe compatibility strategy may warn and drop an opaque carrier only when visible summary text or visible transcript history remains. opaque-only reasoning and opaque-only compaction fail closed as a hard portability boundary, and raw/native forwarding preserves provider-owned state only when the route can avoid mutation.
 
 ## Manual Wiring Without Wrappers
 

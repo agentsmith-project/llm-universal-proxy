@@ -21,8 +21,8 @@ The optional local dashboard helps you inspect routing, streaming, cancellation,
 
 The GA user-entry path is provider-neutral and starts with the CLI wrappers. The recommended config source is [examples/quickstart-provider-neutral.yaml](./examples/quickstart-provider-neutral.yaml), using these stable local aliases:
 
-- `preset-openai-compatible` for the OpenAI-compatible lane
-- `preset-anthropic-compatible` for the Anthropic-compatible lane
+- `preset-openai-compatible` for OpenAI-compatible providers
+- `preset-anthropic-compatible` for Anthropic-compatible providers
 
 MiniMax is only a replaceable OpenAI-compatible example, not a GA-required provider and not the mainline preset name. A concrete OpenAI + MiniMax sample remains in [examples/quickstart-openai-minimax.yaml](./examples/quickstart-openai-minimax.yaml) for users who want to replace the preset placeholders with named providers.
 
@@ -108,11 +108,11 @@ Reasoning effort such as `xhigh` is a client/request-side setting, not part of t
 
 `llmup` gives clients a stable local protocol surface, not unlimited provider equivalence.
 
-- raw same-protocol passthrough is the intended pre-GA execution lane for routes that can avoid body mutation and response normalization
+- raw same-protocol forwarding is a byte-preserving optimization for routes that can avoid body mutation and response normalization
 - translated paths use a single maximum safe compatibility strategy and may warn or reject non-portable provider-native features
 - fail-closed behavior is a hard portability boundary, not a lower compatibility setting
-- native extensions and provider-owned lifecycle state stay on raw/native paths unless a documented shim says otherwise
-- Responses reasoning/compaction continuity may warn and drop an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; raw/native passthrough is the intended lane for preserving provider-owned state when implemented and the route avoids mutation
+- native extensions and provider-owned lifecycle state require native upstream handling unless a documented shim says otherwise
+- Responses reasoning/compaction continuity may warn and drop an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; raw/native forwarding preserves provider-owned state only when implemented as a zero-transformation request-processing optimization
 - the quickstart includes conservative text-only `surface_defaults`; turn on search, image, or parallel-tool flags only when that model surface really supports them
 - multimodal `surface.modalities.input` gates media types, not every source transport; HTTP(S) image/PDF URLs are distinct from provider or local URIs such as `gs://`, `s3://`, and `file://`
 - Gemini models remain usable through Google's OpenAI-compatible endpoint by configuring that upstream as `format: openai-completion`; native Gemini `generateContent` wire format is not an active proxy surface
