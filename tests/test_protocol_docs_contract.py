@@ -128,6 +128,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
     def test_prompt_cache_docs_do_not_plan_automatic_controls(self):
         docs = (
             "docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md",
+            "docs/engineering/pre-ga-conversation-state-bridge-plan.md",
             "docs/max-compat-design.md",
             "docs/protocol-baselines/capabilities/cache.md",
         )
@@ -146,6 +147,17 @@ class ProtocolDocsContractTests(unittest.TestCase):
             for snippet in forbidden:
                 with self.subTest(path=path, snippet=snippet):
                     self.assertNotIn(snippet, text)
+
+        state_bridge = read_doc(
+            "docs/engineering/pre-ga-conversation-state-bridge-plan.md"
+        )
+        self.assertIsNone(
+            re.search(
+                r"stable\s+prefix.{0,160}(?:prompt_cache_key|breakpoint)",
+                state_bridge,
+                re.IGNORECASE | re.DOTALL,
+            )
+        )
 
         cache_baseline = read_doc("docs/protocol-baselines/capabilities/cache.md")
         self.assertIn(

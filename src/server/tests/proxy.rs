@@ -2124,6 +2124,38 @@ fn request_processing_input<'a>(
 }
 
 #[test]
+fn request_processing_provider_native_prompt_cache_serializes_only_supported_contract_states() {
+    use crate::request_processing::PromptCacheRequestControl as Control;
+
+    let states = [
+        Control::None,
+        Control::Preserved,
+        Control::ExplicitExtensionMapped,
+    ];
+
+    for state in states {
+        match state {
+            Control::None | Control::Preserved | Control::ExplicitExtensionMapped => {}
+        }
+    }
+
+    let serialized = states
+        .into_iter()
+        .map(|state| serde_json::to_value(state).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        serialized,
+        vec![
+            serde_json::json!("none"),
+            serde_json::json!("preserved"),
+            serde_json::json!("explicit_extension_mapped"),
+        ]
+    );
+    assert!(!serialized.contains(&serde_json::json!("synthesized")));
+}
+
+#[test]
 fn classify_request_processing_marks_same_protocol_without_fields_as_transformation_not_required() {
     let body = serde_json::json!({
         "model": "gpt-4o-mini",

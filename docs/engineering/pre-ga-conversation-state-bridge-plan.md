@@ -367,9 +367,9 @@ Post-MVP 支持：
 状态桥与 provider-native prompt-cache request-control support 是相邻但不同的能力：
 
 - 状态桥负责把缺失的 conversation context 展开成完整 target prompt。
-- provider-native prompt-cache request-control support 可以在 target prompt 构造完成之后，再添加目标 provider 的 cache request controls。
+- provider-native prompt-cache request-control support 只在 target prompt 构造完成之后，保留或显式映射请求中已有的目标 provider cache request controls。
 - 状态桥本身不决定哪些内容应该被 provider cache。
-- 状态展开后的稳定 prefix 可以作为 `prompt_cache_key` 或 Anthropic breakpoint 策略的输入，但必须通过前一份 prompt-cache plan 的策略和 trace 规则。
+- State bridge expansion 只改变 target prompt；prompt-cache controls 只能来自请求中显式 provider-native 字段，并且必须在 expansion + translation 后显式映射；不得从 expanded prefix、`previous_response_id`、`resp_llmup_*` 或文本内容派生 key/breakpoint。
 
 执行顺序：
 
@@ -416,7 +416,7 @@ Current-main delivery status:
 - Delivered slice: Phase 5 中的 `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice。
 - Delivered slice: route/config owner hardening，包括内部 route/config fingerprint、当前 runtime 复校验、drift pre-dispatch 400 fail closed，以及未变配置下的 no-model single-upstream replay。
 - Delivered slice: 普通 Responses `function_call` / `function_call_output` 本地 replay；pending call outputs 必须在 continuation 开头完整匹配，之后允许普通 text message；custom/proxied/namespaced 工具不保存为本地 replay state。
-- Pending next: remaining prompt-cache translated/block-level review；OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付，后续只处理显式 provider-native request controls 和 usage telemetry。
+- Pending next: provider-native prompt-cache disposition + trace/telemetry hardening around delivered top-level explicit mappings；后续只处理显式 provider-native request controls 和 usage telemetry。
 - Later: custom tool replay、Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation。
 
 ### Phase 0：合同冻结与文档更新
@@ -558,7 +558,7 @@ Post-MVP 覆盖：
 
 推荐下一步顺序：
 
-1. Remaining prompt-cache translated/block-level review next：在已交付的状态展开、route/config owner 绑定、OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射，以及 Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射上，继续评审剩余 translated/block-level 显式字段支持；后续只处理显式 provider-native request controls 和 usage telemetry。
+1. Provider-native prompt-cache disposition + trace/telemetry hardening next：围绕已交付的状态展开、route/config owner 绑定、OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射，以及 Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射加固；block-level explicit extension 支持保留为 future separate scope review。
 2. Custom tool replay later：普通 function_call replay 已交付；之后再评估 custom_tool_call、reasoning summary replay。
 3. Stream capture later：最后再评估 streaming response capture 和本地 Conversations API bridge。
 

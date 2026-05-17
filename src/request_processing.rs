@@ -24,7 +24,6 @@ pub enum PromptCacheRequestControl {
     None,
     Preserved,
     ExplicitExtensionMapped,
-    Synthesized,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

@@ -524,10 +524,10 @@ Required local tests:
 
 Recommended next order:
 
-1. Remaining prompt-cache translated/block-level review next: build on the delivered top-level explicit extensions and state-bridge owner hardening.
-2. Custom tool replay later: ordinary function_call replay is delivered; keep custom tool replay behind the remaining prompt-cache translated/block-level review.
+1. Provider-native prompt-cache disposition + trace/telemetry hardening around delivered top-level explicit mappings next.
+2. Custom tool replay later: ordinary function_call replay is delivered; keep custom tool replay behind the prompt-cache disposition + trace/telemetry hardening slice.
 3. Stream capture later: keep streaming response capture behind custom tool replay.
-4. Keep prompt-cache support limited to explicit provider-native request controls and read-only usage telemetry.
+4. Future block-level explicit extension support remains a separate scope review; keep prompt-cache support limited to explicit provider-native request controls and read-only usage telemetry.
 
 Primary code areas:
 
