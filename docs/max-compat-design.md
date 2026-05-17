@@ -62,7 +62,7 @@ where:
 
 - request handling decision answers "byte-preserving raw forwarding or maximum-safe request construction?"
 - `capability_surface` answers "what client-visible contract should this local alias advertise and preserve?"
-- provider-native request-control modifiers answer "what explicit target-provider controls may be preserved or synthesized after the target request shape is known?"
+- provider-native request-control modifiers answer "what explicit target-provider controls may be preserved or explicitly mapped after the target request shape is known?"
 - hard portability boundary answers "what must fail closed because it cannot be represented safely?"
 
 Client brand names can still exist in wrappers, real-client test matrix labels, and debugging, but they should not become the main policy axis inside the proxy.
@@ -72,7 +72,7 @@ Client brand names can still exist in wrappers, real-client test matrix labels, 
 The product promise is bounded: protocol coverage means raw same-protocol forwarding is an internal optimization where the proxy can forward bytes without body mutation, and maximum safe translation for mismatched protocol pairs. That singular behavior is the product contract; provider-specific fidelity remains bounded by portability.
 
 - raw same-protocol forwarding is an internal optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries
-- provider prompt-cache support is provider-native request-control support: synthesize only explicit provider-native cache request controls as a request-control modifier; this is not `llmup` caching and not a separate product behavior
+- provider prompt-cache support is provider-native request-control support: preserve or map only explicit provider-native cache request controls as a request-control modifier; this is not `llmup` caching and not a separate product behavior
 - translated paths always use maximum safe compatibility: preserve the maximum safe portable representation and warn when a safe degradation is visible
 - provider-native state and native extensions: raw/native forwarding only unless a documented, explicit shim exists
 

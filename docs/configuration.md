@@ -274,7 +274,7 @@ Resource boundaries for client request bodies, upstream response bodies, and str
 
 Translated paths use one product behavior: maximum safe compatibility. The proxy preserves the most complete client-visible representation it can, emits warnings for safe degradations, and rejects requests before upstream when a field would require unsafe approximation.
 
-Fail-closed behavior is a hard portability boundary, not a lower compatibility setting. Responses reasoning or compaction carriers may be warned and dropped only when visible summary text or visible transcript history remains. Requests with opaque-only reasoning, opaque-only compaction, provider-owned state, unsupported media, and unsupported source transports fail closed. Raw/native forwarding preserves provider-owned state only when the route does not require body mutation.
+Fail-closed behavior is a hard portability boundary, not a lower compatibility setting. Responses reasoning or compaction carriers may be warned and dropped only when visible summary text or visible transcript history remains. Requests with opaque-only reasoning, opaque-only compaction, provider-owned state, unsupported media, and unsupported source transports fail closed. Provider-owned state is preserved only when same-wire-protocol handling can remain byte-preserving internally.
 
 ### `conversation_state_bridge`
 

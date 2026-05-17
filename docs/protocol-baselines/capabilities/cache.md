@@ -22,7 +22,7 @@ retired historical Google Gemini baseline; it is not an active proxy capability.
 
 | Dimension | OpenAI Responses / Chat | Anthropic Messages | Proxy guidance |
 | --- | --- | --- | --- |
-| How caching is enabled | Automatic on cacheable prompts; official docs expose `prompt_cache_key` and retention controls | Explicit `cache_control`, available both as a top-level automatic mode and at block level | Do not flatten these into one synthetic cross-provider feature flag. |
+| How caching is enabled | Automatic on cacheable prompts; official docs expose `prompt_cache_key` and retention controls | Explicit `cache_control`, available both as a top-level automatic control and at block level | Do not flatten these into one synthetic cross-provider feature flag. |
 | What is being referenced | A cacheable prompt prefix, not a reusable named resource | A cacheable prefix breakpoint inside tools/system/messages | Provider cache handles do not map across protocol families. |
 | Lifetime model | Provider-managed retention policy | 5-minute default TTL, optional 1-hour TTL in docs | TTL cannot be normalized safely across providers. |
 | Usage fields | `cached_tokens` under prompt/input token details | Separate `cache_creation_input_tokens` and `cache_read_input_tokens` | Preserve raw counters where available and describe normalized values as approximate. |
@@ -38,7 +38,7 @@ retired historical Google Gemini baseline; it is not an active proxy capability.
 ## Implementation stance
 
 1. Preserve cache knobs byte-for-byte through raw same-protocol forwarding.
-2. During translation, treat provider prompt-cache support as target-provider request-control synthesis, not as `llmup` caching. OpenAI cache keys and Anthropic breakpoints have different billing and lifetime effects.
+2. During translation, treat provider prompt-cache support as explicit target-provider request-control mapping, not as `llmup` caching. OpenAI cache keys and Anthropic breakpoints have different billing and lifetime effects.
 3. Normalize cache usage for reporting, but keep provider-native fields available when the client understands them.
 4. Document all cache downgrades explicitly, especially when dropping Anthropic `cache_control`.
-5. Provider-cache auto-injection must be policy-driven and trace-visible, not an implicit side effect of translation.
+5. Provider-cache auto-injection is out of scope; explicit mapping must be trace-visible.

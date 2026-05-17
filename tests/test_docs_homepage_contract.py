@@ -35,7 +35,7 @@ REASONING_COMPACTION_BOUNDARY_SNIPPETS = (
     "opaque-only reasoning",
     "opaque-only compaction",
     "hard portability boundary",
-    "raw/native forwarding",
+    "byte-preserving",
     "provider-owned state",
 )
 
@@ -237,7 +237,8 @@ class DocsHomepageContractTests(unittest.TestCase):
         self.assertNotIn("同协议路径尽量保持 native " + "passthrough", readme_cn)
 
         english_snippets = (
-            "raw same-protocol forwarding is a byte-preserving optimization",
+            "eligible same-wire-protocol requests may use internal byte-preserving forwarding",
+            "not a user-selectable route mode",
             "single maximum safe compatibility strategy",
             "fail-closed behavior is a hard portability boundary",
             "requests whose semantics cannot be preserved or safely degraded are rejected before upstream",
@@ -247,7 +248,8 @@ class DocsHomepageContractTests(unittest.TestCase):
                 self.assertIn(snippet, readme)
 
         chinese_snippets = (
-            "raw same-protocol forwarding 是 byte-preserving optimization",
+            "符合同协议且无需 body mutation / response normalization 的请求",
+            "它不是用户可选 route mode",
             "maximum safe compatibility strategy",
             "fail-closed 代表 hard portability boundary",
             "无法安全保留或降级语义的请求会在上游前被拒绝",

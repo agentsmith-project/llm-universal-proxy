@@ -60,30 +60,102 @@ class ProtocolDocsContractTests(unittest.TestCase):
 
         self.assertNotIn("same-protocol paths stay native", text)
         for snippet in (
-            "raw same-protocol forwarding",
+            "Same-wire-protocol byte-preserving forwarding is an internal request-processing optimization",
             "maximum safe compatibility",
-            "zero-transformation forwarding optimization",
+            "provider-native request-control preservation or documented explicit mapping plus usage telemetry",
             "MUST NOT introduce a `llmup` cache store",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
 
-    def test_prd_translation_pipeline_records_raw_forwarding_as_pre_ga_target(self):
+    def test_prd_translation_pipeline_records_internal_forwarding_boundary(self):
         text = read_doc("docs/PRD.md")
         pipeline = text.split("### 4.2 Translation Pipeline", 1)[1].split(
             "\n### 4.3", 1
         )[0]
 
         for snippet in (
-            "byte-preserving raw same-protocol forwarding optimization",
-            "avoid body mutation and response normalization",
+            "unified routing, capability, and hard-boundary checks",
+            "no body mutation or response normalization is required",
             "single maximum safe compatibility strategy",
             "Apply hard portability boundaries before upstream",
-            "pre-GA implementation target and request processing fact",
-            "may still pass through compatibility machinery",
+            "internal request-processing optimization",
+            "not a product lane, operator mode, route policy, or success metric",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, pipeline)
+
+    def test_prompt_cache_docs_do_not_plan_cache_affinity_routing(self):
+        paths = (
+            "docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md",
+            "docs/engineering/pre-ga-conversation-state-bridge-plan.md",
+            "docs/engineering/pre-ga-remove-native-gemini-format-plan.md",
+            "docs/PRD.md",
+            "docs/protocol-compatibility-matrix.md",
+            "docs/README.md",
+            "README.md",
+            "README_CN.md",
+        )
+        forbidden = (
+            "provider-cache affinity",
+            "cache warmth",
+            "cache-warm",
+            "cache_warm",
+            "sticky routing",
+            "routing-affinity",
+            "policy-enabled translated route",
+        )
+
+        for path in paths:
+            text = read_doc(path)
+            for snippet in forbidden:
+                with self.subTest(path=path, snippet=snippet):
+                    self.assertNotIn(snippet, text)
+
+        plan = read_doc(
+            "docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md"
+        )
+        self.assertIn("Cache usage telemetry must not influence routing", plan)
+        self.assertIn(
+            "explicit provider-native request controls and read-only usage telemetry",
+            plan,
+        )
+        self.assertIn(
+            "Automatic provider cache key, marker, or breakpoint insertion",
+            plan,
+        )
+
+    def test_prompt_cache_docs_do_not_plan_automatic_controls(self):
+        docs = (
+            "docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md",
+            "docs/max-compat-design.md",
+            "docs/protocol-baselines/capabilities/cache.md",
+        )
+        forbidden = (
+            "implementation_reviewed_" + "breakpoints",
+            "target-provider request-control " + "synthe" + "sis",
+            "preserved or " + "synthesi" + "zed",
+            "synthe" + "size only " + "explicit",
+            "prompt-cache key or breakpoint " + "synthe" + "sis",
+            "Provider-cache auto-injection must be " + "policy-driven",
+            "reviewed implementation " + "contract",
+        )
+
+        for path in docs:
+            text = read_doc(path)
+            for snippet in forbidden:
+                with self.subTest(path=path, snippet=snippet):
+                    self.assertNotIn(snippet, text)
+
+        cache_baseline = read_doc("docs/protocol-baselines/capabilities/cache.md")
+        self.assertIn(
+            "explicit target-provider request-control mapping",
+            cache_baseline,
+        )
+        self.assertIn(
+            "Provider-cache auto-injection is out of scope; explicit mapping must be trace-visible.",
+            cache_baseline,
+        )
 
     def test_constitution_records_single_strategy_and_narrow_state_exception(self):
         text = read_doc("docs/CONSTITUTION.md")

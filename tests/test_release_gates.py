@@ -624,7 +624,7 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
                 "maximum safe compatibility",
                 "visible summary",
                 "opaque-only",
-                "raw/native forwarding",
+                "same-wire-protocol",
             ),
             "reasoning": (
                 "reasoning.encrypted_content",

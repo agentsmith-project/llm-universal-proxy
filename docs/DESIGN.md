@@ -27,7 +27,7 @@ Client request
   -> server router
   -> namespace runtime state
   -> upstream capability + model resolution
-  -> request assessment / translation if needed
+  -> request assessment / request construction if needed
   -> upstream HTTP call
   -> optional stream translation
   -> optional hooks + debug trace wrappers
@@ -104,7 +104,7 @@ Each upstream is either:
 
 Discovery still exists, but it is now only one part of a larger routing system. It determines:
 
-- which client formats can be passed through natively
+- which client formats match the upstream wire protocol
 - which fallback target format to use when translation is required
 - whether an upstream is currently usable
 
@@ -134,12 +134,13 @@ The current flow is:
 2. Detect client format from route and request shape.
 3. Resolve the requested model to an upstream/model pair.
 4. Check upstream availability and capability.
-5. Run request-side compatibility / portability assessment.
-6. If client format is natively supported, pass through the request body.
-7. Otherwise, translate the request through the translate facade.
-8. Apply auth forwarding and configured upstream headers.
-9. Call upstream through the selected upstream state's unary or streaming HTTP client.
-10. Normalize non-stream responses or wrap stream responses in the runtime chain.
+5. Run unified routing, capability, and request-side compatibility / portability assessment.
+6. Compute the internal request-processing classification after those boundary checks.
+7. If the client and upstream use the same wire protocol and the selected route does not require body mutation or response normalization, automatically use internal byte-preserving forwarding for the provider request and response bytes.
+8. Otherwise, construct or translate the upstream request through the translate facade under maximum safe compatibility.
+9. Apply auth forwarding and configured upstream headers.
+10. Call upstream through the selected upstream state's unary or streaming HTTP client.
+11. Return byte-preserved responses only for the eligible internal forwarding case; otherwise normalize non-stream responses or wrap stream responses in the runtime chain.
 
 OpenAI Responses lifecycle resources are a special case. They do not use the generic "translate anything anywhere" path. `src/server/responses_resources.rs` only proxies those resource routes when the namespace can identify a unique native OpenAI Responses upstream. The server does not invent response-session ownership state. Retrieval streaming (`GET /responses/{response_id}?stream=true`) stays same-format and is guarded as SSE rather than being buffered through the JSON lifecycle path.
 

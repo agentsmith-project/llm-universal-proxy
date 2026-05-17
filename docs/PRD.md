@@ -14,7 +14,7 @@ LLM Universal Proxy (public short name: llmup)
 
 ### 1.2 Product Definition
 
-A single-binary HTTP proxy that provides protocol-namespaced entrypoints and translation between supported LLM API surfaces. Clients using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages can route through one stable proxy to configured upstream endpoints. The product goal is maximum safe compatibility: preserve the most complete portable representation possible, warn on safe degradations, and reject non-portable provider-native features before upstream. Raw same-protocol forwarding is a zero-transformation forwarding optimization for routes that can avoid body mutation and response normalization, not a separate compatibility behavior. Gemini models remain usable only through Google's OpenAI-compatible endpoint configured as `format: openai-completion`, not as a native Gemini wire protocol.
+A single-binary HTTP proxy that provides protocol-namespaced entrypoints and translation between supported LLM API surfaces. Clients using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages can route through one stable proxy to configured upstream endpoints. The product goal is maximum safe compatibility: preserve the most complete portable representation possible, warn on safe degradations, and reject non-portable provider-native features before upstream. Byte-preserving forwarding for eligible same-wire-protocol requests is an internal optimization, not a separate compatibility behavior. Gemini models remain usable only through Google's OpenAI-compatible endpoint configured as `format: openai-completion`, not as a native Gemini wire protocol.
 
 ### 1.3 Problem Statement
 
@@ -47,17 +47,17 @@ The proxy MUST support bidirectional translation between the active wire protoco
 
 | # | Client Protocol | Upstream Protocol | Translation Required |
 |---|----------------|-------------------|---------------------|
-| 1 | OpenAI Chat Completions | OpenAI Chat Completions | No (same-protocol forwarding) |
+| 1 | OpenAI Chat Completions | OpenAI Chat Completions | No cross-protocol translation |
 | 2 | OpenAI Chat Completions | OpenAI Responses | Yes |
 | 3 | OpenAI Chat Completions | Anthropic Messages | Yes |
 | 4 | OpenAI Responses | OpenAI Chat Completions | Yes |
-| 5 | OpenAI Responses | OpenAI Responses | No (same-protocol forwarding) |
+| 5 | OpenAI Responses | OpenAI Responses | No cross-protocol translation |
 | 6 | OpenAI Responses | Anthropic Messages | Yes |
 | 7 | Anthropic Messages | OpenAI Chat Completions | Yes |
 | 8 | Anthropic Messages | OpenAI Responses | Yes |
-| 9 | Anthropic Messages | Anthropic Messages | No (same-protocol forwarding) |
+| 9 | Anthropic Messages | Anthropic Messages | No cross-protocol translation |
 
-All 9 combinations (3 same-protocol + 6 cross-protocol) MUST be supported within documented portability boundaries. Raw same-protocol forwarding is the pre-GA implementation target for same-protocol routes that require no body mutation or response normalization; all other request construction follows maximum safe compatibility and may warn or reject non-portable semantics rather than silently approximating them.
+All 9 combinations (3 same-wire-protocol + 6 cross-protocol) MUST be supported within documented portability boundaries. Eligible same-wire-protocol requests may automatically use internal byte-preserving forwarding only after unified routing and boundary checks show that no body mutation or response normalization is required. All other request construction follows maximum safe compatibility and may warn or reject non-portable semantics rather than silently approximating them.
 
 ### 2.2 Client Endpoints
 
@@ -122,7 +122,7 @@ The proxy MUST translate the following response fields:
 
 The proxy MUST use one compatibility strategy: maximum safe compatibility. It MUST preserve portable core semantics and client-visible tool identity, emit compatibility warnings for safe degradations, and fail closed for provider-state reconstruction, unsafe semantic approximation, unsupported media/source transports, and opaque-only continuity carriers.
 
-Same-protocol raw forwarding is a zero-transformation forwarding optimization and request processing fact, not a user-selectable product behavior or separate strategy. Provider prompt-cache support is provider-native request-control synthesis or preservation; it MUST NOT introduce a `llmup` cache store, response cache, semantic cache, or provider cache resource lifecycle manager. `conversation_state_bridge.mode=memory` is an explicitly configured transcript expansion adapter for llmup-owned `resp_llmup_*` continuations; it is memory-only and is not persistent conversation state, provider lifecycle reconstruction, a response cache, or a separate compatibility strategy.
+Same-wire-protocol byte-preserving forwarding is an internal request-processing optimization, not a user-selectable product behavior or separate strategy. Provider prompt-cache support is provider-native request-control preservation or documented explicit mapping plus usage telemetry; it MUST NOT introduce a `llmup` cache store, response cache, semantic cache, cache-aware routing, or provider cache resource lifecycle manager. `conversation_state_bridge.mode=memory` is an explicitly configured transcript expansion adapter for llmup-owned `resp_llmup_*` continuations; it is memory-only and is not persistent conversation state, provider lifecycle reconstruction, a response cache, or a separate compatibility strategy.
 
 Locked tool identity contract:
 
@@ -248,7 +248,7 @@ Admin namespace writes MUST use server-owned revisions with exact compare-and-sw
 
 | Requirement | Target |
 |-------------|--------|
-| Forwarding latency overhead | < 1ms added latency |
+| Baseline proxy overhead | Measured and kept low; no product metric is tied to internal byte-preserving forwarding |
 | Translation latency overhead | < 10ms added latency per request |
 | Streaming chunk translation | < 1ms per chunk |
 | Concurrent requests | Support 100+ concurrent requests without degradation |
@@ -264,7 +264,7 @@ Admin namespace writes MUST use server-owned revisions with exact compare-and-sw
 ### 3.3 Compatibility
 
 - Compatible with HTTP clients that speak one of the supported protocol surfaces and can use a configured proxy base URL.
-- No SDK changes are required for portable request/response fields; provider-native extensions may require byte-preserving same-protocol forwarding or a documented shim.
+- No SDK changes are required for portable request/response fields; provider-native extensions may require same-wire-protocol handling or a documented shim.
 - Works with official vendor APIs and third-party compatible endpoints within documented portability boundaries.
 
 ### 3.4 Deployment
@@ -294,10 +294,11 @@ This reduces the translation matrix from O(N²) to O(N) — adding a new protoco
 1. Client sends request in format A
 2. Detect client format from path + body
 3. Resolve model → upstream + real model name
-4. If the client and upstream use the same wire protocol and the proxy can avoid body mutation and response normalization -> use byte-preserving raw same-protocol forwarding optimization
-5. Otherwise -> construct the upstream request under the single maximum safe compatibility strategy
-6. Apply hard portability boundaries before upstream: reject provider-owned state, opaque-only continuity, unsupported media/source transports, or unsafe approximations that cannot be preserved or safely degraded
-7. During request construction:
+4. Run unified routing, capability, and hard-boundary checks before upstream
+5. If the client and upstream use the same wire protocol and no body mutation or response normalization is required -> the proxy may automatically use internal byte-preserving forwarding
+6. Otherwise -> construct the upstream request under the single maximum safe compatibility strategy
+7. Apply hard portability boundaries before upstream: reject provider-owned state, opaque-only continuity, unsupported media/source transports, or unsafe approximations that cannot be preserved or safely degraded
+8. During request construction:
    a. Translate request: A → OpenAI Chat → B
    b. Send translated request to upstream
    c. Receive response from upstream
@@ -305,7 +306,7 @@ This reduces the translation matrix from O(N²) to O(N) — adding a new protoco
    e. Return translated response to client
 ```
 
-Raw same-protocol forwarding is a pre-GA implementation target and request processing fact. Current same-protocol routes may still pass through compatibility machinery until zero-transformation forwarding work lands; the product contract is to make that behavior explicit rather than silently treating every same-protocol route as byte-preserving.
+Byte-preserving same-wire-protocol forwarding is an internal request-processing optimization. It is not a product lane, operator mode, route policy, or success metric; the product contract remains the single maximum safe compatibility strategy.
 
 ### 4.3 Streaming Translation
 
@@ -450,9 +451,9 @@ When the proxy must drop or approximate fields, it MUST:
 
 ---
 
-## 8. Future Considerations
+## 8. Future Considerations And Non-Goals
 
-These are NOT in scope for the current version but inform architectural decisions:
+These are NOT in scope for the current version. Non-goals are listed explicitly so they do not become implicit roadmap items:
 
 | Area | Consideration |
 |------|--------------|
@@ -460,8 +461,8 @@ These are NOT in scope for the current version but inform architectural decision
 | Batch processing | Translation for batch/non-real-time API calls |
 | Embeddings | Protocol translation for embedding endpoints |
 | Content moderation | Cross-protocol content filtering |
-| A/B routing | Route different requests to different upstreams based on policy |
-| Caching | Response caching for identical requests |
+| A/B routing | Non-goal: route experimentation is not part of the product contract |
+| Response caching | Non-goal: `llmup` does not cache or replay LLM responses |
 
 ---
 
@@ -473,5 +474,5 @@ These are NOT in scope for the current version but inform architectural decision
 | Streaming behavior across all active protocol combinations within documented portability boundaries | 9/9 assessed as pass, warn, or reject as specified |
 | Codex CLI works through configured proxy surfaces | Required test upstreams pass within the wrapper surface contract |
 | Claude Code works through configured proxy surfaces | Required test upstreams pass within the wrapper surface contract |
-| Passthrough adds < 1ms latency | Measured |
+| Internal optimization remains invisible to product behavior | No user-selectable forwarding/cache route mode or success metric |
 | No silent data loss during translation | All compat warnings are emitted correctly |
