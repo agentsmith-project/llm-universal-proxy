@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.29 - 2026-05-17
+
+- Advanced the main-branch release identity to Cargo package version `0.2.29`, the next patch version after the published, occupied `v0.2.28` tag, without moving, deleting, or reusing the existing tag.
+- Refreshed the checked-in container publication manifest and docs around the actual published `v0.2.28` multi-arch image digest while keeping `0.2.29` / `v0.2.29` as the next release identity, not a published container tag yet.
+- Verified the `v0.2.28` release workflow, GitHub Release, GHCR `v0.2.28`, `0.2.28`, and `latest` image tags, and tag-triggered CI after publication.
+
 ## v0.2.28 - 2026-05-17
 
 - Removed the native Gemini wire/client/provider format path. Gemini is now treated only as a Google OpenAI-compatible upstream, reducing product surface area and translation complexity.
