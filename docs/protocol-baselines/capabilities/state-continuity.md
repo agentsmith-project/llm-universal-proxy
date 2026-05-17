@@ -3,7 +3,7 @@
 - Layer: capability-diff
 - Status: active
 - Vendor snapshot/captured date: 2026-04-16
-- Proxy posture updated date: 2026-05-16
+- Proxy posture updated date: 2026-05-17
 - Scope: follow-up turns, replay semantics, compaction, and durable vs request-scoped state
 
 ## Summary
@@ -29,7 +29,7 @@ historical baseline context.
 | Surface | Why it is risky |
 | --- | --- |
 | OpenAI provider `previous_response_id`, conversations, `context_management`, and compaction | They imply upstream-managed state the proxy does not reconstruct. Request-side compaction input items also carry opaque state such as `encrypted_content`; that carrier is not forwarded across providers. Maximum-compatible translation can warn/drop it only when visible summary text or non-compaction visible transcript/history remains. |
-| llmup local `resp_llmup_*` bridge IDs | Only valid for llmup-owned local transcript replay on translated OpenAI Responses continuations, only while the in-memory entry remains unexpired for the same namespace/owner and route/config owner. First-response streaming completed text can be captured for later replay, but streaming continuation with `previous_response_id` still fails closed. |
+| llmup local `resp_llmup_*` bridge IDs | Only valid for llmup-owned local transcript replay on translated OpenAI Responses continuations, only while the in-memory entry remains unexpired for the same namespace/owner and route/config owner. First-response streaming completed visible text and reasoning summaries can be captured for later replay, but streaming continuation with `previous_response_id` still fails closed. |
 | Anthropic `context_management`, containers, and MCP server state | These are stateful beta surfaces with no safe OpenAI mirror. |
 
 ## Implementation stance
@@ -40,4 +40,4 @@ historical baseline context.
 4. For request-side compaction input items, maximum-compatible translation may warn/drop `encrypted_content` or another opaque carrier only when the specific compaction item has explicit visible summary text, or when the request includes non-compaction visible transcript/history. Opaque-only compaction input fails closed.
 5. Native Responses same-wire handling should preserve compaction items unchanged when no body mutation or response normalization is required.
 6. One summarized compaction item does not permit another opaque-only compaction item in the same request to be silently dropped.
-7. The local memory bridge is not a provider resource API: it does not import external `resp_*` IDs, persist across restarts, replay streaming continuations, or replay reasoning/compaction/background work. It can replay ordinary function-call history, portable custom-tool history, and first-response streaming completed text when saved as llmup-owned local transcript state.
+7. The local memory bridge is not a provider resource API: it does not import external `resp_*` IDs, persist across restarts, replay streaming continuations, replay compaction/background work, or replay provider-owned opaque reasoning carriers. It can replay ordinary function-call history, portable custom-tool history, visible reasoning summary text, and first-response streaming completed visible output when saved as llmup-owned local transcript state.

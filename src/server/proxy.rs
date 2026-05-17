@@ -2334,6 +2334,7 @@ fn pending_bridge_tool_calls(items: &[Value]) -> Result<Vec<PendingBridgeToolCal
                 pending.remove(index);
             }
             Some("message") => {}
+            Some("reasoning") => {}
             Some(other) => {
                 return Err(format!(
                     "conversation_state_bridge replay state contains unsupported `{other}` item"
@@ -2445,19 +2446,23 @@ fn responses_bridge_output_items_from_response(response: &Value) -> Result<Vec<V
         .ok_or_else(|| {
             "conversation_state_bridge capture requires OpenAI Responses output array".to_string()
         })?;
-    output
-        .iter()
-        .map(responses_bridge_output_item)
-        .collect::<Result<Vec<_>, _>>()
+    let mut items = Vec::with_capacity(output.len());
+    for item in output {
+        if let Some(item) = responses_bridge_output_item(item)? {
+            items.push(item);
+        }
+    }
+    Ok(items)
 }
 
-fn responses_bridge_output_item(item: &Value) -> Result<Value, String> {
+fn responses_bridge_output_item(item: &Value) -> Result<Option<Value>, String> {
     match responses_bridge_item_type(item) {
-        Some("message") => responses_text_output_item(item),
-        Some("function_call") => responses_function_call_item(item),
-        Some("custom_tool_call") => responses_custom_tool_call_item(item),
+        Some("message") => responses_text_output_item(item).map(Some),
+        Some("reasoning") => responses_reasoning_output_item(item),
+        Some("function_call") => responses_function_call_item(item).map(Some),
+        Some("custom_tool_call") => responses_custom_tool_call_item(item).map(Some),
         _ => Err(
-            "conversation_state_bridge memory capture only supports assistant text message output, `function_call`, and `custom_tool_call` output"
+            "conversation_state_bridge memory capture only supports assistant text message output, visible `reasoning` summary, `function_call`, and `custom_tool_call` output"
                 .to_string(),
         ),
     }
@@ -2484,6 +2489,38 @@ fn responses_text_output_item(item: &Value) -> Result<Value, String> {
         "output_text",
         &text,
     ))
+}
+
+fn responses_reasoning_output_item(item: &Value) -> Result<Option<Value>, String> {
+    if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return Err(
+            "conversation_state_bridge memory capture only captures `reasoning` output items"
+                .to_string(),
+        );
+    }
+    let Some(summary) = item.get("summary").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    let summary = summary
+        .iter()
+        .filter_map(|part| {
+            if part.get("type").and_then(Value::as_str) != Some("summary_text") {
+                return None;
+            }
+            let text = part.get("text").and_then(Value::as_str)?;
+            Some(serde_json::json!({
+                "type": "summary_text",
+                "text": text
+            }))
+        })
+        .collect::<Vec<_>>();
+    if summary.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::json!({
+        "type": "reasoning",
+        "summary": summary
+    })))
 }
 
 fn responses_function_call_item(item: &Value) -> Result<Value, String> {

@@ -293,6 +293,12 @@ struct SequencedOpenAiCompletionState {
     first_tool_calls: Vec<Value>,
 }
 
+#[derive(Clone)]
+struct SequencedOpenAiCompletionReasoningState {
+    captured: CapturedBridgeBodies,
+    calls: Arc<AtomicUsize>,
+}
+
 async fn spawn_sequenced_openai_completion_tool_mock(
     first_tool_call: Value,
 ) -> (String, tokio::task::JoinHandle<()>, CapturedBridgeBodies) {
@@ -357,11 +363,68 @@ async fn sequenced_openai_completion_tool_handler(
     (StatusCode::OK, Json(resp)).into_response()
 }
 
+async fn spawn_sequenced_openai_completion_reasoning_mock(
+) -> (String, tokio::task::JoinHandle<()>, CapturedBridgeBodies) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let captured = CapturedBridgeBodies::default();
+    let state = SequencedOpenAiCompletionReasoningState {
+        captured: captured.clone(),
+        calls: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(sequenced_openai_completion_reasoning_handler),
+        )
+        .route(
+            "/chat/completions",
+            post(sequenced_openai_completion_reasoning_handler),
+        );
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.with_state(state)).await.ok();
+    });
+    (base, handle, captured)
+}
+
+async fn sequenced_openai_completion_reasoning_handler(
+    State(state): State<SequencedOpenAiCompletionReasoningState>,
+    Json(body): Json<Value>,
+) -> Response {
+    state.captured.push(body.clone());
+    let call_index = state.calls.fetch_add(1, Ordering::SeqCst);
+    let message = if call_index == 0 {
+        json!({
+            "role": "assistant",
+            "reasoning_content": "think",
+            "content": "Visible answer"
+        })
+    } else {
+        json!({ "role": "assistant", "content": "OK" })
+    };
+    let resp = json!({
+        "id": if call_index == 0 { "chatcmpl-reasoning-first" } else { "chatcmpl-reasoning-second" },
+        "object": "chat.completion",
+        "created": 1,
+        "model": body.get("model").cloned().unwrap_or_else(|| json!("mock")),
+        "choices": [{ "index": 0, "message": message, "finish_reason": "stop" }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3 }
+    });
+    (StatusCode::OK, Json(resp)).into_response()
+}
+
 #[derive(Clone)]
 struct SequencedAnthropicState {
     captured: CapturedBridgeBodies,
     calls: Arc<AtomicUsize>,
     first_tool_use: Value,
+}
+
+#[derive(Clone)]
+struct SequencedAnthropicThinkingState {
+    captured: CapturedBridgeBodies,
+    calls: Arc<AtomicUsize>,
 }
 
 async fn spawn_sequenced_anthropic_tool_mock(
@@ -409,11 +472,58 @@ async fn sequenced_anthropic_tool_handler(
     (StatusCode::OK, Json(resp)).into_response()
 }
 
+async fn spawn_sequenced_anthropic_thinking_mock(
+) -> (String, tokio::task::JoinHandle<()>, CapturedBridgeBodies) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let captured = CapturedBridgeBodies::default();
+    let state = SequencedAnthropicThinkingState {
+        captured: captured.clone(),
+        calls: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route("/v1/messages", post(sequenced_anthropic_thinking_handler))
+        .route("/messages", post(sequenced_anthropic_thinking_handler));
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.with_state(state)).await.ok();
+    });
+    (base, handle, captured)
+}
+
+async fn sequenced_anthropic_thinking_handler(
+    State(state): State<SequencedAnthropicThinkingState>,
+    Json(body): Json<Value>,
+) -> Response {
+    state.captured.push(body.clone());
+    let call_index = state.calls.fetch_add(1, Ordering::SeqCst);
+    let content = if call_index == 0 {
+        json!([
+            { "type": "thinking", "thinking": "think" },
+            { "type": "text", "text": "Visible answer" }
+        ])
+    } else {
+        json!([{ "type": "text", "text": "OK" }])
+    };
+    let resp = json!({
+        "id": if call_index == 0 { "msg_thinking_first" } else { "msg_thinking_second" },
+        "type": "message",
+        "role": "assistant",
+        "content": content,
+        "model": body.get("model").cloned().unwrap_or_else(|| json!("claude-3")),
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": { "input_tokens": 1, "output_tokens": 2 }
+    });
+    (StatusCode::OK, Json(resp)).into_response()
+}
+
 #[derive(Clone)]
 struct StreamingOpenAiCompletionBridgeState {
     captured: CapturedBridgeBodies,
     fail_stream: bool,
     hold_stream_open: bool,
+    include_reasoning: bool,
 }
 
 async fn spawn_streaming_openai_completion_bridge_mock(
@@ -434,6 +544,35 @@ async fn spawn_streaming_openai_completion_bridge_mock_with_stream_hold(
         captured: captured.clone(),
         fail_stream,
         hold_stream_open,
+        include_reasoning: false,
+    };
+    let app = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(streaming_openai_completion_bridge_handler),
+        )
+        .route(
+            "/chat/completions",
+            post(streaming_openai_completion_bridge_handler),
+        );
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.with_state(state)).await.ok();
+    });
+    (base, handle, captured)
+}
+
+async fn spawn_streaming_openai_completion_reasoning_bridge_mock_with_stream_hold(
+    hold_stream_open: bool,
+) -> (String, tokio::task::JoinHandle<()>, CapturedBridgeBodies) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let captured = CapturedBridgeBodies::default();
+    let state = StreamingOpenAiCompletionBridgeState {
+        captured: captured.clone(),
+        fail_stream: false,
+        hold_stream_open,
+        include_reasoning: true,
     };
     let app = Router::new()
         .route(
@@ -462,12 +601,17 @@ async fn streaming_openai_completion_bridge_handler(
         } else {
             r#"data: {"id":"chatcmpl-bridge-stream","object":"chat.completion.chunk","created":1,"model":"mock","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#
         };
-        let chunks = [
+        let mut chunks = vec![
             r#"data: {"id":"chatcmpl-bridge-stream","object":"chat.completion.chunk","created":1,"model":"mock","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#,
+        ];
+        if state.include_reasoning {
+            chunks.push(r#"data: {"id":"chatcmpl-bridge-stream","object":"chat.completion.chunk","created":1,"model":"mock","choices":[{"index":0,"delta":{"reasoning_content":"think"},"finish_reason":null}]}"#);
+        }
+        chunks.extend([
             r#"data: {"id":"chatcmpl-bridge-stream","object":"chat.completion.chunk","created":1,"model":"mock","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}"#,
             final_chunk,
             "data: [DONE]",
-        ];
+        ]);
         if state.hold_stream_open {
             let body_stream = stream::unfold(chunks.into_iter(), |mut chunks| async move {
                 if let Some(chunk) = chunks.next() {
@@ -4966,6 +5110,72 @@ async fn conversation_state_bridge_replays_text_history_to_openai_chat_upstream(
 }
 
 #[tokio::test]
+async fn conversation_state_bridge_replays_reasoning_summary_to_openai_chat_upstream() {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_reasoning_mock().await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "First",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "reasoning response should create local replay state, body = {first_body:?}"
+    );
+    assert_eq!(first_body["output"][0]["type"], "reasoning");
+    assert_eq!(first_body["output"][0]["summary"][0]["text"], "think");
+    assert!(first_body["output"][0].get("encrypted_content").is_none());
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "replay = {replay:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], "First");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["reasoning_content"], "think");
+    assert_eq!(messages[1]["content"], "Visible answer");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"], "Second");
+    assert!(replay.get("previous_response_id").is_none());
+    let serialized = serde_json::to_string(replay).unwrap();
+    assert!(
+        !serialized.contains("encrypted_content"),
+        "replay = {replay:?}"
+    );
+}
+
+#[tokio::test]
 async fn conversation_state_bridge_replays_text_history_to_anthropic_upstream() {
     let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
     let config = bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
@@ -5015,6 +5225,71 @@ async fn conversation_state_bridge_replays_text_history_to_anthropic_upstream() 
     assert_eq!(messages[2]["role"], "user");
     assert_eq!(messages[2]["content"][0]["text"], "Second");
     assert!(replay.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_replays_reasoning_summary_to_anthropic_upstream() {
+    let (mock_base, _mock, captured) = spawn_sequenced_anthropic_thinking_mock().await;
+    let config = bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "First",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "thinking response should create local replay state, body = {first_body:?}"
+    );
+    assert_eq!(first_body["output"][0]["type"], "reasoning");
+    assert_eq!(first_body["output"][0]["summary"][0]["text"], "think");
+    assert!(first_body["output"][0].get("encrypted_content").is_none());
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "replay = {replay:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["text"], "First");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][0]["type"], "thinking");
+    assert_eq!(messages[1]["content"][0]["thinking"], "think");
+    assert!(messages[1]["content"][0].get("signature").is_none());
+    assert_eq!(messages[1]["content"][1]["type"], "text");
+    assert_eq!(messages[1]["content"][1]["text"], "Visible answer");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["text"], "Second");
+    assert!(replay.get("previous_response_id").is_none());
+    let serialized = serde_json::to_string(replay).unwrap();
+    assert!(
+        !serialized.contains("encrypted_content"),
+        "replay = {replay:?}"
+    );
+    assert!(!serialized.contains("signature"), "replay = {replay:?}");
 }
 
 #[tokio::test]
@@ -5074,6 +5349,86 @@ async fn conversation_state_bridge_streaming_text_capture_to_openai_chat_upstrea
     assert_eq!(messages[1]["role"], "assistant");
     assert_eq!(messages[1]["content"], "Hi");
     assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"], "Second");
+    assert!(replay.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_streaming_reasoning_capture_replays_before_upstream_eof() {
+    let (mock_base, _mock, captured) =
+        spawn_streaming_openai_completion_reasoning_bridge_mock_with_stream_hold(true).await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "First",
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+
+    let mut first_stream = first.bytes_stream();
+    let mut first_body = String::new();
+    let local_id = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let chunk = first_stream
+                .next()
+                .await
+                .expect("stream chunk before response.completed")
+                .expect("stream chunk");
+            first_body.push_str(std::str::from_utf8(&chunk).expect("utf8 SSE chunk"));
+            if let Some(local_id) =
+                try_responses_terminal_id_from_sse(&first_body, "response.completed")
+            {
+                break local_id;
+            }
+        }
+    })
+    .await
+    .expect("response.completed before timeout");
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "stream reasoning capture should expose an llmup response id, body = {first_body}"
+    );
+    assert!(
+        first_body.contains("response.reasoning_summary_text.delta"),
+        "body = {first_body}"
+    );
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+    drop(first_stream);
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "replay = {replay:?}");
+    assert_eq!(messages[0]["content"], "First");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["reasoning_content"], "think");
+    assert_eq!(messages[1]["content"], "Hi");
     assert_eq!(messages[2]["content"], "Second");
     assert!(replay.get("previous_response_id").is_none());
 }

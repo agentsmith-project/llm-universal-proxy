@@ -1,7 +1,7 @@
 # Pre-GA Conversation State Bridge 工作计划
 
-- 状态：current-main status update；内置短期纯内存 transcript replay、普通 `function_call` / `function_call_output`、portable `custom_tool_call` / `custom_tool_call_output` 的非流式本地 replay、streaming first-response completed text capture 和 route/config owner hardening 已实现；`response.completed` bytes 交给 client 前 state 已写入；usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` 只读 telemetry；reasoning summary replay、shared detector/trace cleanup 仍待后续
-- 日期：2026-05-16
+- 状态：current-main status update；内置短期纯内存 transcript replay、普通 `function_call` / `function_call_output`、portable `custom_tool_call` / `custom_tool_call_output` 的非流式本地 replay、visible reasoning summary replay、streaming first-response completed visible output capture 和 route/config owner hardening 已实现；`response.completed` bytes 交给 client 前 state 已写入；usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` 只读 telemetry；shared detector/trace cleanup 仍待后续
+- 日期：2026-05-17
 - 范围：在最大安全兼容目标下提供内置、短期、纯内存 transcript retention/replay，用于把使用 OpenAI Responses 本地 continuation 的客户端转换到需要显式 transcript 的 provider 协议
 - 非范围：LLM response cache、provider cache 生命周期/资源管理、semantic cache、跨进程持久化数据库、Conversations API 模拟、本地 retrieval、provider 私有 opaque state 反解、后台任务队列产品化、提示词管理产品；Conversations API bridge、持久化后端、外部状态导入、admin 浏览/分布式同步等不是当前方向，必须另起评审
 
@@ -37,14 +37,14 @@
 
 - `POST /openai/v1/responses` translated route 上的 `previous_response_id` continuation。
 
-当前已交付的是非流式 continuation 加第一轮 streaming completed text capture：
+当前已交付的是非流式 continuation 加第一轮 streaming completed visible output capture：
 
-- 第一轮保存 visible user input 和 completed assistant text。
-- 第一轮 `stream:true` 请求在收到完整 completed terminal 后，可以把可见 assistant text 提交到本地 memory replay state；`response.completed` bytes 发给 client 前 state 已写入，避免 terminal id race。
+- 第一轮保存 visible user input、completed assistant text 和 visible reasoning summary text。
+- 第一轮 `stream:true` 请求在收到完整 completed terminal 后，可以把可见 assistant text/reasoning summary 提交到本地 memory replay state；`response.completed` bytes 发给 client 前 state 已写入，避免 terminal id race。
 - 第二轮用本地 `resp_llmup_*` 展开历史，发送到 OpenAI Chat 或 Anthropic upstream。
 - 后续 continuation 仍走非流式 replay；`stream:true` + `previous_response_id` 仍 fail closed。
 - 普通 OpenAI Responses `function_call` / `function_call_output` 和 portable `custom_tool_call` / `custom_tool_call_output` 可以作为本地 replay state 保存和展开；pending call 必须先由同 kind 的匹配 tool output 前缀消费，之后可跟普通 text message。
-- 非 portable custom、proxied、namespaced provider/internal 工具语义仍不保存、不 replay；reasoning summary 仍是后续阶段。
+- 非 portable custom、proxied、namespaced provider/internal 工具语义仍不保存、不 replay；reasoning 只保存和 replay 可见 summary text，不保存 `encrypted_content`、Anthropic signature/redacted/omitted thinking 或 provider-private 字段。
 
 当前不做：
 
@@ -56,7 +56,7 @@
 - 本地 retrieval 或 Conversations API bridge；如需提出，必须另起评审。
 - 复杂内存配额、LRU、admin 浏览 UI、跨进程恢复或分布式同步；这些不是当前路线图。
 
-也就是说，当前状态桥是一个短期内存 replay buffer：收到第一轮 translated Responses 请求后保存可重放 transcript，包括非流式 completed text 和已完成的第一轮 streaming text；第二轮带本地 `resp_llmup_*` 时只支持非流式展开历史并继续调用目标 provider。它不是 response cache、provider cache、semantic cache、持久化、Conversations API 或本地 retrieval。`llmup` 重启、TTL 到期、ID 未命中时，直接 fail closed。
+也就是说，当前状态桥是一个短期内存 replay buffer：收到第一轮 translated Responses 请求后保存可重放 transcript，包括非流式 completed text、visible reasoning summary text 和已完成的第一轮 streaming visible output；第二轮带本地 `resp_llmup_*` 时只支持非流式展开历史并继续调用目标 provider。它不是 response cache、provider cache、semantic cache、持久化、Conversations API 或本地 retrieval。`llmup` 重启、TTL 到期、ID 未命中时，直接 fail closed。
 
 ## 背景与现状
 
@@ -67,7 +67,7 @@ OpenAI Responses 和 Conversations 是状态型接口。官方文档描述了两
 
 Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript replay。客户端或 SDK 通常需要在每次请求里带上完整历史。
 
-当前 `llmup` 支持 OpenAI Responses 请求转换到 Chat/Anthropic，并已为非流式 `previous_response_id` continuation 增加本地内存展开、普通 function call/tool output replay、portable custom tool call/output replay、第一轮 streaming completed text capture 和 route/config owner hardening。Native Gemini 已不是 active runtime surface；Gemini 品牌只能作为 OpenAI-compatible upstream 走 OpenAI Chat wire protocol。外部 provider `resp_*` / `conv_*` 仍不能导入；未知本地 ID、过期 ID、owner mismatch、route/config drift 继续 fail closed。首轮 `store:false` 请求仍会调用上游，但不保存本地状态；之后如果 client 试图用对应历史继续 replay，会因为没有本地状态而 fail closed。`stream:true` + `previous_response_id` 仍 fail closed，后续 continuation 只走非流式 replay。
+当前 `llmup` 支持 OpenAI Responses 请求转换到 Chat/Anthropic，并已为非流式 `previous_response_id` continuation 增加本地内存展开、普通 function call/tool output replay、portable custom tool call/output replay、visible reasoning summary replay、第一轮 streaming completed visible output capture 和 route/config owner hardening。Native Gemini 已不是 active runtime surface；Gemini 品牌只能作为 OpenAI-compatible upstream 走 OpenAI Chat wire protocol。外部 provider `resp_*` / `conv_*` 仍不能导入；未知本地 ID、过期 ID、owner mismatch、route/config drift 继续 fail closed。首轮 `store:false` 请求仍会调用上游，但不保存本地状态；之后如果 client 试图用对应历史继续 replay，会因为没有本地状态而 fail closed。`stream:true` + `previous_response_id` 仍 fail closed，后续 continuation 只走非流式 replay。
 
 ## 当前 Codebase 判断
 
@@ -80,12 +80,13 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 - `ConversationStateBridgeStore` 已挂在 `AppState`，使用内存 HashMap、`resp_llmup_*` ID、TTL、全局 `max_bytes` 和 owner hash。
 - 非流式 text Responses -> OpenAI Chat / Anthropic continuation 已实现：第一轮保存 user text 和 assistant text，第二轮用本地 `previous_response_id` 展开历史后再进入现有转换链。
 - 普通 Responses `function_call` / `function_call_output` 与 portable `custom_tool_call` / `custom_tool_call_output` 本地 replay 已实现：只保存 `type`、`call_id`、`name`、`arguments` / `input` / `output` 可移植字段；不保存 tools、tool_choice 或 parallel controls；非 portable custom、proxied、namespaced provider/internal 工具语义继续 fail closed 或不提交本地 replay state。
+- visible reasoning summary replay 已实现：只保存和展开 `summary[].summary_text.text`，不保存 `encrypted_content`、Anthropic thinking signature、redacted/omitted thinking 或 provider-private reasoning 字段。
 - `store:false` 首轮仍调用上游但不保存本地状态；未知/过期/owner mismatch 本地 ID fail closed。
 - native OpenAI Responses forwarding 保留 provider ID，不导入本地状态。
 - `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice 已完成：`background:false|null` 和 `store:false|null` 不再触发 provider-owned stateful fail-closed，`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。
 - route/config owner hardening 已完成：StoredBridgeResponse 保存内部 route/config fingerprint；continuation 在 upstream dispatch 前按当前 runtime/fingerprint 重新校验，drift 时 400 fail closed；无 `model` 的 single-upstream replay 在配置未变时仍成功。
 - namespace revision 采用保守绑定：配置更新会让旧 local state fail closed。这是安全取舍，不做迁移、持久化或 fallback；fingerprint 只是内部保护，不是产品功能或用户配置。
-- streaming first-response capture 已完成 narrow slice：OpenAI Responses `stream:true` 第一轮在 completed terminal 后提交 completed streaming text capture，本地 state 在 `response.completed` bytes 下发前写入；带 `previous_response_id` 的 streaming continuation 仍 fail closed，后续 continuation 仍是非流式 replay。
+- streaming first-response capture 已完成 narrow slice：OpenAI Responses `stream:true` 第一轮在 completed terminal 后提交 completed streaming visible output capture，本地 state 在 `response.completed` bytes 下发前写入；带 `previous_response_id` 的 streaming continuation 仍 fail closed，后续 continuation 仍是非流式 replay。
 - usage hook `provider_cache_usage` 已完成：只在同协议 zero-transform/native-preserved raw observed provider usage 上输出 source-field telemetry；cross-protocol translated routes 和 same-format constructed routes 暂不输出，避免把 client-visible normalized usage 误当 provider raw source telemetry。该 telemetry 只读，不驱动 cache store、lookup、key、eviction、response reuse、routing 或 fallback。
 - 文档和测试已经锁定“provider-owned state 不重建”的现有行为。
 
@@ -93,8 +94,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 
 - remaining detector work：如需继续提 detector，只限共享 helper、细粒度 trace metadata、以及其它 consolidation，不再把 enabled-semantics 小切片列为下一步。
 - proxy-key 与 client-provider-key 都已有本地 replay owner hash；client-provider-key 继续包含 provider key，proxy-key 绑定 data-auth generation/auth kind，不引入新用户配置。
-- visible reasoning summary replay 尚未实现。
-- streaming continuation replay 尚未实现；当前本地 replay 只支持第一轮 streaming completed text capture，后续 `previous_response_id` continuation 仍必须非流式，`stream:true` + `previous_response_id` 仍 fail closed。
+- streaming continuation replay 尚未实现；当前本地 replay 只支持第一轮 streaming completed visible output capture，后续 `previous_response_id` continuation 仍必须非流式，`stream:true` + `previous_response_id` 仍 fail closed。
 - 细粒度 trace metadata 尚未完成；需要补齐 bridge enabled、hit/miss/expired/owner_mismatch、replay item count、memory limit 等不含 prompt 内容的 metadata。
 
 已接受的 pre-GA 方向变化：
@@ -217,7 +217,7 @@ struct BridgeResponse {
 保存内容：
 
 - 可重放 OpenAI Responses input items。
-- assistant output items 中可转换的 message、普通 `function_call` 和 portable `custom_tool_call`；reasoning summary 仍待后续评审。
+- assistant output items 中可转换的 message、visible reasoning summary、普通 `function_call` 和 portable `custom_tool_call`；reasoning 只保存 `summary[].summary_text.text`。
 - 普通 function/custom tool call 与对应 output 的 `{call_id, kind}` 关联。
 - 当前请求的 `tools`、tool choice、parallel tool policy、response format 等 controls 不保存到本地 replay state；当前请求 controls 继续由现有 translator 处理。
 - resolved upstream name、target format、target model、translation contract/surface 信息，以及 namespace revision 或 route config hash，用于 continuation route 绑定。
@@ -227,7 +227,7 @@ struct BridgeResponse {
 
 - provider credentials、downstream Authorization header、proxy key。
 - 原始 response body 的“可直接返回副本”。
-- provider-private opaque state。
+- provider-private opaque state，包括 `encrypted_content`、Anthropic thinking signature、redacted/omitted thinking。
 - debug trace / hook payload中的未脱敏副本。
 - `store: false` 请求对应的 response state。
 
@@ -328,11 +328,11 @@ struct BridgeResponse {
 ### 流式（已交付 narrow slice）
 
 1. 第一轮 `stream:true` 请求在 response created 阶段预分配本地 response ID。
-2. streaming sink 收集 completed streaming text，可还原为可重放 assistant text。
+2. streaming sink 收集 completed streaming visible output，可还原为可重放 assistant text 和 visible reasoning summary。
 3. 只有收到 completed terminal event 后提交状态；`response.completed` bytes 交给 client 前 state 必须已写入。
 4. 客户端断连、上游错误、stream parse fatal 或 incomplete terminal 时不提交 completed 状态；可选记录 aborted metadata，但不能用于 replay。
 5. 流式事件中客户端可见 ID 必须与最终 store ID 一致。
-6. 当前只支持第一轮 streaming completed text capture；后续 continuation 仍走非流式 replay，`stream:true` + `previous_response_id` 仍 fail closed。
+6. 当前只支持第一轮 streaming completed visible output capture；后续 continuation 仍走非流式 replay，`stream:true` + `previous_response_id` 仍 fail closed。
 
 ## 覆盖范围
 
@@ -342,13 +342,13 @@ struct BridgeResponse {
 - OpenAI Responses client -> Anthropic Messages upstream。
 - text message replay。
 - assistant text replay。
-- first-response completed streaming text capture。
+- visible reasoning summary replay。
+- first-response completed streaming visible output capture。
 - 普通 function call / function call output replay。
 - portable custom tool call / custom tool call output replay。
 
 后续非阻塞：
 
-- visible reasoning summary replay。
 - streaming continuation capture 或更复杂 streaming item capture；这是后续扩展，不是当前 handoff 第一项。
 
 初始不支持：
@@ -419,11 +419,12 @@ Current-main delivery status:
 - Delivered slice: Phase 5 中的 `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice。
 - Delivered slice: route/config owner hardening，包括内部 route/config fingerprint、当前 runtime 复校验、drift pre-dispatch 400 fail closed，以及未变配置下的 no-model single-upstream replay。
 - Delivered slice: 普通 Responses `function_call` / `function_call_output` 与 portable `custom_tool_call` / `custom_tool_call_output` 非流式本地 replay；pending call outputs 必须按 `{call_id, kind}` 在 continuation 开头完整匹配，之后允许普通 text message；非 portable custom、proxied、namespaced provider/internal 工具语义不保存为本地 replay state。
-- Delivered slice: streaming first-response completed text capture；第一轮 `stream:true` completed terminal 后提交本地 state，且 `response.completed` bytes 下发前 state 已写入；后续 continuation 仍走非流式 replay，`stream:true` + `previous_response_id` 仍 fail closed。
+- Delivered slice: streaming first-response completed visible output capture；第一轮 `stream:true` completed terminal 后提交本地 state，且 `response.completed` bytes 下发前 state 已写入；后续 continuation 仍走非流式 replay，`stream:true` + `previous_response_id` 仍 fail closed。
+- Delivered slice: visible reasoning summary replay；本地 state 只保存 `summary[].summary_text.text`，不保存或导入 `encrypted_content`、Anthropic thinking signature、redacted/omitted thinking 或 provider-private reasoning 字段。
 - Delivered slice: prompt-cache 顶层显式映射已交付，包括 OpenAI-family -> Anthropic `extra_body.anthropic.cache_control`、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention`；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
 - Delivered slice: usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` source-field telemetry；cross-protocol translated routes 和 same-format constructed routes 暂不输出，且该 telemetry 不参与 cache store、lookup、key、eviction、response reuse、routing 或 fallback。
 - Handoff guardrail: 当前 handoff 不继续扩展 prompt-cache request-control；custom tool replay 和 `provider_cache_usage` telemetry 已交付，不再作为下一步前置项。
-- Next: reasoning summary replay 和 shared detector helper / 细粒度 trace metadata consolidation。Streaming continuation capture 仅作为后续扩展，不是当前 handoff 第一项。
+- Next: shared detector helper / 细粒度 trace metadata consolidation。Streaming continuation capture 仅作为后续扩展，不是当前 handoff 第一项。
 
 ### Phase 0：合同冻结与文档更新
 
@@ -555,7 +556,8 @@ Current-main delivery status:
 | detector enabled-semantics | `background:false|null` / `store:false|null` 不触发 provider-owned stateful fail-closed；enabled/present controls 仍 fail closed |
 | Native forwarding | OpenAI Responses native routes 不被本地 bridge 改写 |
 | 工具调用 | 普通 function_call/function_call_output 和 portable custom_tool_call/custom_tool_call_output replay 已交付；非 portable custom/proxied/namespaced provider/internal 工具语义仍不 replay |
-| 流式首轮 capture | 第一轮 `stream:true` completed text capture 已交付；completed terminal 后提交 state，`response.completed` bytes 下发前 state 已写入 |
+| Reasoning summary | visible reasoning summary replay 已交付；只保存 `summary[].summary_text.text`，opaque-only carrier fail closed 或不进入本地 replay state |
+| 流式首轮 capture | 第一轮 `stream:true` completed visible output capture 已交付；completed terminal 后提交 state，`response.completed` bytes 下发前 state 已写入 |
 | 流式 continuation | `stream:true` + `previous_response_id` 仍 fail closed；后续 continuation 只走非流式 replay |
 | Prompt cache 顺序 | state 展开先于 provider-native prompt-cache request-control support |
 
@@ -563,16 +565,14 @@ Current-main delivery status:
 
 | 区域 | 覆盖要求 |
 | --- | --- |
-| Reasoning summary | 只 replay visible summary；opaque-only carrier fail closed |
 | 流式扩展 | 如后续单独评审 streaming continuation capture，需要覆盖 completed 后可 replay、abort/error 不可 replay |
 
 ## Handoff 任务顺序
 
 推荐下一步顺序：
 
-1. Reasoning summary replay：visible reasoning summary replay 单独评审，只处理可见 summary，不反解 opaque carrier。
-2. Shared detector / trace cleanup：共享 detector helper、细粒度 trace metadata consolidation，不新增产品配置面。
-3. Streaming continuation capture：仅作为后续单独评审项，不作为当前 handoff 第一项；本地 Conversations API bridge 属于非当前方向。
+1. Shared detector / trace cleanup：共享 detector helper、细粒度 trace metadata consolidation，不新增产品配置面。
+2. Streaming continuation capture：仅作为后续单独评审项，不作为当前 handoff 第一项；本地 Conversations API bridge 属于非当前方向。
 
 主要代码区域：
 

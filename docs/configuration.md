@@ -295,17 +295,18 @@ Messages upstreams. Later non-streaming continuations with a matching local
 `previous_response_id` are expanded back into explicit Responses `input` before
 normal translation. The replayable surface is text message input, assistant text
 message output, regular `function_call` / `function_call_output`, portable
-`custom_tool_call` / `custom_tool_call_output`, and first-response streaming
-completed text capture.
+`custom_tool_call` / `custom_tool_call_output`, visible reasoning summary text,
+and first-response streaming completed visible output capture.
 
 Boundaries:
 
 - state is process memory only, bounded by `ttl_seconds` and `max_bytes`; process restart drops all entries
 - `store: false` is honored and does not save replay state
 - unknown, expired, non-local, owner-mismatched, route/config-mismatched, and external provider-owned IDs fail closed
-- streaming first responses can commit completed text for later local replay, but streaming continuation with `previous_response_id` still fails closed
+- streaming first responses can commit completed visible text and reasoning summaries for later local replay, but streaming continuation with `previous_response_id` still fails closed
 - native OpenAI Responses forwarding keeps provider IDs and provider-owned state unchanged
-- there is no persistence, retrieval, cache, Conversations API bridge, background lifecycle emulation, reasoning summary replay, compaction replay, provider-owned opaque state replay, or Gemini native state bridge
+- visible reasoning summary replay stores only `summary[].summary_text.text`; `encrypted_content`, Anthropic thinking signatures, redacted/omitted thinking, and provider-private reasoning fields are not saved or replayed
+- there is no persistence, retrieval, cache, Conversations API bridge, background lifecycle emulation, compaction replay, provider-owned opaque state replay, or Gemini native state bridge
 
 ### `upstreams`
 

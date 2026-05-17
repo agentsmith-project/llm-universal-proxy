@@ -445,7 +445,7 @@ rejected before upstream.
 | Limitation | Reason |
 |-----------|--------|
 | External provider-owned `previous_response_id` / `conv_*` IDs | Provider state cannot be imported or reconstructed across owners; same-wire native OpenAI Responses handling may preserve provider-owned IDs unchanged |
-| llmup-owned local `resp_llmup_*` IDs | Short-term local transcript replay is available only for llmup-owned IDs on translated OpenAI Responses continuations; `store:false`, expiration, restart, namespace/owner mismatch, route/config drift, external IDs, and streaming continuation with `previous_response_id` fail closed |
+| llmup-owned local `resp_llmup_*` IDs | Short-term local transcript replay is available only for llmup-owned IDs on translated OpenAI Responses continuations; visible reasoning summary text can replay as ordinary visible context, while opaque carriers/signatures are not imported; `store:false`, expiration, restart, namespace/owner mismatch, route/config drift, external IDs, and streaming continuation with `previous_response_id` fail closed |
 | Responses lifecycle routing | Retrieve/delete/cancel requests do not carry a routable model, and the proxy does not persist response-to-upstream session state |
 | Built-in tools (web search, etc.) | Not portable across protocol schemas |
 | `truncation` policy | Provider-specific context management |
