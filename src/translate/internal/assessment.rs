@@ -18,6 +18,7 @@ use super::models::{
 };
 use super::openai_family::{
     openai_extra_body_anthropic_cache_control, openai_extra_body_google_cached_content,
+    validated_anthropic_extra_body_openai_prompt_cache_controls,
     validated_openai_extra_body_anthropic_cache_control,
 };
 use super::openai_responses::{
@@ -109,6 +110,21 @@ fn assess_openai_family_prompt_cache_extensions(
                 "OpenAI block-level/provider `cache_control` is not supported on translated Anthropic paths; use `extra_body.anthropic.cache_control` for top-level Anthropic cache control instead of {quoted}"
             ));
         }
+    }
+}
+
+fn assess_anthropic_prompt_cache_extensions(
+    assessment: &mut TranslationAssessment,
+    client_format: UpstreamFormat,
+    upstream_format: UpstreamFormat,
+    body: &Value,
+) {
+    if client_format != UpstreamFormat::Anthropic || !openai_family_format(upstream_format) {
+        return;
+    }
+
+    if let Err(message) = validated_anthropic_extra_body_openai_prompt_cache_controls(body) {
+        assessment.reject(message);
     }
 }
 
@@ -1636,6 +1652,7 @@ pub(crate) fn assess_request_translation(
         upstream_format,
         body,
     );
+    assess_anthropic_prompt_cache_extensions(&mut assessment, client_format, upstream_format, body);
 
     if let Some(message) =
         cross_protocol_requested_choice_count_message(client_format, upstream_format, body)

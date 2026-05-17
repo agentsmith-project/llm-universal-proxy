@@ -5356,6 +5356,54 @@ async fn openai_chat_to_anthropic_explicit_cache_control_reaches_upstream_top_le
 }
 
 #[tokio::test]
+async fn anthropic_messages_to_openai_prompt_cache_extension_reaches_upstream() {
+    let (mock_base, _mock, captured) = spawn_asserting_openai_completion_mock(|request| {
+        if request.body["prompt_cache_key"] != json!("stable-prefix") {
+            return Err(format!("missing prompt_cache_key: {:?}", request.body));
+        }
+        if request.body["prompt_cache_retention"] != json!("24h") {
+            return Err(format!(
+                "missing prompt_cache_retention: {:?}",
+                request.body
+            ));
+        }
+        if request.body.get("extra_body").is_some() {
+            return Err(format!("extra_body leaked upstream: {:?}", request.body));
+        }
+        if request.body.get("cache_control").is_some() {
+            return Err(format!("cache_control leaked upstream: {:?}", request.body));
+        }
+        Ok(())
+    })
+    .await;
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let res = Client::new()
+        .post(format!("{proxy_base}/anthropic/v1/messages"))
+        .json(&json!({
+            "model": "claude-3",
+            "max_tokens": 32,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": {
+                "openai": {
+                    "prompt_cache_key": "stable-prefix",
+                    "prompt_cache_retention": "24h"
+                }
+            },
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["type"], "message");
+    assert_eq!(captured.snapshot().len(), 1);
+}
+
+#[tokio::test]
 async fn anthropic_namespace_messages_works() {
     let (mock_base, _mock) = spawn_anthropic_mock().await;
     let config = proxy_config(&mock_base, UpstreamFormat::Anthropic);

@@ -711,6 +711,7 @@ use openai_family::{
     extract_openai_refusal, extract_responses_text_content, openai_declared_function_tools,
     openai_normalized_request_controls, openai_response_has_assistant_audio,
     openai_select_function_tools_by_name,
+    validated_anthropic_extra_body_openai_prompt_cache_controls,
 };
 use openai_responses::{
     append_openai_message_anthropic_reasoning_replay_blocks, messages_to_responses,
@@ -1464,6 +1465,7 @@ pub(crate) fn classify_portable_non_success_terminal(code_or_reason: Option<&str
 
 fn claude_to_openai(body: &mut Value, preserve_reasoning_replay: bool) -> Result<(), String> {
     let bridge_context = request_scoped_tool_bridge_context_from_body(body);
+    let prompt_cache_controls = validated_anthropic_extra_body_openai_prompt_cache_controls(body)?;
     let mut result = serde_json::json!({
         "model": body.get("model").cloned().unwrap_or(serde_json::Value::Null),
         "messages": [],
@@ -1588,6 +1590,12 @@ fn claude_to_openai(body: &mut Value, preserve_reasoning_replay: bool) -> Result
     }
     if let Some(bridge_context) = bridge_context.as_ref() {
         insert_request_scoped_tool_bridge_context(&mut result, bridge_context);
+    }
+    if let Some(prompt_cache_controls) = prompt_cache_controls {
+        result["prompt_cache_key"] = prompt_cache_controls.prompt_cache_key;
+        if let Some(prompt_cache_retention) = prompt_cache_controls.prompt_cache_retention {
+            result["prompt_cache_retention"] = prompt_cache_retention;
+        }
     }
     *body = result;
     Ok(())

@@ -6471,6 +6471,163 @@ fn translate_request_claude_to_openai_omitted_stream_defaults_false() {
 }
 
 #[test]
+fn translate_request_claude_to_openai_maps_extra_body_openai_prompt_cache_controls() {
+    let mut body = json!({
+        "model": "claude-3",
+        "max_tokens": 32,
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "openai": {
+                "prompt_cache_key": "stable-prefix",
+                "prompt_cache_retention": "24h"
+            }
+        }
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(body["prompt_cache_key"], "stable-prefix");
+    assert_eq!(body["prompt_cache_retention"], "24h");
+    assert!(body.get("extra_body").is_none(), "body = {body:?}");
+}
+
+#[test]
+fn translate_request_claude_to_responses_maps_extra_body_openai_prompt_cache_controls() {
+    let mut body = json!({
+        "model": "claude-3",
+        "max_tokens": 32,
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "openai": {
+                "prompt_cache_key": "stable-prefix",
+                "prompt_cache_retention": "in_memory"
+            }
+        }
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiResponses,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(body["prompt_cache_key"], "stable-prefix");
+    assert_eq!(body["prompt_cache_retention"], "in_memory");
+    assert!(body.get("extra_body").is_none(), "body = {body:?}");
+    assert!(body.get("messages").is_none(), "body = {body:?}");
+    assert!(body.get("input").is_some(), "body = {body:?}");
+}
+
+#[test]
+fn translate_request_claude_to_openai_rejects_invalid_extra_body_openai_prompt_cache_controls() {
+    let cases = [
+        ("non_object", json!("stable-prefix")),
+        ("empty_object", json!({})),
+        ("missing_key", json!({ "prompt_cache_retention": "24h" })),
+        ("empty_key", json!({ "prompt_cache_key": "" })),
+        ("non_string_key", json!({ "prompt_cache_key": 123 })),
+        (
+            "bad_retention",
+            json!({ "prompt_cache_key": "stable-prefix", "prompt_cache_retention": "1h" }),
+        ),
+        (
+            "non_string_retention",
+            json!({ "prompt_cache_key": "stable-prefix", "prompt_cache_retention": 24 }),
+        ),
+        (
+            "unexpected_field",
+            json!({ "prompt_cache_key": "stable-prefix", "scope": "tenant" }),
+        ),
+    ];
+
+    for (label, openai) in cases {
+        let mut body = json!({
+            "model": "claude-3",
+            "max_tokens": 32,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": { "openai": openai }
+        });
+
+        let err = translate_request(
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiCompletion,
+            "gpt-4o",
+            &mut body,
+            false,
+        )
+        .expect_err("invalid extra_body.openai prompt-cache controls should fail closed");
+
+        assert!(
+            err.contains("extra_body.openai"),
+            "label = {label}, err = {err}"
+        );
+    }
+}
+
+#[test]
+fn translate_request_claude_to_openai_cache_control_still_warns_and_does_not_synthesize_prompt_cache_key(
+) {
+    let mut body = json!({
+        "model": "claude-3",
+        "max_tokens": 32,
+        "cache_control": { "type": "ephemeral" },
+        "system": [{
+            "type": "text",
+            "text": "System policy",
+            "cache_control": { "type": "ephemeral" }
+        }],
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "Hi",
+                "cache_control": { "type": "ephemeral" }
+            }]
+        }]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
+        panic!("expected warning policy, got {assessment:?}");
+    };
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("cache_control")),
+        "warnings = {warnings:?}"
+    );
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .unwrap();
+
+    assert!(body.get("prompt_cache_key").is_none(), "body = {body:?}");
+    assert!(
+        body.get("prompt_cache_retention").is_none(),
+        "body = {body:?}"
+    );
+}
+
+#[test]
 fn translate_request_responses_passthrough_preserves_native_state_and_reasoning_continuity_fields()
 {
     let mut body = json!({

@@ -152,6 +152,86 @@ pub(super) fn openai_extra_body_google_cached_content(body: &Value) -> Option<&V
         })
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct OpenAiPromptCacheControls {
+    pub(super) prompt_cache_key: Value,
+    pub(super) prompt_cache_retention: Option<Value>,
+}
+
+pub(super) fn anthropic_extra_body_openai_prompt_cache_controls(body: &Value) -> Option<&Value> {
+    body.get("extra_body")
+        .and_then(|extra_body| extra_body.get("openai"))
+}
+
+pub(super) fn validated_anthropic_extra_body_openai_prompt_cache_controls(
+    body: &Value,
+) -> Result<Option<OpenAiPromptCacheControls>, String> {
+    let Some(openai) = anthropic_extra_body_openai_prompt_cache_controls(body) else {
+        return Ok(None);
+    };
+    let Some(object) = openai.as_object() else {
+        return Err(anthropic_extra_body_openai_prompt_cache_controls_message(
+            "value must be an object",
+        ));
+    };
+
+    for key in object.keys() {
+        if key != "prompt_cache_key" && key != "prompt_cache_retention" {
+            return Err(anthropic_extra_body_openai_prompt_cache_controls_message(
+                "only `prompt_cache_key` and optional `prompt_cache_retention` are supported",
+            ));
+        }
+    }
+
+    let prompt_cache_key = match object.get("prompt_cache_key") {
+        Some(Value::String(key)) if !key.trim().is_empty() => Value::String(key.clone()),
+        Some(Value::String(_)) => {
+            return Err(anthropic_extra_body_openai_prompt_cache_controls_message(
+                "`prompt_cache_key` must be a non-empty string",
+            ));
+        }
+        Some(_) => {
+            return Err(anthropic_extra_body_openai_prompt_cache_controls_message(
+                "`prompt_cache_key` must be a string",
+            ));
+        }
+        None => {
+            return Err(anthropic_extra_body_openai_prompt_cache_controls_message(
+                "`prompt_cache_key` is required",
+            ));
+        }
+    };
+
+    let prompt_cache_retention = if let Some(retention) = object.get("prompt_cache_retention") {
+        match retention.as_str() {
+            Some("in_memory" | "24h") => Some(retention.clone()),
+            Some(_) => {
+                return Err(anthropic_extra_body_openai_prompt_cache_controls_message(
+                    "`prompt_cache_retention` must be \"in_memory\" or \"24h\"",
+                ));
+            }
+            None => {
+                return Err(anthropic_extra_body_openai_prompt_cache_controls_message(
+                    "`prompt_cache_retention` must be a string",
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(Some(OpenAiPromptCacheControls {
+        prompt_cache_key,
+        prompt_cache_retention,
+    }))
+}
+
+fn anthropic_extra_body_openai_prompt_cache_controls_message(detail: &str) -> String {
+    format!(
+        "extra_body.openai must be an object with non-empty string `prompt_cache_key` and optional `prompt_cache_retention`: \"in_memory\" or \"24h\"; {detail}"
+    )
+}
+
 pub(super) fn validated_openai_extra_body_anthropic_cache_control(
     body: &Value,
 ) -> Result<Option<Value>, String> {

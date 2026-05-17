@@ -2471,6 +2471,38 @@ fn classify_request_processing_marks_openai_to_anthropic_explicit_cache_control_
 }
 
 #[test]
+fn classify_request_processing_marks_anthropic_to_openai_explicit_prompt_cache_extension_as_mapped()
+{
+    let anthropic_body = serde_json::json!({
+        "model": "claude-3",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "openai": {
+                "prompt_cache_key": "stable-prefix",
+                "prompt_cache_retention": "24h"
+            }
+        }
+    });
+
+    for upstream_format in [
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiResponses,
+    ] {
+        let info =
+            crate::request_processing::classify_request_processing(request_processing_input(
+                crate::formats::UpstreamFormat::Anthropic,
+                upstream_format,
+                &anthropic_body,
+            ));
+        assert_eq!(
+            serde_json::to_value(info.provider_native_prompt_cache).unwrap(),
+            serde_json::json!("explicit_extension_mapped"),
+            "upstream_format = {upstream_format}"
+        );
+    }
+}
+
+#[test]
 fn request_translation_policy_requires_body_mutation_only_for_injecting_policy_hooks() {
     let body = serde_json::json!({
         "model": "gpt-4o-mini",

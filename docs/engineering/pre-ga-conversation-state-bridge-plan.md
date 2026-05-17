@@ -413,7 +413,7 @@ Current-main delivery status:
 - Delivered: Phase 0/1/2 的配置、内存 store、`resp_llmup_*`、TTL/max_bytes、owner hash、非流式 text-only capture/replay。
 - Delivered slice: Phase 5 中的 `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice。
 - Delivered slice: route/config owner hardening，包括内部 route/config fingerprint、当前 runtime 复校验、drift pre-dispatch 400 fail closed，以及未变配置下的 no-model single-upstream replay。
-- Pending next: broader prompt-cache translated support；OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射已交付，future reviewed `auto_safe` 仍留作后续评审。
+- Pending next: remaining prompt-cache translated/block-level review；OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付，未来 reviewed synthesis 不引入 mode/config。
 - Later: Phase 3 tool/custom tool replay、Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation。
 
 ### Phase 0：合同冻结与文档更新
@@ -549,7 +549,7 @@ Post-MVP 覆盖：
 
 推荐下一步顺序：
 
-1. Broader prompt-cache translated support next：在已交付的状态展开、route/config owner 绑定，以及 OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射上，继续推进更广的 translated support；future reviewed `auto_safe` 仍留作后续评审。
+1. Remaining prompt-cache translated/block-level review next：在已交付的状态展开、route/config owner 绑定、OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射，以及 Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射上，继续评审剩余 translated/block-level 支持；未来 reviewed synthesis 不引入 mode/config。
 2. Tool/custom tool replay later：之后再评估 function_call/custom_tool_call、tool output、reasoning summary replay。
 3. Stream capture later：最后再评估 streaming response capture 和本地 Conversations API bridge。
 

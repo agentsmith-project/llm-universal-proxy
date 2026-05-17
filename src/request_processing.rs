@@ -217,6 +217,13 @@ fn classify_provider_native_prompt_cache(
         return PromptCacheRequestControl::ExplicitExtensionMapped;
     }
 
+    if client_format == UpstreamFormat::Anthropic
+        && openai_family_format(upstream_format)
+        && anthropic_extra_body_openai_prompt_cache_key_present(body)
+    {
+        return PromptCacheRequestControl::ExplicitExtensionMapped;
+    }
+
     if openai_family_format(client_format)
         && openai_family_format(upstream_format)
         && openai_prompt_cache_fields_present(body)
@@ -249,6 +256,13 @@ fn openai_extra_body_anthropic_cache_control_present(body: &Value) -> bool {
     body.get("extra_body")
         .and_then(|extra_body| extra_body.get("anthropic"))
         .and_then(|anthropic| anthropic.get("cache_control"))
+        .is_some()
+}
+
+fn anthropic_extra_body_openai_prompt_cache_key_present(body: &Value) -> bool {
+    body.get("extra_body")
+        .and_then(|extra_body| extra_body.get("openai"))
+        .and_then(|openai| openai.get("prompt_cache_key"))
         .is_some()
 }
 
