@@ -4647,6 +4647,76 @@ fn assess_request_translation_responses_to_openai_warns_for_dropped_reasoning_en
 }
 
 #[test]
+fn assess_request_translation_responses_to_openai_allows_disabled_stateful_controls() {
+    for (label, body) in [
+        (
+            "false",
+            json!({
+                "model": "gpt-4o",
+                "input": "Hi",
+                "background": false,
+                "store": false
+            }),
+        ),
+        (
+            "null",
+            json!({
+                "model": "gpt-4o",
+                "input": "Hi",
+                "background": null,
+                "store": null
+            }),
+        ),
+    ] {
+        let assessment = assess_request_translation(
+            UpstreamFormat::OpenAiResponses,
+            UpstreamFormat::OpenAiCompletion,
+            &body,
+        );
+        assert!(
+            !matches!(assessment.decision(), TranslationDecision::Reject(_)),
+            "disabled {label} stateful controls should not fail closed: {assessment:?}"
+        );
+    }
+}
+
+#[test]
+fn assess_request_translation_responses_to_openai_rejects_enabled_stateful_controls() {
+    let body = json!({
+        "model": "gpt-4o",
+        "input": "Hi",
+        "previous_response_id": "resp_1",
+        "conversation": { "id": "conv_1" },
+        "background": true,
+        "store": true,
+        "prompt": { "id": "pmpt_1" },
+        "context_management": { "type": "auto" }
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected enabled stateful controls to fail closed, got {assessment:?}");
+    };
+    for field in [
+        "previous_response_id",
+        "conversation",
+        "background",
+        "store",
+        "prompt",
+        "context_management",
+    ] {
+        assert!(
+            message.contains(field),
+            "field = {field}, message = {message}"
+        );
+    }
+}
+
+#[test]
 fn assess_request_translation_openai_to_responses_warns_on_dropped_sampling_controls() {
     let body = json!({
         "model": "gpt-4o",

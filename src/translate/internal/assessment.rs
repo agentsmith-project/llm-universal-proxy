@@ -35,21 +35,27 @@ use super::{
 
 pub(super) fn responses_stateful_request_controls_for_translate(body: &Value) -> Vec<&'static str> {
     let mut controls = Vec::new();
-    for field in [
-        "previous_response_id",
-        "conversation",
-        "background",
-        "prompt",
-        "context_management",
-    ] {
+    for field in ["previous_response_id", "conversation"] {
         if body.get(field).is_some() {
             controls.push(field);
         }
     }
-    if body.get("store").and_then(Value::as_bool) == Some(true) {
+    if stateful_control_is_enabled(body.get("background")) {
+        controls.push("background");
+    }
+    for field in ["prompt", "context_management"] {
+        if body.get(field).is_some() {
+            controls.push(field);
+        }
+    }
+    if stateful_control_is_enabled(body.get("store")) {
         controls.push("store");
     }
     controls
+}
+
+fn stateful_control_is_enabled(value: Option<&Value>) -> bool {
+    !matches!(value, None | Some(Value::Null) | Some(Value::Bool(false)))
 }
 
 pub(super) fn cross_protocol_store_warning_message(

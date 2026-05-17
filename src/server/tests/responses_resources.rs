@@ -1273,6 +1273,29 @@ fn responses_stateful_request_controls_detect_provider_owned_fields() {
 }
 
 #[test]
+fn responses_stateful_request_controls_ignore_disabled_background_and_store() {
+    for (label, body) in [
+        (
+            "false",
+            serde_json::json!({
+                "background": false,
+                "store": false
+            }),
+        ),
+        (
+            "null",
+            serde_json::json!({
+                "background": null,
+                "store": null
+            }),
+        ),
+    ] {
+        let controls = responses_stateful_request_controls(&body);
+        assert!(controls.is_empty(), "{label}: controls = {controls:?}");
+    }
+}
+
+#[test]
 fn resolve_native_responses_stateful_route_or_error_prefers_unique_available_native_upstream() {
     let namespace_state = runtime_namespace_state_for_tests(&[
         (
