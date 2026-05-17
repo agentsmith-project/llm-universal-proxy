@@ -10,7 +10,7 @@ use futures_util::{Stream, StreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::TokioExecutor;
-use reqwest::{Client, Proxy};
+use reqwest::{header::CONTENT_TYPE, Client, Proxy};
 use serde_json::Value;
 
 use crate::config::{Config, ProxyConfig, UpstreamConfig};
@@ -178,6 +178,25 @@ pub async fn call_upstream(
     req.send().await
 }
 
+pub(crate) enum UpstreamRequestBody<'a> {
+    Json(&'a Value),
+    RawJson(&'a Bytes),
+}
+
+fn post_request_with_body(
+    client: &Client,
+    url: &str,
+    body: UpstreamRequestBody<'_>,
+) -> reqwest::RequestBuilder {
+    match body {
+        UpstreamRequestBody::Json(body) => client.post(url).json(body),
+        UpstreamRequestBody::RawJson(raw_body) => client
+            .post(url)
+            .header(CONTENT_TYPE, "application/json")
+            .body(raw_body.clone()),
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum DownstreamAwareError<E> {
     Inner(E),
@@ -297,13 +316,13 @@ async fn send_with_optional_first_response_timeout(
 pub(crate) async fn call_upstream_with_cancellation(
     client: &Client,
     url: &str,
-    body: &Value,
+    body: UpstreamRequestBody<'_>,
     stream: bool,
     headers: &[(String, String)],
     first_response_timeout: Option<Duration>,
     downstream_cancellation: &DownstreamCancellation,
 ) -> Result<reqwest::Response, DownstreamAwareError<UpstreamSendError>> {
-    let mut req = client.post(url).json(body);
+    let mut req = post_request_with_body(client, url, body);
     if stream {
         req = req.header("Accept", "text/event-stream");
     }

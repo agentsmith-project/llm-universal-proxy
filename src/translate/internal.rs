@@ -842,7 +842,10 @@ fn openai_response_to_client(
     }
 }
 
-fn validate_public_request_tool_names(format: UpstreamFormat, body: &Value) -> Result<(), String> {
+pub(crate) fn validate_public_request_tool_names(
+    format: UpstreamFormat,
+    body: &Value,
+) -> Result<(), String> {
     match format {
         UpstreamFormat::OpenAiCompletion => validate_openai_request_tool_names(body),
         UpstreamFormat::OpenAiResponses => validate_responses_request_tool_names(body),

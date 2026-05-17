@@ -1,7 +1,8 @@
 use serde_json::Value;
 
+use crate::formats::UpstreamFormat;
 use crate::translate::{
-    validate_responses_public_request_object_tool_identity,
+    validate_public_request_tool_names, validate_responses_public_request_object_tool_identity,
     validate_responses_public_response_object_tool_identity,
     validate_responses_public_tool_call_item_identity,
 };
@@ -14,6 +15,16 @@ pub(super) fn reject_internal_request_scoped_tool_bridge_context(body: &Value) -
             "request must not include internal-only field `{REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD}`"
         )
     })
+}
+
+pub(super) fn validate_provider_forwarding_request_boundary(
+    format: UpstreamFormat,
+    body: &Value,
+) -> Result<(), String> {
+    if let Some(message) = reject_internal_request_scoped_tool_bridge_context(body) {
+        return Err(message);
+    }
+    validate_public_request_tool_names(format, body)
 }
 
 pub(super) fn validate_openai_responses_resource_request_body(body: &Value) -> Result<(), String> {

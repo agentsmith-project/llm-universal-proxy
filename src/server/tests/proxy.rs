@@ -1671,7 +1671,7 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
             "payload = {payload:?}"
         );
         assert_eq!(
-            payload["llmup"]["zero_transform_forwarding_active"], false,
+            payload["llmup"]["zero_transform_forwarding_active"], true,
             "payload = {payload:?}"
         );
         assert_eq!(
@@ -1706,7 +1706,7 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
         recent.llmup.request_processing,
         crate::request_processing::RequestProcessing::RequestTransformationNotRequired
     );
-    assert!(!recent.llmup.zero_transform_forwarding_active);
+    assert!(recent.llmup.zero_transform_forwarding_active);
     assert_eq!(
         recent.llmup.state_bridge,
         crate::request_processing::StateBridgeModifier::Off
@@ -2117,6 +2117,7 @@ fn request_processing_input<'a>(
         requested_model: model,
         upstream_model: model,
         stream: false,
+        forced_stream: false,
         route_policy_requires_body_mutation: false,
         state_bridge: crate::request_processing::StateBridgeModifier::Off,
     }
@@ -2141,7 +2142,7 @@ fn classify_request_processing_marks_same_protocol_without_fields_as_transformat
     );
     assert!(
         !info.zero_transform_forwarding_active,
-        "phase 1 only classifies zero-transform forwarding eligibility; data-plane raw bytes are not active"
+        "classification only reports eligibility; the data-plane flips this when it actually forwards raw bytes"
     );
     assert_eq!(
         info.state_bridge,
@@ -2197,6 +2198,27 @@ fn classify_request_processing_marks_translation_and_route_mutation_as_transform
 }
 
 #[test]
+fn classify_request_processing_marks_forced_stream_as_transformation_required() {
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "Hi" }]
+    });
+    let mut input = request_processing_input(
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    input.forced_stream = true;
+
+    let info = crate::request_processing::classify_request_processing(input);
+
+    assert_eq!(
+        info.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationRequired
+    );
+}
+
+#[test]
 fn classify_request_processing_marks_same_format_openai_chat_coalescing_as_transformation_required()
 {
     let body = serde_json::json!({
@@ -2246,6 +2268,7 @@ fn classify_request_processing_marks_model_insertion_without_hitting_native_resp
             requested_model: "",
             upstream_model: "",
             stream: false,
+            forced_stream: false,
             route_policy_requires_body_mutation: false,
             state_bridge: crate::request_processing::StateBridgeModifier::Off,
         },
@@ -2268,6 +2291,7 @@ fn classify_request_processing_marks_model_insertion_without_hitting_native_resp
             requested_model: "",
             upstream_model: "",
             stream: false,
+            forced_stream: false,
             route_policy_requires_body_mutation: false,
             state_bridge: crate::request_processing::StateBridgeModifier::Off,
         },

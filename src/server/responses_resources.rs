@@ -18,7 +18,7 @@ use crate::formats::UpstreamFormat;
 use crate::streaming::GuardedSseStream;
 use crate::upstream;
 
-use super::body_limits::read_limited_json_request;
+use super::body_limits::read_limited_json_value_request as read_limited_json_request;
 use super::data_auth::{self, RequestAuthContext};
 use super::errors::{client_closed_response, error_response, streaming_error_response};
 use super::headers::{

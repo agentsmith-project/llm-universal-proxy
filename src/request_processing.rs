@@ -52,6 +52,7 @@ pub struct RequestProcessingInput<'a> {
     pub requested_model: &'a str,
     pub upstream_model: &'a str,
     pub stream: bool,
+    pub forced_stream: bool,
     pub route_policy_requires_body_mutation: bool,
     pub state_bridge: StateBridgeModifier,
 }
@@ -79,6 +80,7 @@ pub fn classify_request_processing(input: RequestProcessingInput<'_>) -> Request
 fn request_transformation_required(input: &RequestProcessingInput<'_>) -> bool {
     input.client_format != input.upstream_format
         || input.state_bridge != StateBridgeModifier::Off
+        || input.forced_stream
         || model_body_mutation_required(input)
         || input.route_policy_requires_body_mutation
         || same_protocol_request_mutation_required(input)

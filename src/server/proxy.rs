@@ -24,7 +24,7 @@ use crate::hooks::{
     HeaderEntry, HookRequestContext,
 };
 use crate::request_processing::{
-    classify_request_processing, RequestProcessingInput, StateBridgeModifier,
+    classify_request_processing, RequestProcessing, RequestProcessingInput, StateBridgeModifier,
 };
 use crate::streaming::{needs_stream_translation, GuardedSseStream, TranslateSseStream};
 use crate::translate::{
@@ -34,7 +34,7 @@ use crate::translate::{
 };
 use crate::upstream;
 
-use super::body_limits::read_limited_json_request;
+use super::body_limits::{read_limited_json_request, JsonRequestBody};
 use super::conversation_state_bridge::{
     ConversationStateBridgeStore, StoredBridgeResponse, LOCAL_RESPONSE_ID_PREFIX,
 };
@@ -48,7 +48,8 @@ use super::headers::{
     append_upstream_protocol_response_headers, apply_upstream_headers, build_auth_headers,
 };
 use super::public_boundary::{
-    reject_internal_request_scoped_tool_bridge_context, REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD,
+    reject_internal_request_scoped_tool_bridge_context,
+    validate_provider_forwarding_request_boundary, REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD,
 };
 use super::responses_resources::{
     resolve_native_responses_stateful_route_or_error, responses_stateful_request_controls,
@@ -413,10 +414,11 @@ async fn handle_openai_chat_completions_inner(
     namespace: String,
     downstream_cancellation: DownstreamCancellation,
     headers: HeaderMap,
-    body: Value,
+    body: JsonRequestBody,
     auth_context: RequestAuthContext,
 ) -> Response<Body> {
     let requested_model = body
+        .parsed()
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or("")
@@ -441,10 +443,11 @@ async fn handle_openai_responses_inner(
     namespace: String,
     downstream_cancellation: DownstreamCancellation,
     headers: HeaderMap,
-    body: Value,
+    body: JsonRequestBody,
     auth_context: RequestAuthContext,
 ) -> Response<Body> {
     let requested_model = body
+        .parsed()
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or("")
@@ -469,10 +472,11 @@ async fn handle_anthropic_messages_inner(
     namespace: String,
     downstream_cancellation: DownstreamCancellation,
     headers: HeaderMap,
-    body: Value,
+    body: JsonRequestBody,
     auth_context: RequestAuthContext,
 ) -> Response<Body> {
     let requested_model = body
+        .parsed()
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or("")
@@ -544,7 +548,7 @@ pub(super) async fn handle_request_core_with_auth_context(
         DownstreamCancellation::disabled(),
         request.headers,
         request.path,
-        request.body,
+        JsonRequestBody::from_parsed_value(request.body),
         request.requested_model,
         request.client_format,
         request.forced_stream,
@@ -678,12 +682,13 @@ async fn handle_request_core_with_downstream_cancellation(
     downstream_cancellation: DownstreamCancellation,
     headers: HeaderMap,
     path: String,
-    mut body: Value,
+    body: JsonRequestBody,
     mut requested_model: String,
     client_format: UpstreamFormat,
     forced_stream: Option<bool>,
     auth_context: RequestAuthContext,
 ) -> Response<Body> {
+    let (raw_body_bytes, mut body) = body.into_parts();
     let request_id = new_request_id();
     let request_timestamp = now_timestamp_ms();
     let downstream_body = body.clone();
@@ -919,13 +924,14 @@ async fn handle_request_core_with_downstream_cancellation(
     } else {
         StateBridgeModifier::Off
     };
-    let llmup = classify_request_processing(RequestProcessingInput {
+    let mut llmup = classify_request_processing(RequestProcessingInput {
         client_format,
         upstream_format,
         body: &original_body,
         requested_model: &requested_model,
         upstream_model: &resolved_model.upstream_model,
         stream,
+        forced_stream: forced_stream.is_some(),
         route_policy_requires_body_mutation: request_translation_policy_requires_body_mutation(
             upstream_format,
             &original_body,
@@ -963,44 +969,58 @@ async fn handle_request_core_with_downstream_cancellation(
         );
     }
 
-    if let Err(e) = translate_request_with_policy(
-        client_format,
-        upstream_format,
-        &resolved_model.upstream_model,
-        &mut body,
-        request_translation_policy,
-        stream,
-    ) {
-        let redacted_error = request_redactor.redact_text(&e);
-        error!("Translation failed: {}", redacted_error);
-        tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
-        return error_response(client_format, StatusCode::BAD_REQUEST, &redacted_error);
-    }
-
-    if let Some(obj) = body.as_object_mut() {
-        match upstream_format {
-            _ if client_format == UpstreamFormat::OpenAiResponses
-                && upstream_format == UpstreamFormat::OpenAiResponses
-                && requested_model.trim().is_empty()
-                && !stateful_responses_controls.is_empty()
-                && resolved_model.upstream_model.trim().is_empty() =>
+    let (upstream_request_body, raw_upstream_request_body, request_scoped_tool_bridge_context) =
+        if llmup.request_processing == RequestProcessing::RequestTransformationNotRequired {
+            if let Err(e) =
+                validate_provider_forwarding_request_boundary(client_format, &original_body)
             {
-                obj.remove("model");
+                let redacted_error = request_redactor.redact_text(&e);
+                error!("Request boundary validation failed: {}", redacted_error);
+                tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
+                return error_response(client_format, StatusCode::BAD_REQUEST, &redacted_error);
             }
-            _ => {
-                obj.insert(
-                    "model".to_string(),
-                    Value::String(resolved_model.upstream_model.clone()),
-                );
+            (original_body.clone(), Some(raw_body_bytes), None)
+        } else {
+            if let Err(e) = translate_request_with_policy(
+                client_format,
+                upstream_format,
+                &resolved_model.upstream_model,
+                &mut body,
+                request_translation_policy,
+                stream,
+            ) {
+                let redacted_error = request_redactor.redact_text(&e);
+                error!("Translation failed: {}", redacted_error);
+                tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
+                return error_response(client_format, StatusCode::BAD_REQUEST, &redacted_error);
             }
-        }
-    }
 
-    let request_scoped_tool_bridge_context = TrustedToolBridgeContext::take_from_body(&mut body);
-    let upstream_request_body = body.clone();
+            if let Some(obj) = body.as_object_mut() {
+                match upstream_format {
+                    _ if client_format == UpstreamFormat::OpenAiResponses
+                        && upstream_format == UpstreamFormat::OpenAiResponses
+                        && requested_model.trim().is_empty()
+                        && !stateful_responses_controls.is_empty()
+                        && resolved_model.upstream_model.trim().is_empty() =>
+                    {
+                        obj.remove("model");
+                    }
+                    _ => {
+                        obj.insert(
+                            "model".to_string(),
+                            Value::String(resolved_model.upstream_model.clone()),
+                        );
+                    }
+                }
+            }
+
+            let request_scoped_tool_bridge_context =
+                TrustedToolBridgeContext::take_from_body(&mut body);
+            (body.clone(), None, request_scoped_tool_bridge_context)
+        };
 
     debug!(
-        "Translated body for upstream: {}",
+        "Upstream request body: {}",
         request_redactor.redact_text(
             &serde_json::to_string_pretty(&upstream_request_body)
                 .unwrap_or_else(|_| upstream_request_body.to_string())
@@ -1025,6 +1045,10 @@ async fn handle_request_core_with_downstream_cancellation(
         &upstream_state.config.upstream_headers,
         upstream_format,
     );
+    if raw_upstream_request_body.is_some() {
+        llmup.zero_transform_forwarding_active = true;
+        tracker.set_request_processing(llmup);
+    }
     let hook_ctx = namespace_state.hooks.as_ref().map(|_| HookRequestContext {
         request_id: request_id.clone(),
         timestamp_ms: request_timestamp,
@@ -1082,10 +1106,14 @@ async fn handle_request_core_with_downstream_cancellation(
     } else {
         upstream_state.client.clone()
     };
+    let upstream_body = match raw_upstream_request_body.as_ref() {
+        Some(raw_body) => upstream::UpstreamRequestBody::RawJson(raw_body),
+        None => upstream::UpstreamRequestBody::Json(&upstream_request_body),
+    };
     let res = match upstream::call_upstream_with_cancellation(
         &upstream_client,
         &url,
-        &upstream_request_body,
+        upstream_body,
         stream,
         &auth_headers,
         stream.then_some(namespace_state.config.upstream_timeout),

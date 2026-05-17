@@ -4,18 +4,20 @@ mod forward_proxy;
 mod runtime_proxy;
 
 use axum::{
-    body::Body,
-    extract::{Json, Path, State},
+    body::{Body, Bytes},
+    extract::{Path, State},
     http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json as AxumJson, Router,
 };
 use forward_proxy::spawn_http_forward_proxy;
-use llm_universal_proxy::config::{Config, DebugTraceConfig, RuntimeConfigPayload, UpstreamConfig};
+use llm_universal_proxy::config::{
+    Config, DebugTraceConfig, ModelAlias, ProxyConfig, RuntimeConfigPayload, UpstreamConfig,
+};
 use llm_universal_proxy::formats::UpstreamFormat;
 use reqwest::{
-    header::{HeaderMap as ReqwestHeaderMap, HeaderValue},
+    header::{HeaderMap as ReqwestHeaderMap, HeaderValue, CONTENT_TYPE},
     Client,
 };
 use runtime_proxy::{start_proxy, upstream_api_root};
@@ -46,6 +48,7 @@ struct CapturedUpstreamRequest {
     method: String,
     path: String,
     body: Option<Value>,
+    raw_body: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Default)]
@@ -117,6 +120,31 @@ fn openai_auto_discovery_config(upstream_base: &str) -> Config {
     }
 }
 
+fn fixed_format_config(upstream_base: &str, format: UpstreamFormat) -> Config {
+    Config {
+        listen: "127.0.0.1:0".to_string(),
+        upstream_timeout: Duration::from_secs(30),
+        proxy: Some(ProxyConfig::Direct),
+        upstreams: vec![UpstreamConfig {
+            name: "default".to_string(),
+            api_root: upstream_api_root(upstream_base, format),
+            fixed_upstream_format: Some(format),
+            provider_key_env: None,
+            provider_key: None,
+            upstream_headers: Vec::new(),
+            proxy: None,
+            limits: None,
+            surface_defaults: None,
+        }],
+        model_aliases: Default::default(),
+        hooks: Default::default(),
+        debug_trace: DebugTraceConfig::default(),
+        resource_limits: Default::default(),
+        conversation_state_bridge: Default::default(),
+        data_auth: None,
+    }
+}
+
 async fn spawn_openai_capture_upstream() -> (
     String,
     tokio::task::JoinHandle<()>,
@@ -130,6 +158,7 @@ async fn spawn_openai_capture_upstream() -> (
         .route("/v1/chat/completions", post(openai_chat_handler))
         .route("/v1/responses", post(openai_responses_create_handler))
         .route("/v1/responses/:id", get(openai_responses_get_handler))
+        .route("/v1/messages", post(anthropic_messages_handler))
         .with_state(captured.clone());
     let handle = tokio::spawn(async move {
         axum::serve(listener, app).await.ok();
@@ -141,13 +170,15 @@ async fn openai_chat_handler(
     State(captured): State<CapturedUpstreamRequests>,
     method: Method,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    raw_body: Bytes,
 ) -> Response {
+    let (body, raw_body) = parse_captured_json_body(raw_body);
     capture_request(
         &captured,
         method,
         "/v1/chat/completions",
         Some(body.clone()),
+        Some(raw_body),
     );
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     if stream {
@@ -184,9 +215,16 @@ async fn openai_chat_handler(
 async fn openai_responses_create_handler(
     State(captured): State<CapturedUpstreamRequests>,
     method: Method,
-    Json(body): Json<Value>,
+    raw_body: Bytes,
 ) -> Response {
-    capture_request(&captured, method, "/v1/responses", Some(body.clone()));
+    let (body, raw_body) = parse_captured_json_body(raw_body);
+    capture_request(
+        &captured,
+        method,
+        "/v1/responses",
+        Some(body.clone()),
+        Some(raw_body),
+    );
     (
         StatusCode::OK,
         AxumJson(json!({
@@ -207,12 +245,47 @@ async fn openai_responses_create_handler(
         .into_response()
 }
 
+async fn anthropic_messages_handler(
+    State(captured): State<CapturedUpstreamRequests>,
+    method: Method,
+    raw_body: Bytes,
+) -> Response {
+    let (body, raw_body) = parse_captured_json_body(raw_body);
+    capture_request(
+        &captured,
+        method,
+        "/v1/messages",
+        Some(body.clone()),
+        Some(raw_body),
+    );
+    (
+        StatusCode::OK,
+        AxumJson(json!({
+            "id": "msg_proxy_matrix",
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "text", "text": "hi" }],
+            "model": body.get("model").cloned().unwrap_or_else(|| json!("claude-3-5-sonnet")),
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": { "input_tokens": 1, "output_tokens": 1 }
+        })),
+    )
+        .into_response()
+}
+
 async fn openai_responses_get_handler(
     State(captured): State<CapturedUpstreamRequests>,
     method: Method,
     Path(id): Path<String>,
 ) -> Response {
-    capture_request(&captured, method, &format!("/v1/responses/{id}"), None);
+    capture_request(
+        &captured,
+        method,
+        &format!("/v1/responses/{id}"),
+        None,
+        None,
+    );
     (
         StatusCode::OK,
         AxumJson(json!({
@@ -233,16 +306,24 @@ async fn openai_responses_get_handler(
         .into_response()
 }
 
+fn parse_captured_json_body(raw_body: Bytes) -> (Value, Vec<u8>) {
+    let raw_body = raw_body.to_vec();
+    let body = serde_json::from_slice(&raw_body).expect("upstream request body should be JSON");
+    (body, raw_body)
+}
+
 fn capture_request(
     captured: &CapturedUpstreamRequests,
     method: Method,
     path: &str,
     body: Option<Value>,
+    raw_body: Option<Vec<u8>>,
 ) {
     captured.push(CapturedUpstreamRequest {
         method: method.to_string(),
         path: path.to_string(),
         body,
+        raw_body,
     });
 }
 
@@ -274,6 +355,246 @@ async fn wait_for_upstream_request_count(
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     captured.snapshot()
+}
+
+async fn post_raw_json(client: &Client, url: String, raw_json: &str) -> reqwest::Response {
+    client
+        .post(url)
+        .header(CONTENT_TYPE, "application/json")
+        .body(raw_json.to_string())
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn openai_chat_same_format_eligible_request_forwards_exact_raw_body_bytes() {
+    let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
+    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    let (llmup_base, _llmup) = start_proxy(config).await;
+    let client = direct_data_client();
+    let raw_json = r#"{
+  "model": "gpt-4o-mini",
+  "messages": [
+    { "role": "user", "content": "ping" }
+  ],
+  "prompt_cache_key": "stable-prefix",
+  "x_provider_native": { "kept": true, "n": 1.2300 },
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "describe_reserved_prefix",
+        "description": "Plain schema text may mention __llmup_custom__apply_patch.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "literal": {
+              "type": "string",
+              "description": "__llmup_custom__apply_patch is only example text"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "temperature": 1e0
+}"#;
+
+    let response = post_raw_json(
+        &client,
+        format!("{llmup_base}/openai/v1/chat/completions"),
+        raw_json,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let requests = wait_for_upstream_path(&captured_upstream, "/v1/chat/completions", 80).await;
+    let request = requests
+        .iter()
+        .find(|request| request.path == "/v1/chat/completions")
+        .expect("chat request should reach upstream");
+    assert_eq!(request.raw_body.as_deref(), Some(raw_json.as_bytes()));
+    assert_eq!(
+        request
+            .body
+            .as_ref()
+            .and_then(|body| body.get("prompt_cache_key"))
+            .and_then(Value::as_str),
+        Some("stable-prefix")
+    );
+}
+
+#[tokio::test]
+async fn raw_eligible_openai_chat_rejects_reserved_legacy_function_name_without_upstream_call() {
+    let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
+    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    let (llmup_base, _llmup) = start_proxy(config).await;
+    let client = direct_data_client();
+    let raw_json = r#"{
+  "model": "gpt-4o-mini",
+  "messages": [
+    { "role": "user", "content": "ping" }
+  ],
+  "functions": [
+    {
+      "name": "__llmup_custom__legacy_exec",
+      "parameters": { "type": "object", "properties": {} }
+    }
+  ],
+  "temperature": 1e0
+}"#;
+
+    let response = post_raw_json(
+        &client,
+        format!("{llmup_base}/openai/v1/chat/completions"),
+        raw_json,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body_text = response.text().await.unwrap();
+    assert!(
+        !body_text.contains("__llmup_custom__"),
+        "reserved prefix should not leak: {body_text}"
+    );
+    assert!(
+        captured_upstream.snapshot().is_empty(),
+        "reserved function name should fail before upstream call: {:?}",
+        captured_upstream.snapshot()
+    );
+}
+
+#[tokio::test]
+async fn openai_responses_same_format_eligible_request_forwards_exact_raw_body_bytes() {
+    let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
+    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiResponses);
+    let (llmup_base, _llmup) = start_proxy(config).await;
+    let client = direct_data_client();
+    let raw_json = r#"{
+  "model": "gpt-4.1",
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "input_text", "text": "ping" }
+      ]
+    }
+  ],
+  "prompt_cache_key": "responses-prefix",
+  "metadata": { "unknown": "provider-field", "score": 1.2300 },
+  "temperature": 1e0
+}"#;
+
+    let response = post_raw_json(
+        &client,
+        format!("{llmup_base}/openai/v1/responses"),
+        raw_json,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let requests = wait_for_upstream_path(&captured_upstream, "/v1/responses", 80).await;
+    let request = requests
+        .iter()
+        .find(|request| request.path == "/v1/responses")
+        .expect("responses request should reach upstream");
+    assert_eq!(request.raw_body.as_deref(), Some(raw_json.as_bytes()));
+}
+
+#[tokio::test]
+async fn anthropic_same_format_eligible_request_forwards_exact_raw_body_bytes() {
+    let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
+    let config = fixed_format_config(&upstream_base, UpstreamFormat::Anthropic);
+    let (llmup_base, _llmup) = start_proxy(config).await;
+    let client = direct_data_client();
+    let raw_json = r#"{
+  "model": "claude-3-5-sonnet",
+  "max_tokens": 0,
+  "system": [
+    {
+      "type": "text",
+      "text": "stable system",
+      "cache_control": { "type": "ephemeral" }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "ping",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    }
+  ],
+  "metadata": { "provider_unknown": true, "ratio": 1.2300 },
+  "temperature": 1e0
+}"#;
+
+    let response = post_raw_json(
+        &client,
+        format!("{llmup_base}/anthropic/v1/messages"),
+        raw_json,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let requests = wait_for_upstream_path(&captured_upstream, "/v1/messages", 80).await;
+    let request = requests
+        .iter()
+        .find(|request| request.path == "/v1/messages")
+        .expect("anthropic request should reach upstream");
+    assert_eq!(request.raw_body.as_deref(), Some(raw_json.as_bytes()));
+}
+
+#[tokio::test]
+async fn alias_model_rewrite_does_not_forward_original_raw_body_bytes() {
+    let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
+    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    config.model_aliases.insert(
+        "alias-chat".to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: "gpt-4o-mini".to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
+    let (llmup_base, _llmup) = start_proxy(config).await;
+    let client = direct_data_client();
+    let raw_json = r#"{
+  "model": "alias-chat",
+  "messages": [
+    { "role": "user", "content": "ping" }
+  ],
+  "temperature": 1.2300
+}"#;
+
+    let response = post_raw_json(
+        &client,
+        format!("{llmup_base}/openai/v1/chat/completions"),
+        raw_json,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let requests = wait_for_upstream_path(&captured_upstream, "/v1/chat/completions", 80).await;
+    let request = requests
+        .iter()
+        .find(|request| request.path == "/v1/chat/completions")
+        .expect("chat request should reach upstream");
+    assert_ne!(request.raw_body.as_deref(), Some(raw_json.as_bytes()));
+    assert_eq!(
+        request
+            .body
+            .as_ref()
+            .and_then(|body| body.get("model"))
+            .and_then(Value::as_str),
+        Some("gpt-4o-mini")
+    );
 }
 
 #[test]
