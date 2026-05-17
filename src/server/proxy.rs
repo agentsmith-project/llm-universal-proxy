@@ -783,6 +783,14 @@ fn redacted_streaming_error_response(
     streaming_error_response(format, status, &redactor.redact_text(message))
 }
 
+fn response_with_portability_warning_headers(
+    mut response: Response<Body>,
+    portability_warnings: &[String],
+) -> Response<Body> {
+    append_portability_warning_headers(&mut response, portability_warnings);
+    response
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_request_core_with_downstream_cancellation(
     state: Arc<AppState>,
@@ -1106,7 +1114,10 @@ async fn handle_request_core_with_downstream_cancellation(
                 let redacted_error = request_redactor.redact_text(&e);
                 error!("Request boundary validation failed: {}", redacted_error);
                 tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
-                return error_response(client_format, StatusCode::BAD_REQUEST, &redacted_error);
+                return response_with_portability_warning_headers(
+                    error_response(client_format, StatusCode::BAD_REQUEST, &redacted_error),
+                    &portability_warnings,
+                );
             }
             (original_body.clone(), Some(raw_body_bytes), None)
         } else {
@@ -1121,7 +1132,10 @@ async fn handle_request_core_with_downstream_cancellation(
                 let redacted_error = request_redactor.redact_text(&e);
                 error!("Translation failed: {}", redacted_error);
                 tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
-                return error_response(client_format, StatusCode::BAD_REQUEST, &redacted_error);
+                return response_with_portability_warning_headers(
+                    error_response(client_format, StatusCode::BAD_REQUEST, &redacted_error),
+                    &portability_warnings,
+                );
             }
 
             if let Some(obj) = body.as_object_mut() {
@@ -1161,11 +1175,14 @@ async fn handle_request_core_with_downstream_cancellation(
             Ok(value) => value,
             Err(message) => {
                 tracker.finish_error(StatusCode::SERVICE_UNAVAILABLE.as_u16());
-                return redacted_error_response(
-                    client_format,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    &message,
-                    &request_redactor,
+                return response_with_portability_warning_headers(
+                    redacted_error_response(
+                        client_format,
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        &message,
+                        &request_redactor,
+                    ),
+                    &portability_warnings,
                 );
             }
         };
@@ -1260,11 +1277,12 @@ async fn handle_request_core_with_downstream_cancellation(
         Err(upstream::DownstreamAwareError::Inner(e)) => {
             tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
             let message = request_redactor.redact_text(&e.to_string());
-            return if stream {
+            let response = if stream {
                 streaming_error_response(client_format, StatusCode::BAD_GATEWAY, &message)
             } else {
                 error_response(client_format, StatusCode::BAD_GATEWAY, &message)
             };
+            return response_with_portability_warning_headers(response, &portability_warnings);
         }
         Err(upstream::DownstreamAwareError::DownstreamCancelled) => {
             tracker.finish_cancelled();
@@ -1294,24 +1312,30 @@ async fn handle_request_core_with_downstream_cancellation(
                         upstream::ResponseBodyLimitError::LimitExceeded { limit },
                     )) => {
                         tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-                        return redacted_streaming_error_response(
-                            client_format,
-                            StatusCode::BAD_GATEWAY,
-                            &format!(
-                                "upstream error body exceeded resource limit of {limit} bytes"
+                        return response_with_portability_warning_headers(
+                            redacted_streaming_error_response(
+                                client_format,
+                                StatusCode::BAD_GATEWAY,
+                                &format!(
+                                    "upstream error body exceeded resource limit of {limit} bytes"
+                                ),
+                                &request_redactor,
                             ),
-                            &request_redactor,
+                            &portability_warnings,
                         );
                     }
                     Err(upstream::DownstreamAwareError::Inner(
                         upstream::ResponseBodyLimitError::Inner(error),
                     )) => {
                         tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-                        return redacted_streaming_error_response(
-                            client_format,
-                            StatusCode::BAD_GATEWAY,
-                            &format!("failed to read upstream error body: {error}"),
-                            &request_redactor,
+                        return response_with_portability_warning_headers(
+                            redacted_streaming_error_response(
+                                client_format,
+                                StatusCode::BAD_GATEWAY,
+                                &format!("failed to read upstream error body: {error}"),
+                                &request_redactor,
+                            ),
+                            &portability_warnings,
                         );
                     }
                     Err(upstream::DownstreamAwareError::DownstreamCancelled) => {
@@ -1331,17 +1355,19 @@ async fn handle_request_core_with_downstream_cancellation(
                     body_len,
                     &request_redactor,
                 );
-                append_portability_warning_headers(&mut response, &portability_warnings);
-                return response;
+                return response_with_portability_warning_headers(response, &portability_warnings);
             }
 
             if !response_is_event_stream(&upstream_response_headers) {
                 tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-                return redacted_streaming_error_response(
-                    client_format,
-                    StatusCode::BAD_GATEWAY,
-                    "upstream returned non-SSE response for streaming request",
-                    &request_redactor,
+                return response_with_portability_warning_headers(
+                    redacted_streaming_error_response(
+                        client_format,
+                        StatusCode::BAD_GATEWAY,
+                        "upstream returned non-SSE response for streaming request",
+                        &request_redactor,
+                    ),
+                    &portability_warnings,
                 );
             }
 
@@ -1395,8 +1421,7 @@ async fn handle_request_core_with_downstream_cancellation(
                 &upstream_response_headers,
                 &request_redactor,
             );
-            append_portability_warning_headers(&mut response, &portability_warnings);
-            return response;
+            return response_with_portability_warning_headers(response, &portability_warnings);
         }
         if !status.is_success() {
             let error_body = match upstream::read_response_text_limited_with_cancellation(
@@ -1414,11 +1439,16 @@ async fn handle_request_core_with_downstream_cancellation(
                     upstream::ResponseBodyLimitError::LimitExceeded { limit },
                 )) => {
                     tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-                    return redacted_streaming_error_response(
-                        client_format,
-                        StatusCode::BAD_GATEWAY,
-                        &format!("upstream error body exceeded resource limit of {limit} bytes"),
-                        &request_redactor,
+                    return response_with_portability_warning_headers(
+                        redacted_streaming_error_response(
+                            client_format,
+                            StatusCode::BAD_GATEWAY,
+                            &format!(
+                                "upstream error body exceeded resource limit of {limit} bytes"
+                            ),
+                            &request_redactor,
+                        ),
+                        &portability_warnings,
                     );
                 }
                 Err(upstream::DownstreamAwareError::Inner(
@@ -1453,15 +1483,18 @@ async fn handle_request_core_with_downstream_cancellation(
                     &request_redactor,
                 );
             }
-            return response;
+            return response_with_portability_warning_headers(response, &portability_warnings);
         }
         if !response_is_event_stream(&upstream_response_headers) {
             tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-            return redacted_streaming_error_response(
-                client_format,
-                StatusCode::BAD_GATEWAY,
-                "upstream returned non-SSE response for streaming request",
-                &request_redactor,
+            return response_with_portability_warning_headers(
+                redacted_streaming_error_response(
+                    client_format,
+                    StatusCode::BAD_GATEWAY,
+                    "upstream returned non-SSE response for streaming request",
+                    &request_redactor,
+                ),
+                &portability_warnings,
             );
         }
         let upstream_stream = res.bytes_stream();
@@ -1529,8 +1562,7 @@ async fn handle_request_core_with_downstream_cancellation(
             &upstream_response_headers,
             &request_redactor,
         );
-        append_portability_warning_headers(&mut response, &portability_warnings);
-        return response;
+        return response_with_portability_warning_headers(response, &portability_warnings);
     }
 
     let status = res.status();
@@ -1563,20 +1595,26 @@ async fn handle_request_core_with_downstream_cancellation(
             } else {
                 format!("upstream error body exceeded resource limit of {limit} bytes")
             };
-            return redacted_error_response(
-                client_format,
-                StatusCode::BAD_GATEWAY,
-                &message,
-                &request_redactor,
+            return response_with_portability_warning_headers(
+                redacted_error_response(
+                    client_format,
+                    StatusCode::BAD_GATEWAY,
+                    &message,
+                    &request_redactor,
+                ),
+                &portability_warnings,
             );
         }
         Err(upstream::DownstreamAwareError::Inner(upstream::ResponseBodyLimitError::Inner(e))) => {
             tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-            return redacted_error_response(
-                client_format,
-                StatusCode::BAD_GATEWAY,
-                &e.to_string(),
-                &request_redactor,
+            return response_with_portability_warning_headers(
+                redacted_error_response(
+                    client_format,
+                    StatusCode::BAD_GATEWAY,
+                    &e.to_string(),
+                    &request_redactor,
+                ),
+                &portability_warnings,
             );
         }
         Err(upstream::DownstreamAwareError::DownstreamCancelled) => {
@@ -1627,8 +1665,7 @@ async fn handle_request_core_with_downstream_cancellation(
             body_len,
             &request_redactor,
         );
-        append_portability_warning_headers(&mut response, &portability_warnings);
-        return response;
+        return response_with_portability_warning_headers(response, &portability_warnings);
     }
     if !status.is_success() {
         error!("Upstream returned non-success status: {}", status);
@@ -1654,7 +1691,7 @@ async fn handle_request_core_with_downstream_cancellation(
                 &request_redactor,
             );
         }
-        return response;
+        return response_with_portability_warning_headers(response, &portability_warnings);
     }
     let upstream_body: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
@@ -1666,11 +1703,14 @@ async fn handle_request_core_with_downstream_cancellation(
                 redacted_upstream_body
             );
             tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-            return redacted_error_response(
-                client_format,
-                StatusCode::BAD_GATEWAY,
-                "upstream returned invalid JSON",
-                &request_redactor,
+            return response_with_portability_warning_headers(
+                redacted_error_response(
+                    client_format,
+                    StatusCode::BAD_GATEWAY,
+                    "upstream returned invalid JSON",
+                    &request_redactor,
+                ),
+                &portability_warnings,
             );
         }
     };
@@ -1687,7 +1727,7 @@ async fn handle_request_core_with_downstream_cancellation(
                 &request_redactor,
             );
         }
-        return response;
+        return response_with_portability_warning_headers(response, &portability_warnings);
     }
     let response_translation_context = ResponseTranslationContext::default()
         .with_request_scoped_tool_bridge_context_value(
@@ -1704,11 +1744,14 @@ async fn handle_request_core_with_downstream_cancellation(
         Ok(v) => v,
         Err(e) => {
             tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-            return redacted_error_response(
-                client_format,
-                StatusCode::BAD_GATEWAY,
-                &e,
-                &request_redactor,
+            return response_with_portability_warning_headers(
+                redacted_error_response(
+                    client_format,
+                    StatusCode::BAD_GATEWAY,
+                    &e,
+                    &request_redactor,
+                ),
+                &portability_warnings,
             );
         }
     };
@@ -1765,8 +1808,7 @@ async fn handle_request_core_with_downstream_cancellation(
             &request_redactor,
         );
     }
-    append_portability_warning_headers(&mut response, &portability_warnings);
-    response
+    response_with_portability_warning_headers(response, &portability_warnings)
 }
 
 fn response_is_event_stream(headers: &reqwest::header::HeaderMap) -> bool {

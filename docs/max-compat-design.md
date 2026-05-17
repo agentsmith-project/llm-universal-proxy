@@ -103,12 +103,13 @@ Current implementation facts:
 - Same-format zero-transform handling preserves native fields when the source and upstream use the same wire protocol and the route does not require body mutation.
 - Native Responses same-wire handling preserves `context_management`, `include` values such as `reasoning.encrypted_content`, and input reasoning and compaction items with `encrypted_content` unchanged.
 - Responses lifecycle/resource endpoints require exactly one native OpenAI Responses upstream and the proxy does not reconstruct provider state.
-- Local transcript replay may expand llmup-owned `resp_llmup_*` IDs for translated OpenAI Responses continuations using short-term in-process memory. It saves only replayable transcript items; `store:false`, expiration, restart, namespace/owner mismatch, route/config drift, external provider-owned IDs, and streaming continuation with `previous_response_id` fail closed. First-response streaming completed text capture is supported.
+- Local transcript replay may expand llmup-owned `resp_llmup_*` IDs for translated OpenAI Responses continuations using short-term in-process memory. It saves only replayable transcript items, including visible reasoning summary text; `store:false`, expiration, restart, namespace/owner mismatch, route/config drift, external provider-owned IDs, and streaming continuation with `previous_response_id` fail closed. First-response streaming completed text capture is supported.
 
 Request-side reasoning encrypted_content rules:
 
 - For request-side reasoning encrypted_content, include `reasoning.encrypted_content` is omitted with a portability warning on cross-provider translation because it only asks the source provider to emit an opaque carrier the target cannot use.
 - A reasoning item `encrypted_content` carrier may be omitted only when the item has visible summary text or the request still contains visible transcript/history that can be replayed as portable context.
+- Visible reasoning summary replay stores and expands only visible summary text; opaque carriers, thinking signatures, redacted thinking, and provider-private reasoning fields do not enter local transcript replay state.
 - The opaque-only reasoning case always fails closed. The proxy must not silently discard the only continuity signal.
 
 Request-side compaction input rules:
