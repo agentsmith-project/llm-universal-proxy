@@ -41,7 +41,7 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 2. Route/config owner hardening delivered：状态桥 continuation 已用内部 route/config fingerprint 和 namespace revision 做当前 runtime 复校验，drift 在 upstream dispatch 前 400 fail closed；fingerprint 不是用户配置或产品功能。
 3. Prompt-cache delivered split：OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
 4. 当前不把 block-level mapping 放入 handoff；任何超出已交付顶层显式映射的 mapping 都必须单独 scope review，且不新增用户/运营配置面。
-5. 普通 function_call replay 和 portable custom tool replay 已交付；下一步聚焦 fine-grained `ProviderCacheUsage` parser/source-field metrics，且仅作为非阻塞 telemetry；stream capture 和 reasoning summary replay later。
+5. 普通 function_call replay、portable custom tool replay，以及同协议 zero-transform/native-preserved `provider_cache_usage` usage hook 只读 telemetry 已交付；cross-protocol translated routes 和 same-format constructed routes 暂不输出该 telemetry；下一步顺序是 stream capture later，再 reasoning summary replay later。
 
 如果必须完全并行开发，其他两个 workstream 必须把所有 Gemini 相关改动视为 remove-native-gemini workstream 的独占范围，不再添加新的 Gemini cache/state 测试或 helper。
 
@@ -290,6 +290,7 @@ git diff --check
 - 不默认支持 Gemini native `cachedContent`，因为它是 provider-side resource handle，会重新引入 Gemini resource lifecycle。
 - 不默认支持 `extra_body.google.cached_content`，即使 Google OpenAI-compatible 文档允许 `extra_body.google` 传递部分 Gemini 字段。这个扩展会重新制造 provider-specific branch，和本次简化目标冲突。
 - 如果后续明确有强经济收益，需要对 “Google OpenAI-compatible provider extension” 单独做范围评审；它不能作为本计划的预留实现任务，也不能跨协议泛化或影响 raw same-protocol forwarding。
+- 已交付的 `provider_cache_usage` 只是 usage hook 上的 provider raw source telemetry：只来自同协议 zero-transform/native-preserved raw observed provider usage，不新增 cache store、lookup、key、eviction、response reuse、routing 或 fallback。
 
 这样做会损失 Gemini explicit cached-content 优化，但换来主转换矩阵和状态/cache 设计的显著简化。对于 pre-GA，建议优先收敛复杂度。
 

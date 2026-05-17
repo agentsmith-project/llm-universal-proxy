@@ -1,6 +1,6 @@
 # Pre-GA Conversation State Bridge 工作计划
 
-- 状态：current-main status update；text-only memory bridge、普通 `function_call` / `function_call_output`、portable `custom_tool_call` / `custom_tool_call_output` 的非流式本地 replay 和 route/config owner hardening 已实现；fine-grained `ProviderCacheUsage` telemetry 是下一步；stream capture、reasoning summary replay、细粒度 trace metadata 仍待后续
+- 状态：current-main status update；text-only memory bridge、普通 `function_call` / `function_call_output`、portable `custom_tool_call` / `custom_tool_call_output` 的非流式本地 replay 和 route/config owner hardening 已实现；usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` 只读 telemetry；stream capture、reasoning summary replay、细粒度 trace metadata 仍待后续
 - 日期：2026-05-16
 - 范围：为 `llmup` 增加显式配置的纯内存会话状态桥，用于把使用状态型接口的客户端转换到无状态 provider 协议
 - 非范围：LLM 响应缓存、语义缓存、跨进程持久化数据库、provider 私有 opaque state 反解、默认无配置保存用户数据、后台任务队列产品化、提示词管理产品
@@ -82,6 +82,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 - `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice 已完成：`background:false|null` 和 `store:false|null` 不再触发 provider-owned stateful fail-closed，`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。
 - route/config owner hardening 已完成：StoredBridgeResponse 保存内部 route/config fingerprint；continuation 在 upstream dispatch 前按当前 runtime/fingerprint 重新校验，drift 时 400 fail closed；无 `model` 的 single-upstream replay 在配置未变时仍成功。
 - namespace revision 采用保守绑定：配置更新会让旧 local state fail closed。这是安全取舍，不做迁移、持久化或 fallback；fingerprint 只是内部保护，不是产品功能或用户配置。
+- usage hook `provider_cache_usage` 已完成：只在同协议 zero-transform/native-preserved raw observed provider usage 上输出 source-field telemetry；cross-protocol translated routes 和 same-format constructed routes 暂不输出，避免把 client-visible normalized usage 误当 provider raw source telemetry。该 telemetry 只读，不驱动 cache store、lookup、key、eviction、response reuse、routing 或 fallback。
 - 文档和测试已经锁定“provider-owned state 不重建”的现有行为。
 
 仍未完成：
@@ -371,6 +372,7 @@ struct BridgeResponse {
 - provider-native prompt-cache request-control support 只在 target prompt 构造完成之后，保留或显式映射请求中已有的目标 provider cache request controls。
 - 状态桥本身不决定哪些内容应该被 provider cache。
 - State bridge expansion 只改变 target prompt；prompt-cache controls 只能来自请求中显式 provider-native 字段，并且必须在 expansion + translation 后显式映射；不得从 expanded prefix、`previous_response_id`、`resp_llmup_*` 或文本内容派生 key/breakpoint。
+- `provider_cache_usage` 是 usage hook 上的 provider raw source telemetry，不是 cache 能力；只有同协议 zero-transform/native-preserved raw observed provider usage 会输出，constructed request 和 cross-protocol translated route 暂不输出。
 
 执行顺序：
 
@@ -418,8 +420,9 @@ Current-main delivery status:
 - Delivered slice: route/config owner hardening，包括内部 route/config fingerprint、当前 runtime 复校验、drift pre-dispatch 400 fail closed，以及未变配置下的 no-model single-upstream replay。
 - Delivered slice: 普通 Responses `function_call` / `function_call_output` 与 portable `custom_tool_call` / `custom_tool_call_output` 非流式本地 replay；pending call outputs 必须按 `{call_id, kind}` 在 continuation 开头完整匹配，之后允许普通 text message；非 portable custom、proxied、namespaced provider/internal 工具语义不保存为本地 replay state。
 - Delivered slice: prompt-cache 顶层显式映射已交付，包括 OpenAI-family -> Anthropic `extra_body.anthropic.cache_control`、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention`；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
-- Handoff guardrail: 当前 handoff 不继续扩展 prompt-cache request-control；custom tool replay 已交付，不再作为下一步前置项。
-- Later: fine-grained `ProviderCacheUsage` parser/source-field metrics 只是后续非阻塞 telemetry；Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation 仍 later。
+- Delivered slice: usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` source-field telemetry；cross-protocol translated routes 和 same-format constructed routes 暂不输出，且该 telemetry 不参与 cache store、lookup、key、eviction、response reuse、routing 或 fallback。
+- Handoff guardrail: 当前 handoff 不继续扩展 prompt-cache request-control；custom tool replay 和 `provider_cache_usage` telemetry 已交付，不再作为下一步前置项。
+- Later: Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation 仍 later。
 
 ### Phase 0：合同冻结与文档更新
 
@@ -562,9 +565,8 @@ Current-main delivery status:
 
 推荐下一步顺序：
 
-1. Fine-grained `ProviderCacheUsage` parser/source-field metrics later：仅作为后续非阻塞 telemetry；不新增 prompt-cache request-control 扩展。prompt-cache 顶层显式映射、coarse disposition trace/hook visibility、same-protocol wrong-target fail-closed 已交付。
-2. Stream capture later：后续再评估 streaming response capture、本地 Conversations API bridge。
-3. Reasoning summary replay later：visible reasoning summary replay 和细粒度 trace metadata consolidation 单独评审；普通/custom tool replay 已交付，不再作为 handoff pending 项。
+1. Stream capture later：后续再评估 streaming response capture、本地 Conversations API bridge。
+2. Reasoning summary replay later：visible reasoning summary replay 和细粒度 trace metadata consolidation 单独评审；普通/custom tool replay 与 `provider_cache_usage` telemetry 已交付，不再作为 handoff pending 项。
 
 主要代码区域：
 

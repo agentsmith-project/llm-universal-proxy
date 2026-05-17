@@ -1,7 +1,7 @@
 # Pre-GA Request Processing and Provider Prompt-Cache Support Plan
 
-- Status: current-main status update; internal raw same-protocol forwarding is present; coarse-grained provider-native prompt-cache request-control disposition is visible in traces/hooks as `preserved_native` / `explicit_extension_mapped` / `dropped`; OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` mapping and Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` mapping are present; same-protocol wrong-target explicit extensions fail closed; fine-grained `ProviderCacheUsage` parsing/source-field metrics remain deferred telemetry
-- Date: 2026-05-16
+- Status: current-main status update; internal raw same-protocol forwarding is present; coarse-grained provider-native prompt-cache request-control disposition is visible in traces/hooks as `preserved_native` / `explicit_extension_mapped` / `dropped`; OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` mapping and Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` mapping are present; same-protocol wrong-target explicit extensions fail closed; usage hooks emit optional same-protocol zero-transform/native-preserved `ProviderCacheUsage` source-field telemetry for known OpenAI Chat, OpenAI Responses, and Anthropic cache usage fields
+- Date: 2026-05-17
 - Scope: internal request processing classification, internal raw same-protocol provider forwarding optimization, provider-native prompt-cache request-control support, provider-returned cache usage observation, and request-handling simplification under the single maximum safe compatibility strategy
 - Non-scope: any `llmup`-managed cache, gateway response/result cache, semantic cache, cache storage, cache lifecycle management, cache-aware routing, broad fallback DSLs, pricing catalogs, guardrails, prompt management, admin UI expansion
 
@@ -56,7 +56,8 @@ Current request-processing facts:
 - [src/request_processing.rs](../../src/request_processing.rs) owns `RequestProcessing`, `StateBridgeModifier`, and `PromptCacheRequestControl`.
 - [src/server/proxy.rs](../../src/server/proxy.rs) uses raw request bytes and raw non-stream response bytes on `RequestTransformationNotRequired`.
 - Provider-native prompt-cache fields are classified as `Preserved` for OpenAI-family `prompt_cache_key` / `prompt_cache_retention` and same-protocol Anthropic `cache_control`.
-- `NormalizedUsage` provides baseline provider-returned usage observation, including known OpenAI cached-token and Anthropic cache read/write counters where already parsed. Fine-grained `ProviderCacheUsage` parsing and source-field metrics are not complete.
+- `NormalizedUsage` provides baseline provider-returned usage observation, including known OpenAI cached-token and Anthropic cache read/write counters where already parsed. Usage hooks also emit optional `ProviderCacheUsage` source-field telemetry for known OpenAI Chat, OpenAI Responses, and Anthropic prompt-cache usage fields only on same-protocol zero-transform/native-preserved paths.
+- Cross-protocol translated routes and same-format constructed routes currently omit `provider_cache_usage` even when the client-visible response contains cache usage counters. This avoids misattributing client-visible usage as raw provider source telemetry until upstream raw usage is separately observed by hooks.
 - Current main includes the OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` explicit mapping and the Anthropic -> OpenAI-family top-level `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` explicit mapping. Broader block-level marker mapping is not implemented.
 
 ### External Product Patterns
@@ -371,7 +372,9 @@ Anthropic:
 Current-main delivery status:
 
 - Delivered: Phase 0/1 request-processing contract and observability, Phase 2/3 raw same-protocol forwarding for eligible non-mutating paths, coarse-grained provider-native prompt-cache request-control disposition plus trace/hook visibility for `preserved_native` / `explicit_extension_mapped` / `dropped`, and same-protocol wrong-target explicit extension fail-closed.
-- Delivered telemetry baseline: `NormalizedUsage` provides basic provider-returned usage observation, including known OpenAI cached-token and Anthropic cache read/write counters where already parsed. Fine-grained `ProviderCacheUsage` parser/source-field metrics remain deferred and non-blocking.
+- Delivered telemetry baseline: `NormalizedUsage` provides basic provider-returned usage observation, including known OpenAI cached-token and Anthropic cache read/write counters where already parsed.
+- Delivered slice: usage hooks emit optional `provider_cache_usage` telemetry from same-protocol zero-transform/native-preserved raw observed provider usage source fields for OpenAI Chat, OpenAI Responses, and Anthropic, omitting the field entirely when no known cache usage source field is present.
+- Delivered guardrail: cross-protocol translated routes and same-format constructed routes omit `provider_cache_usage` for now, even when the client-visible response has cache counters, because hooks do not yet receive a separate upstream raw usage object for attribution.
 - Delivered slice: Responses stateful-control detector enabled-semantics alignment for `background` / `store`; `background:false|null` and `store:false|null` no longer trigger provider-owned stateful fail-closed, while enabled/present controls still fail closed.
 - Delivered slice: OpenAI-family -> Anthropic explicit extension mapping for `extra_body.anthropic.cache_control` to top-level Anthropic `cache_control`, with fail-closed validation and no `llmup` cache.
 - Delivered slice: Anthropic -> OpenAI-family explicit target-provider extension mapping for `extra_body.openai.prompt_cache_key` and optional `prompt_cache_retention`, with fail-closed validation and no `llmup` cache.
@@ -475,20 +478,24 @@ Current-main status:
 
 - Delivered: preserve raw usage in raw same-protocol forwarding responses.
 - Delivered: keep existing `NormalizedUsage` baseline observation for provider-returned usage, including known OpenAI cached-token and Anthropic cache read/write counters where already parsed.
-- Deferred/non-blocking: add an internal fine-grained `ProviderCacheUsage` parser populated from raw provider usage after the response is already decided. This struct is telemetry only and must not drive cache lookup, cache keys, eviction, response reuse, routing, or fallback.
-- Deferred/non-blocking: emit best-effort source-field metrics:
-  - `cache.read_tokens`
-  - `cache.write_tokens`
-  - `cache.hit_tokens`
-  - `cache.provider`
-  - `cache.source_field`
+- Delivered: usage hooks add an optional sibling `provider_cache_usage` populated from same-protocol zero-transform/native-preserved raw observed provider usage after the response is already decided. This telemetry must not drive cache lookup, cache keys, eviction, response reuse, routing, or fallback.
+- Delivered: cross-protocol translated routes and same-format constructed routes do not emit `provider_cache_usage` yet. They may still expose cache counters through `usage`, but those are client-visible normalized/translated fields, not raw provider source telemetry.
+- Delivered: emit best-effort source-field details in usage hook payloads:
+  - `provider_cache_usage.read_tokens`
+  - `provider_cache_usage.write_tokens`
+  - `provider_cache_usage.hit_tokens`
+  - `provider_cache_usage.provider`
+  - `provider_cache_usage.source_fields[].source_field`
+  - `provider_cache_usage.source_fields[].counters`
+  - `provider_cache_usage.source_fields[].value`
 - Deferred/non-blocking: add docs that these metrics are approximate and provider-specific.
 
 Acceptance tests:
 
 - Current baseline: provider usage is observed without changing response bodies where `NormalizedUsage` already parses it.
-- Future fine-grained parser: OpenAI cached tokens and Anthropic read/write counters are attributed to provider/source fields without changing response bodies.
-- Future fine-grained parser: unknown usage shapes do not fail requests.
+- Current same-protocol zero-transform/native-preserved telemetry: OpenAI cached tokens and Anthropic read/write counters are attributed to provider/source fields without changing response bodies.
+- Current attribution guardrail: cross-protocol routes and same-format constructed routes omit `provider_cache_usage` until hooks receive upstream raw usage separately from client-visible usage.
+- Unknown usage shapes do not fail requests.
 
 ### Phase 6: Remove Same-Format Compatibility Shims
 
@@ -513,7 +520,7 @@ Required local tests:
 | Response payload | Byte-for-byte downstream body equality for success and provider error responses |
 | Streaming | Raw SSE event preservation for ordinary success streams |
 | Headers | Auth rewrite and hop-by-hop stripping are explicit; provider protocol headers are preserved where safe |
-| Provider prompt-cache support | Native cache request fields and usage fields preserved; explicit translated extensions map only to their target provider; optional observation does not mutate output, drive routing, or cache anything |
+| Provider prompt-cache support | Native cache request fields and usage fields preserved; explicit translated extensions map only to their target provider; optional same-protocol zero-transform/native-preserved observation does not mutate output, drive routing, or cache anything |
 | Provider prompt-cache coverage | Every source/target pair in the Explicit Provider-Native Coverage Checklist has at least one positive test and one non-portable/fail-closed test where applicable |
 | Request processing | Same-format routes that avoid mutation and normalization use internal raw same-protocol forwarding; cross-format or shimmed routes use maximum-safe request construction |
 | Regressions | Maximum-safe cross-format behavior remains in the maximum-safe path |
@@ -522,9 +529,8 @@ Required local tests:
 
 Recommended next order:
 
-1. Fine-grained `ProviderCacheUsage` parser/source-field metrics later as a small telemetry slice. This is read-only telemetry and must not affect routing, fallback, cache lookup, or response reuse.
-2. Stream capture later: evaluate streaming response capture after telemetry stays stable.
-3. Reasoning summary replay later: visible summary replay remains separate from prompt-cache request-control support.
+1. Stream capture later: evaluate streaming response capture after telemetry stays stable.
+2. Reasoning summary replay later: visible summary replay remains separate from prompt-cache request-control support.
 
 Guardrail: keep prompt-cache support limited to explicit provider-native request controls and read-only usage telemetry.
 

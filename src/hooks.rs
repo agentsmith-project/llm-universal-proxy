@@ -409,6 +409,180 @@ impl NormalizedUsage {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCacheUsageProvider {
+    #[serde(rename = "openai")]
+    OpenAi,
+    Anthropic,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCacheUsageCounter {
+    HitTokens,
+    ReadTokens,
+    WriteTokens,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderCacheUsageSourceField {
+    pub source_field: String,
+    pub counters: Vec<ProviderCacheUsageCounter>,
+    pub value: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderCacheUsage {
+    pub provider: ProviderCacheUsageProvider,
+    pub source_format: UpstreamFormat,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hit_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_tokens: Option<u64>,
+    pub source_fields: Vec<ProviderCacheUsageSourceField>,
+}
+
+impl ProviderCacheUsage {
+    pub fn from_client_body(format: UpstreamFormat, body: &Value) -> Option<Self> {
+        Self::from_usage(format, body.get("usage").unwrap_or(&Value::Null))
+    }
+
+    fn from_usage(format: UpstreamFormat, usage: &Value) -> Option<Self> {
+        let mut cache_usage = Self {
+            provider: match format {
+                UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+                    ProviderCacheUsageProvider::OpenAi
+                }
+                UpstreamFormat::Anthropic => ProviderCacheUsageProvider::Anthropic,
+            },
+            source_format: format,
+            hit_tokens: None,
+            read_tokens: None,
+            write_tokens: None,
+            source_fields: Vec::new(),
+        };
+
+        match format {
+            UpstreamFormat::OpenAiCompletion => {
+                if let Some(cached_tokens) = usage
+                    .get("prompt_tokens_details")
+                    .and_then(|details| details.get("cached_tokens"))
+                    .and_then(Value::as_u64)
+                {
+                    cache_usage.hit_tokens = Some(cached_tokens);
+                    cache_usage.read_tokens = Some(cached_tokens);
+                    cache_usage.add_source_field(
+                        "usage.prompt_tokens_details.cached_tokens",
+                        [
+                            ProviderCacheUsageCounter::HitTokens,
+                            ProviderCacheUsageCounter::ReadTokens,
+                        ],
+                        cached_tokens,
+                    );
+                }
+            }
+            UpstreamFormat::OpenAiResponses => {
+                if let Some(cached_tokens) = usage
+                    .get("input_tokens_details")
+                    .and_then(|details| details.get("cached_tokens"))
+                    .and_then(Value::as_u64)
+                {
+                    cache_usage.hit_tokens = Some(cached_tokens);
+                    cache_usage.read_tokens = Some(cached_tokens);
+                    cache_usage.add_source_field(
+                        "usage.input_tokens_details.cached_tokens",
+                        [
+                            ProviderCacheUsageCounter::HitTokens,
+                            ProviderCacheUsageCounter::ReadTokens,
+                        ],
+                        cached_tokens,
+                    );
+                }
+            }
+            UpstreamFormat::Anthropic => {
+                if let Some(read_tokens) =
+                    usage.get("cache_read_input_tokens").and_then(Value::as_u64)
+                {
+                    cache_usage.read_tokens = Some(read_tokens);
+                    cache_usage.hit_tokens = Some(read_tokens);
+                    cache_usage.add_source_field(
+                        "usage.cache_read_input_tokens",
+                        [
+                            ProviderCacheUsageCounter::ReadTokens,
+                            ProviderCacheUsageCounter::HitTokens,
+                        ],
+                        read_tokens,
+                    );
+                }
+                if let Some(write_tokens) = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_u64)
+                {
+                    cache_usage.write_tokens = Some(write_tokens);
+                    cache_usage.add_source_field(
+                        "usage.cache_creation_input_tokens",
+                        [ProviderCacheUsageCounter::WriteTokens],
+                        write_tokens,
+                    );
+                }
+                if let Some(ephemeral_5m_input_tokens) = usage
+                    .get("cache_creation")
+                    .and_then(|cache_creation| cache_creation.get("ephemeral_5m_input_tokens"))
+                    .and_then(Value::as_u64)
+                {
+                    cache_usage.add_source_field(
+                        "usage.cache_creation.ephemeral_5m_input_tokens",
+                        [ProviderCacheUsageCounter::WriteTokens],
+                        ephemeral_5m_input_tokens,
+                    );
+                }
+                if let Some(ephemeral_1h_input_tokens) = usage
+                    .get("cache_creation")
+                    .and_then(|cache_creation| cache_creation.get("ephemeral_1h_input_tokens"))
+                    .and_then(Value::as_u64)
+                {
+                    cache_usage.add_source_field(
+                        "usage.cache_creation.ephemeral_1h_input_tokens",
+                        [ProviderCacheUsageCounter::WriteTokens],
+                        ephemeral_1h_input_tokens,
+                    );
+                }
+            }
+        }
+
+        (!cache_usage.source_fields.is_empty()).then_some(cache_usage)
+    }
+
+    fn add_source_field(
+        &mut self,
+        source_field: &str,
+        counters: impl IntoIterator<Item = ProviderCacheUsageCounter>,
+        value: u64,
+    ) {
+        if let Some(existing) = self
+            .source_fields
+            .iter_mut()
+            .find(|field| field.source_field == source_field)
+        {
+            for counter in counters {
+                if !existing.counters.contains(&counter) {
+                    existing.counters.push(counter);
+                }
+            }
+            return;
+        }
+
+        self.source_fields.push(ProviderCacheUsageSourceField {
+            source_field: source_field.to_string(),
+            counters: counters.into_iter().collect(),
+            value,
+        });
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct HookRequestContext {
     pub request_id: String,
@@ -689,6 +863,8 @@ impl HookDispatcher {
         response_body: Value,
     ) {
         let usage = NormalizedUsage::from_client_body(ctx.client_format, &response_body);
+        let provider_cache_usage =
+            ProviderCacheUsage::from_client_body(ctx.client_format, &response_body);
         let observation = StreamObservation::non_stream_completed();
         self.emit_exchange(
             &ctx,
@@ -697,7 +873,7 @@ impl HookDispatcher {
             ExchangeResponseCapture::Immediate(response_body.clone()),
             observation.clone(),
         );
-        self.emit_usage(&ctx, status, usage, observation);
+        self.emit_usage(&ctx, status, usage, provider_cache_usage, observation);
     }
 
     pub fn wrap_stream<S>(
@@ -801,6 +977,7 @@ impl HookDispatcher {
         ctx: &HookRequestContext,
         status: u16,
         usage: NormalizedUsage,
+        provider_cache_usage: Option<ProviderCacheUsage>,
         observation: StreamObservation,
     ) {
         let Some(sender) = self.usage.clone() else {
@@ -809,33 +986,50 @@ impl HookDispatcher {
         if !self.runtime.can_attempt(HookKind::Usage) {
             return;
         }
-        let state = observation.project_legacy();
-        let usage_status = observation.project_usage_status(status);
-        let payload = json!({
-            "request_id": ctx.request_id,
-            "timestamp_ms": ctx.timestamp_ms,
-            "path": ctx.path,
-            "stream": ctx.stream,
-            "completed": state.completed,
-            "cancelled_by_client": state.cancelled_by_client,
-            "partial": state.partial,
-            "termination_reason": state.termination_reason,
-            "status": usage_status,
-            "http_status": status,
-            "client_model": ctx.client_model,
-            "upstream_name": ctx.upstream_name,
-            "upstream_model": ctx.upstream_model,
-            "client_format": ctx.client_format,
-            "upstream_format": ctx.upstream_format,
-            "llmup": ctx.llmup,
-            "credential_source": ctx.credential_source,
-            "credential_fingerprint": ctx.credential_fingerprint,
-            "transport_outcome": observation.transport_outcome,
-            "protocol_terminal": observation.protocol_terminal,
-            "usage": usage,
-        });
+        let payload = usage_hook_payload(ctx, status, usage, provider_cache_usage, observation);
         sender.spawn_send(payload);
     }
+}
+
+fn usage_hook_payload(
+    ctx: &HookRequestContext,
+    status: u16,
+    usage: NormalizedUsage,
+    provider_cache_usage: Option<ProviderCacheUsage>,
+    observation: StreamObservation,
+) -> Value {
+    let state = observation.project_legacy();
+    let usage_status = observation.project_usage_status(status);
+    let mut payload = json!({
+        "request_id": ctx.request_id,
+        "timestamp_ms": ctx.timestamp_ms,
+        "path": ctx.path,
+        "stream": ctx.stream,
+        "completed": state.completed,
+        "cancelled_by_client": state.cancelled_by_client,
+        "partial": state.partial,
+        "termination_reason": state.termination_reason,
+        "status": usage_status,
+        "http_status": status,
+        "client_model": ctx.client_model,
+        "upstream_name": ctx.upstream_name,
+        "upstream_model": ctx.upstream_model,
+        "client_format": ctx.client_format,
+        "upstream_format": ctx.upstream_format,
+        "llmup": ctx.llmup,
+        "credential_source": ctx.credential_source,
+        "credential_fingerprint": ctx.credential_fingerprint,
+        "transport_outcome": observation.transport_outcome,
+        "protocol_terminal": observation.protocol_terminal,
+        "usage": usage,
+    });
+    if ctx.client_format == ctx.upstream_format && ctx.llmup.zero_transform_forwarding_active {
+        if let Some(provider_cache_usage) = provider_cache_usage {
+            payload["provider_cache_usage"] =
+                serde_json::to_value(provider_cache_usage).unwrap_or(Value::Null);
+        }
+    }
+    payload
 }
 
 impl CircuitSnapshot {
@@ -1359,6 +1553,7 @@ impl<S> HookCaptureStream<S> {
             protocol_terminal: self.observer.protocol_terminal(),
         };
         let usage = self.observer.final_usage();
+        let provider_cache_usage = self.observer.final_provider_cache_usage();
         if let Some(capture) = self.exchange_capture.take() {
             let response_capture = match capture {
                 ExchangeCaptureMode::Spooling(sink) => match sink.finish() {
@@ -1377,8 +1572,13 @@ impl<S> HookCaptureStream<S> {
                 observation.clone(),
             );
         }
-        self.dispatcher
-            .emit_usage(&self.ctx, self.status, usage, observation);
+        self.dispatcher.emit_usage(
+            &self.ctx,
+            self.status,
+            usage,
+            provider_cache_usage,
+            observation,
+        );
     }
 }
 
@@ -1451,6 +1651,14 @@ impl ClientSseAccumulator {
             Self::OpenAiCompletion(acc) => acc.final_usage(),
             Self::Responses(acc) => acc.final_usage(),
             Self::Anthropic(acc) => acc.final_usage(),
+        }
+    }
+
+    fn final_provider_cache_usage(&self) -> Option<ProviderCacheUsage> {
+        match self {
+            Self::OpenAiCompletion(acc) => acc.final_provider_cache_usage(),
+            Self::Responses(acc) => acc.final_provider_cache_usage(),
+            Self::Anthropic(acc) => acc.final_provider_cache_usage(),
         }
     }
 
@@ -1748,6 +1956,12 @@ impl OpenAiCompletionAccumulator {
             .unwrap_or_default()
     }
 
+    fn final_provider_cache_usage(&self) -> Option<ProviderCacheUsage> {
+        self.usage.as_ref().and_then(|usage| {
+            ProviderCacheUsage::from_usage(UpstreamFormat::OpenAiCompletion, usage)
+        })
+    }
+
     fn protocol_terminal(&self) -> Option<ProtocolTerminal> {
         self.protocol_terminal.clone()
     }
@@ -1756,7 +1970,7 @@ impl OpenAiCompletionAccumulator {
 #[derive(Debug, Default)]
 struct ResponsesAccumulator {
     final_response: Option<Value>,
-    last_usage: Option<NormalizedUsage>,
+    usage: Option<Value>,
     protocol_terminal: Option<ProtocolTerminal>,
 }
 
@@ -1774,10 +1988,7 @@ impl ResponsesAccumulator {
                 if capture_exchange {
                     self.final_response = Some(response.clone());
                 }
-                self.last_usage = Some(NormalizedUsage::from_client_body(
-                    UpstreamFormat::OpenAiResponses,
-                    response,
-                ));
+                self.usage = response.get("usage").cloned();
             }
         }
     }
@@ -1801,7 +2012,21 @@ impl ResponsesAccumulator {
     }
 
     fn final_usage(&self) -> NormalizedUsage {
-        self.last_usage.clone().unwrap_or_default()
+        self.usage
+            .as_ref()
+            .map(|usage| {
+                NormalizedUsage::from_client_body(
+                    UpstreamFormat::OpenAiResponses,
+                    &json!({ "usage": usage }),
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    fn final_provider_cache_usage(&self) -> Option<ProviderCacheUsage> {
+        self.usage.as_ref().and_then(|usage| {
+            ProviderCacheUsage::from_usage(UpstreamFormat::OpenAiResponses, usage)
+        })
     }
 
     fn protocol_terminal(&self) -> Option<ProtocolTerminal> {
@@ -1813,7 +2038,7 @@ impl ResponsesAccumulator {
 struct AnthropicAccumulator {
     message: Value,
     error: Option<Value>,
-    usage: Option<NormalizedUsage>,
+    usage: Option<Value>,
     last_stop_reason: Option<String>,
     protocol_terminal: Option<ProtocolTerminal>,
 }
@@ -1932,19 +2157,15 @@ impl AnthropicAccumulator {
                     .and_then(Value::as_str)
                 {
                     self.last_stop_reason = Some(stop_reason.to_string());
-                    if !capture_exchange {
-                        return;
+                    if capture_exchange {
+                        self.message["stop_reason"] = json!(stop_reason);
                     }
-                    self.message["stop_reason"] = json!(stop_reason);
                 }
                 if let Some(usage) = event.get("usage") {
                     if capture_exchange {
                         self.message["usage"] = usage.clone();
                     }
-                    self.usage = Some(NormalizedUsage::from_client_body(
-                        UpstreamFormat::Anthropic,
-                        &json!({ "usage": usage }),
-                    ));
+                    self.usage = Some(usage.clone());
                 }
             }
             Some("message_stop") => {
@@ -1986,7 +2207,21 @@ impl AnthropicAccumulator {
     }
 
     fn final_usage(&self) -> NormalizedUsage {
-        self.usage.clone().unwrap_or_default()
+        self.usage
+            .as_ref()
+            .map(|usage| {
+                NormalizedUsage::from_client_body(
+                    UpstreamFormat::Anthropic,
+                    &json!({ "usage": usage }),
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    fn final_provider_cache_usage(&self) -> Option<ProviderCacheUsage> {
+        self.usage
+            .as_ref()
+            .and_then(|usage| ProviderCacheUsage::from_usage(UpstreamFormat::Anthropic, usage))
     }
 
     fn protocol_terminal(&self) -> Option<ProtocolTerminal> {
@@ -2102,6 +2337,413 @@ mod tests {
             cooldown: Duration::from_millis(cooldown_ms),
             breaker: Mutex::new(HookBreakerState::default()),
         }
+    }
+
+    fn provider_cache_usage_test_ctx(format: UpstreamFormat) -> HookRequestContext {
+        HookRequestContext {
+            request_id: "req_provider_cache_usage".to_string(),
+            timestamp_ms: 1,
+            path: "/v1/chat/completions".to_string(),
+            method: "POST".to_string(),
+            stream: false,
+            client_format: format,
+            upstream_format: format,
+            client_model: "model".to_string(),
+            upstream_name: "default".to_string(),
+            upstream_model: "model".to_string(),
+            credential_source: CredentialSource::Server,
+            llmup: RequestProcessingInfo::default(),
+            credential_fingerprint: None,
+            client_request_headers: vec![],
+            client_request_body: json!({"model":"model"}),
+        }
+    }
+
+    #[test]
+    fn provider_cache_usage_openai_chat_parser_reports_unique_cached_token_source_field() {
+        let provider_cache_usage = ProviderCacheUsage::from_client_body(
+            UpstreamFormat::OpenAiCompletion,
+            &json!({
+                "usage": {
+                    "prompt_tokens": 256,
+                    "completion_tokens": 8,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 128
+                    }
+                }
+            }),
+        )
+        .expect("provider cache usage");
+
+        let payload = serde_json::to_value(provider_cache_usage).expect("serialize");
+
+        assert_eq!(payload["provider"], "openai");
+        assert_eq!(payload["source_format"], "openai-completion");
+        assert_eq!(payload["hit_tokens"], 128);
+        assert_eq!(payload["read_tokens"], 128);
+        assert!(payload.get("write_tokens").is_none());
+        assert_eq!(
+            payload["source_fields"],
+            json!([
+                {
+                    "source_field": "usage.prompt_tokens_details.cached_tokens",
+                    "counters": ["hit_tokens", "read_tokens"],
+                    "value": 128
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_openai_responses_parser_reports_unique_cached_token_source_field() {
+        let provider_cache_usage = ProviderCacheUsage::from_client_body(
+            UpstreamFormat::OpenAiResponses,
+            &json!({
+                "usage": {
+                    "input_tokens": 256,
+                    "output_tokens": 8,
+                    "input_tokens_details": {
+                        "cached_tokens": 128
+                    }
+                }
+            }),
+        )
+        .expect("provider cache usage");
+
+        let payload = serde_json::to_value(provider_cache_usage).expect("serialize");
+
+        assert_eq!(payload["provider"], "openai");
+        assert_eq!(payload["source_format"], "openai-responses");
+        assert_eq!(payload["hit_tokens"], 128);
+        assert_eq!(payload["read_tokens"], 128);
+        assert_eq!(
+            payload["source_fields"],
+            json!([
+                {
+                    "source_field": "usage.input_tokens_details.cached_tokens",
+                    "counters": ["hit_tokens", "read_tokens"],
+                    "value": 128
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_anthropic_parser_reports_read_write_and_creation_breakdown_source_fields(
+    ) {
+        let provider_cache_usage = ProviderCacheUsage::from_client_body(
+            UpstreamFormat::Anthropic,
+            &json!({
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 8,
+                    "cache_read_input_tokens": 64,
+                    "cache_creation_input_tokens": 456,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 123,
+                        "ephemeral_1h_input_tokens": 333
+                    }
+                }
+            }),
+        )
+        .expect("provider cache usage");
+
+        let payload = serde_json::to_value(provider_cache_usage).expect("serialize");
+
+        assert_eq!(payload["provider"], "anthropic");
+        assert_eq!(payload["source_format"], "anthropic");
+        assert_eq!(payload["hit_tokens"], 64);
+        assert_eq!(payload["read_tokens"], 64);
+        assert_eq!(payload["write_tokens"], 456);
+        assert_eq!(
+            payload["source_fields"],
+            json!([
+                {
+                    "source_field": "usage.cache_read_input_tokens",
+                    "counters": ["read_tokens", "hit_tokens"],
+                    "value": 64
+                },
+                {
+                    "source_field": "usage.cache_creation_input_tokens",
+                    "counters": ["write_tokens"],
+                    "value": 456
+                },
+                {
+                    "source_field": "usage.cache_creation.ephemeral_5m_input_tokens",
+                    "counters": ["write_tokens"],
+                    "value": 123
+                },
+                {
+                    "source_field": "usage.cache_creation.ephemeral_1h_input_tokens",
+                    "counters": ["write_tokens"],
+                    "value": 333
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_hook_payload_omits_provider_cache_usage_when_no_cache_fields() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 4,
+                "total_tokens": 7
+            }
+        });
+        let payload = usage_hook_payload(
+            &provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion),
+            200,
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            StreamObservation::non_stream_completed(),
+        );
+
+        assert!(
+            payload.get("provider_cache_usage").is_none(),
+            "payload = {payload}"
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_hook_payload_omits_same_format_constructed_client_visible_fields() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 256,
+                "completion_tokens": 8,
+                "prompt_tokens_details": {
+                    "cached_tokens": 128
+                }
+            }
+        });
+        let ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+
+        let payload = usage_hook_payload(
+            &ctx,
+            200,
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            StreamObservation::non_stream_completed(),
+        );
+
+        assert_eq!(payload["llmup"]["request_body_handling"], "constructed");
+        assert_eq!(payload["usage"]["cached_input_tokens"], 128);
+        assert!(
+            payload.get("provider_cache_usage").is_none(),
+            "payload = {payload}"
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_hook_payload_includes_same_format_zero_transform_source_fields() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 256,
+                "completion_tokens": 8,
+                "prompt_tokens_details": {
+                    "cached_tokens": 128
+                }
+            }
+        });
+        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        ctx.llmup.zero_transform_forwarding_active = true;
+
+        let payload = usage_hook_payload(
+            &ctx,
+            200,
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            StreamObservation::non_stream_completed(),
+        );
+
+        assert_eq!(
+            payload["llmup"]["request_body_handling"],
+            "client_body_preserved"
+        );
+        assert_eq!(payload["usage"]["cached_input_tokens"], 128);
+        assert_eq!(
+            payload["provider_cache_usage"],
+            json!({
+                "provider": "openai",
+                "source_format": "openai-completion",
+                "hit_tokens": 128,
+                "read_tokens": 128,
+                "source_fields": [
+                    {
+                        "source_field": "usage.prompt_tokens_details.cached_tokens",
+                        "counters": ["hit_tokens", "read_tokens"],
+                        "value": 128
+                    }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_hook_payload_omits_cross_protocol_non_stream_client_visible_fields() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 256,
+                "completion_tokens": 8,
+                "prompt_tokens_details": {
+                    "cached_tokens": 128
+                }
+            }
+        });
+        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        ctx.upstream_format = UpstreamFormat::Anthropic;
+
+        let payload = usage_hook_payload(
+            &ctx,
+            200,
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            StreamObservation::non_stream_completed(),
+        );
+
+        assert_eq!(payload["usage"]["cached_input_tokens"], 128);
+        assert!(
+            payload.get("provider_cache_usage").is_none(),
+            "payload = {payload}"
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_hook_payload_omits_cross_protocol_stream_client_visible_fields() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 256,
+                "completion_tokens": 8,
+                "prompt_tokens_details": {
+                    "cached_tokens": 128
+                }
+            }
+        });
+        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        ctx.stream = true;
+        ctx.upstream_format = UpstreamFormat::Anthropic;
+
+        let payload = usage_hook_payload(
+            &ctx,
+            200,
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            StreamObservation {
+                transport_outcome: TransportOutcome::CompletedEof,
+                protocol_terminal: None,
+            },
+        );
+
+        assert_eq!(payload["usage"]["cached_input_tokens"], 128);
+        assert!(
+            payload.get("provider_cache_usage").is_none(),
+            "payload = {payload}"
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_responses_stream_accumulator_preserves_source_fields() {
+        let mut accumulator = ClientSseAccumulator::new(UpstreamFormat::OpenAiResponses);
+
+        accumulator.on_event(
+            &json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "object": "response",
+                    "status": "completed",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "total_tokens": 12,
+                        "input_tokens_details": {
+                            "cached_tokens": 0
+                        }
+                    }
+                }
+            }),
+            false,
+        );
+
+        let payload = serde_json::to_value(
+            accumulator
+                .final_provider_cache_usage()
+                .expect("provider cache usage"),
+        )
+        .expect("serialize");
+
+        assert_eq!(payload["hit_tokens"], 0);
+        assert_eq!(payload["read_tokens"], 0);
+        assert_eq!(
+            payload["source_fields"],
+            json!([
+                {
+                    "source_field": "usage.input_tokens_details.cached_tokens",
+                    "counters": ["hit_tokens", "read_tokens"],
+                    "value": 0
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn provider_cache_usage_anthropic_stream_accumulator_preserves_source_fields() {
+        let mut accumulator = ClientSseAccumulator::new(UpstreamFormat::Anthropic);
+
+        accumulator.on_event(
+            &json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": "end_turn" },
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "cache_read_input_tokens": 6,
+                    "cache_creation_input_tokens": 9,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 4,
+                        "ephemeral_1h_input_tokens": 5
+                    }
+                }
+            }),
+            false,
+        );
+
+        let payload = serde_json::to_value(
+            accumulator
+                .final_provider_cache_usage()
+                .expect("provider cache usage"),
+        )
+        .expect("serialize");
+
+        assert_eq!(payload["hit_tokens"], 6);
+        assert_eq!(payload["read_tokens"], 6);
+        assert_eq!(payload["write_tokens"], 9);
+        assert_eq!(
+            payload["source_fields"],
+            json!([
+                {
+                    "source_field": "usage.cache_read_input_tokens",
+                    "counters": ["read_tokens", "hit_tokens"],
+                    "value": 6
+                },
+                {
+                    "source_field": "usage.cache_creation_input_tokens",
+                    "counters": ["write_tokens"],
+                    "value": 9
+                },
+                {
+                    "source_field": "usage.cache_creation.ephemeral_5m_input_tokens",
+                    "counters": ["write_tokens"],
+                    "value": 4
+                },
+                {
+                    "source_field": "usage.cache_creation.ephemeral_1h_input_tokens",
+                    "counters": ["write_tokens"],
+                    "value": 5
+                }
+            ])
+        );
     }
 
     #[test]

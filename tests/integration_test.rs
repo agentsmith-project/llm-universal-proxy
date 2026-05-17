@@ -8296,6 +8296,84 @@ async fn wait_for_hook_payloads(captured: &CapturedHookPayloads, count: usize) -
     .expect("expected hook payloads to arrive")
 }
 
+async fn spawn_openai_completion_provider_cache_usage_mock() -> (String, tokio::task::JoinHandle<()>)
+{
+    async fn handler(Json(body): Json<Value>) -> Response {
+        assert_eq!(body.get("stream").and_then(Value::as_bool), Some(false));
+        let response = json!({
+            "id": "chatcmpl-provider-cache-usage",
+            "object": "chat.completion",
+            "created": 1,
+            "model": body.get("model").unwrap_or(&json!("mock")),
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "Hi" },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 256,
+                "completion_tokens": 8,
+                "total_tokens": 264,
+                "prompt_tokens_details": {
+                    "cached_tokens": 128
+                }
+            }
+        });
+        (StatusCode::OK, Json(response)).into_response()
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let app = Router::new()
+        .route("/v1/chat/completions", post(handler))
+        .route("/chat/completions", post(handler));
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    (base, handle)
+}
+
+async fn spawn_openai_responses_provider_cache_usage_mock() -> (String, tokio::task::JoinHandle<()>)
+{
+    async fn handler(Json(body): Json<Value>) -> Response {
+        assert_eq!(body.get("stream").and_then(Value::as_bool), Some(false));
+        let response = json!({
+            "id": "resp-provider-cache-usage",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": body.get("model").unwrap_or(&json!("mock")),
+            "output": [{
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "Hi" }]
+            }],
+            "usage": {
+                "input_tokens": 256,
+                "output_tokens": 8,
+                "total_tokens": 264,
+                "input_tokens_details": {
+                    "cached_tokens": 128
+                }
+            }
+        });
+        (StatusCode::OK, Json(response)).into_response()
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let app = Router::new()
+        .route("/v1/responses", post(handler))
+        .route("/responses", post(handler));
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    (base, handle)
+}
+
 async fn wait_for_debug_trace_file(path: &std::path::Path, needle: &str) -> String {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
@@ -8751,6 +8829,187 @@ async fn usage_and_exchange_hooks_fire_for_non_streaming_requests() {
         .unwrap();
     assert_eq!(usage["usage"]["input_tokens"], 1);
     assert_eq!(usage["usage"]["output_tokens"], 1);
+}
+
+#[tokio::test]
+async fn provider_cache_usage_usage_hook_includes_non_stream_openai_chat_source_fields() {
+    let (mock_base, _mock) = spawn_openai_completion_provider_cache_usage_mock().await;
+    let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    config.hooks = HookConfig {
+        max_pending_bytes: 100 * 1024 * 1024,
+        timeout: Duration::from_secs(3),
+        failure_threshold: 3,
+        cooldown: Duration::from_secs(300),
+        exchange: None,
+        usage: Some(HookEndpointConfig {
+            url: format!("{hook_base}/hook"),
+            authorization: None,
+        }),
+    };
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = Client::new();
+    let res = client
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": "gpt-4",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let public_body: Value = res.json().await.unwrap();
+
+    assert!(public_body.get("provider_cache_usage").is_none());
+    assert_eq!(
+        public_body["usage"]["prompt_tokens_details"]["cached_tokens"],
+        128
+    );
+
+    let payloads = wait_for_hook_payloads(&captured, 1).await;
+    let usage = payloads
+        .iter()
+        .find(|payload| payload.get("usage").is_some())
+        .unwrap();
+
+    assert_llmup_external_contract(&usage["llmup"], "client_body_preserved", "none");
+    assert_eq!(usage["usage"]["cached_input_tokens"], 128);
+    assert_eq!(
+        usage["provider_cache_usage"],
+        json!({
+            "provider": "openai",
+            "source_format": "openai-completion",
+            "hit_tokens": 128,
+            "read_tokens": 128,
+            "source_fields": [
+                {
+                    "source_field": "usage.prompt_tokens_details.cached_tokens",
+                    "counters": ["hit_tokens", "read_tokens"],
+                    "value": 128
+                }
+            ]
+        })
+    );
+}
+
+#[tokio::test]
+async fn provider_cache_usage_usage_hook_omits_same_format_constructed_source_fields() {
+    let alias_model = "provider-cache-usage-alias";
+    let upstream_model = "gpt-4-provider-cache-upstream";
+    let (mock_base, _mock) = spawn_openai_completion_provider_cache_usage_mock().await;
+    let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
+    let mut config = config_with_alias(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        alias_model,
+        upstream_model,
+    );
+    config.hooks = HookConfig {
+        max_pending_bytes: 100 * 1024 * 1024,
+        timeout: Duration::from_secs(3),
+        failure_threshold: 3,
+        cooldown: Duration::from_secs(300),
+        exchange: None,
+        usage: Some(HookEndpointConfig {
+            url: format!("{hook_base}/hook"),
+            authorization: None,
+        }),
+    };
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = Client::new();
+    let res = client
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": alias_model,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let public_body: Value = res.json().await.unwrap();
+
+    assert_eq!(public_body["model"], upstream_model);
+    assert!(public_body.get("provider_cache_usage").is_none());
+    assert_eq!(
+        public_body["usage"]["prompt_tokens_details"]["cached_tokens"],
+        128
+    );
+
+    let payloads = wait_for_hook_payloads(&captured, 1).await;
+    let usage = payloads
+        .iter()
+        .find(|payload| payload.get("usage").is_some())
+        .unwrap();
+
+    assert_eq!(usage["client_format"], "openai-completion");
+    assert_eq!(usage["upstream_format"], "openai-completion");
+    assert_eq!(usage["client_model"], alias_model);
+    assert_eq!(usage["upstream_model"], upstream_model);
+    assert_llmup_external_contract(&usage["llmup"], "constructed", "none");
+    assert_eq!(usage["usage"]["cached_input_tokens"], 128);
+    assert!(
+        usage.get("provider_cache_usage").is_none(),
+        "payload = {usage}"
+    );
+}
+
+#[tokio::test]
+async fn provider_cache_usage_usage_hook_omits_non_stream_cross_protocol_client_visible_source_fields(
+) {
+    let (mock_base, _mock) = spawn_openai_responses_provider_cache_usage_mock().await;
+    let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiResponses);
+    config.hooks = HookConfig {
+        max_pending_bytes: 100 * 1024 * 1024,
+        timeout: Duration::from_secs(3),
+        failure_threshold: 3,
+        cooldown: Duration::from_secs(300),
+        exchange: None,
+        usage: Some(HookEndpointConfig {
+            url: format!("{hook_base}/hook"),
+            authorization: None,
+        }),
+    };
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = Client::new();
+    let res = client
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": "gpt-4",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let public_body: Value = res.json().await.unwrap();
+
+    assert_eq!(
+        public_body["usage"]["prompt_tokens_details"]["cached_tokens"],
+        128
+    );
+
+    let payloads = wait_for_hook_payloads(&captured, 1).await;
+    let usage = payloads
+        .iter()
+        .find(|payload| payload.get("usage").is_some())
+        .unwrap();
+
+    assert_eq!(usage["client_format"], "openai-completion");
+    assert_eq!(usage["upstream_format"], "openai-responses");
+    assert_eq!(usage["usage"]["cached_input_tokens"], 128);
+    assert!(
+        usage.get("provider_cache_usage").is_none(),
+        "payload = {usage}"
+    );
 }
 
 #[tokio::test]
