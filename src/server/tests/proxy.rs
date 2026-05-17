@@ -1903,17 +1903,33 @@ async fn request_processing_observability_marks_local_state_capture_and_expansio
         "capture_candidate"
     );
     assert!(request_entries[0]["llmup"].get("state_bridge").is_none());
+    let capture_detail = &request_entries[0]["request"]["conversation_state_bridge"];
+    assert_eq!(capture_detail["operation"], "capture");
+    assert_eq!(capture_detail["capture_result"], "candidate");
+    assert_eq!(capture_detail["request_item_count"], 1);
+    assert_eq!(capture_detail["max_bytes"], 256 * 1024 * 1024);
+
     assert_eq!(
         request_entries[1]["llmup"]["local_state_handling"],
         "expanded"
     );
     assert!(request_entries[1]["llmup"].get("state_bridge").is_none());
+    let replay_detail = &request_entries[1]["request"]["conversation_state_bridge"];
+    assert_eq!(replay_detail["operation"], "replay");
+    assert_eq!(replay_detail["lookup_result"], "hit");
+    assert_eq!(replay_detail["stored_item_count"], 2);
+    assert_eq!(replay_detail["current_item_count"], 1);
+    assert_eq!(replay_detail["expanded_item_count"], 3);
 
     let hook_payloads = wait_for_hook_payload_count(&hook_payloads, 2).await;
     let mut hook_local_state_handlings = hook_payloads
         .iter()
         .map(|payload| {
             assert!(payload["llmup"].get("state_bridge").is_none());
+            assert!(
+                !json_contains_key(payload, "conversation_state_bridge"),
+                "hook payload must not contain debug trace state bridge detail: {payload:?}"
+            );
             payload["llmup"]["local_state_handling"]
                 .as_str()
                 .expect("hook payload local_state_handling")
@@ -2962,6 +2978,10 @@ fn request_processing_serializes_local_state_handling_only_when_active() {
         inactive.get("local_state_handling").is_none(),
         "inactive llmup = {inactive:?}"
     );
+    assert!(
+        inactive.get("conversation_state_bridge").is_none(),
+        "inactive llmup = {inactive:?}"
+    );
 
     for (state_bridge, expected) in [
         (StateBridgeModifier::CaptureCandidate, "capture_candidate"),
@@ -2973,6 +2993,10 @@ fn request_processing_serializes_local_state_handling_only_when_active() {
         assert_eq!(active["local_state_handling"], expected);
         assert!(
             active.get("state_bridge").is_none(),
+            "active llmup = {active:?}"
+        );
+        assert!(
+            active.get("conversation_state_bridge").is_none(),
             "active llmup = {active:?}"
         );
     }

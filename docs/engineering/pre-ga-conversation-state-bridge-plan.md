@@ -397,7 +397,7 @@ struct BridgeResponse {
 
 - proxy-key owner 隔离不新增用户配置，继续由 data-auth runtime generation/auth kind 形成简单边界。
 - route/config fingerprint 不对外暴露为产品功能；配置更新即旧 local state fail closed，不做迁移、持久化或 fallback。
-- debug trace 需要补齐状态 ID、展开条数和 fail reason 等细粒度 metadata。
+- debug trace 已补齐正常路径 request metadata：first-request capture candidate 和 continuation replay hit/expanded item counts。early lookup failure（miss/expired/owner_mismatch）当前发生在 debug request entry 创建前，需要单独小设计；新增的 `request.conversation_state_bridge` metadata 不记录状态 ID、prompt 文本、owner hash、provider key、route fingerprint 或 namespace revision。
 
 内存保护：
 
@@ -425,8 +425,9 @@ Current-main delivery status:
 - Delivered slice: prompt-cache 顶层显式映射已交付，包括 OpenAI-family -> Anthropic `extra_body.anthropic.cache_control`、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention`；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
 - Delivered slice: usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` source-field telemetry；cross-protocol translated routes 和 same-format constructed routes 暂不输出，且该 telemetry 不参与 cache store、lookup、key、eviction、response reuse、routing 或 fallback。
 - Delivered slice: shared detector / trace cleanup 已交付；Responses stateful controls 和 provider prompt-cache coarse detection 已收敛到共享只读 helper，外部 trace/hook enum 值不变。
+- Delivered slice: Conversation State Bridge 正常路径 debug trace request metadata 已交付；first request 记录 capture candidate、request item count、max_bytes，continuation 记录 replay hit、stored/current/expanded item counts。hook 和外部 `llmup` 仍只暴露 coarse `local_state_handling`，early lookup failure trace 需要单独小设计。
 - Handoff guardrail: 当前 handoff 不继续扩展 prompt-cache request-control；custom tool replay 和 `provider_cache_usage` telemetry 已交付，不再作为下一步前置项。
-- Next: 细粒度 trace metadata consolidation。Streaming continuation capture 仅作为后续扩展，不是当前 handoff 第一项。
+- Next: early lookup failure trace 小设计。Streaming continuation capture 仅作为后续扩展，不是当前 handoff 第一项。
 
 ### Phase 0：合同冻结与文档更新
 
@@ -523,7 +524,8 @@ Current-main delivery status:
 
 - 实现 TTL 惰性清理或轻量周期清理。
 - 实现全局 `max_bytes` 检查。
-- 在 debug trace 中记录 bridge enabled、state hit/miss/expired/owner_mismatch、replay item count。
+- 在 debug trace 正常 request 路径中记录 capture candidate 和 replay hit/expanded item counts。
+- state miss/expired/owner_mismatch 当前是 debug request entry 之前的 early 400；如需 trace，需要单独设计早期失败 entry。
 - 确认 hook/debug 不包含状态内容。
 - 已完成 `background` / `store` enabled-semantics alignment 和 shared detector cleanup：`background:false|null` 和 `store:false|null` 不触发 provider-owned stateful fail-closed；`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。剩余工作只包括细粒度 trace metadata 以及其它 consolidation。
 

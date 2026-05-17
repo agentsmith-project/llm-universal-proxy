@@ -65,6 +65,76 @@ pub struct DebugTraceContext {
     pub llmup: RequestProcessingInfo,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ConversationStateBridgeDebugTrace {
+    operation: ConversationStateBridgeDebugOperation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_result: Option<ConversationStateBridgeCaptureResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lookup_result: Option<ConversationStateBridgeLookupResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_item_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stored_item_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_item_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expanded_item_count: Option<usize>,
+}
+
+impl ConversationStateBridgeDebugTrace {
+    pub(crate) fn capture_candidate(request_item_count: usize, max_bytes: usize) -> Self {
+        Self {
+            operation: ConversationStateBridgeDebugOperation::Capture,
+            capture_result: Some(ConversationStateBridgeCaptureResult::Candidate),
+            lookup_result: None,
+            request_item_count: Some(request_item_count),
+            max_bytes: Some(max_bytes),
+            stored_item_count: None,
+            current_item_count: None,
+            expanded_item_count: None,
+        }
+    }
+
+    pub(crate) fn replay_hit(
+        stored_item_count: usize,
+        current_item_count: usize,
+        expanded_item_count: usize,
+    ) -> Self {
+        Self {
+            operation: ConversationStateBridgeDebugOperation::Replay,
+            capture_result: None,
+            lookup_result: Some(ConversationStateBridgeLookupResult::Hit),
+            request_item_count: None,
+            max_bytes: None,
+            stored_item_count: Some(stored_item_count),
+            current_item_count: Some(current_item_count),
+            expanded_item_count: Some(expanded_item_count),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConversationStateBridgeDebugOperation {
+    Capture,
+    Replay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConversationStateBridgeCaptureResult {
+    Candidate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConversationStateBridgeLookupResult {
+    Hit,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum TracePhase {
@@ -393,12 +463,38 @@ impl DebugTraceRecorder {
         original_body: &Value,
         upstream_body: &Value,
     ) {
+        self.record_request_with_upstream_inner(ctx, original_body, upstream_body, None);
+    }
+
+    pub(crate) fn record_request_with_upstream_and_bridge_trace(
+        &self,
+        ctx: &DebugTraceContext,
+        original_body: &Value,
+        upstream_body: &Value,
+        conversation_state_bridge: Option<&ConversationStateBridgeDebugTrace>,
+    ) {
+        self.record_request_with_upstream_inner(
+            ctx,
+            original_body,
+            upstream_body,
+            conversation_state_bridge,
+        );
+    }
+
+    fn record_request_with_upstream_inner(
+        &self,
+        ctx: &DebugTraceContext,
+        original_body: &Value,
+        upstream_body: &Value,
+        conversation_state_bridge: Option<&ConversationStateBridgeDebugTrace>,
+    ) {
         let mut request = json!({
             "new_items": extract_request_delta(ctx.client_format, original_body, self.max_text_chars),
             "client_summary": summarize_request_body(ctx.client_format, original_body, self.max_text_chars),
             "upstream_summary": summarize_request_body(ctx.upstream_format, upstream_body, self.max_text_chars)
         });
         insert_prompt_cache_request_control(&mut request, ctx, original_body, upstream_body);
+        insert_conversation_state_bridge_detail(&mut request, conversation_state_bridge);
         self.write_entry(json!({
             "timestamp_ms": ctx.timestamp_ms,
             "request_id": ctx.request_id,
@@ -755,6 +851,21 @@ fn insert_prompt_cache_request_control(
     };
     if let Some(object) = request.as_object_mut() {
         object.insert("prompt_cache_request_control".to_string(), detail);
+    }
+}
+
+fn insert_conversation_state_bridge_detail(
+    request: &mut Value,
+    detail: Option<&ConversationStateBridgeDebugTrace>,
+) {
+    let Some(detail) = detail else {
+        return;
+    };
+    let Ok(detail) = serde_json::to_value(detail) else {
+        return;
+    };
+    if let Some(object) = request.as_object_mut() {
+        object.insert("conversation_state_bridge".to_string(), detail);
     }
 }
 

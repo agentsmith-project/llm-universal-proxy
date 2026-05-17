@@ -18,7 +18,7 @@ use serde_json::Value;
 use tracing::{debug, error, warn};
 
 use crate::config::ResolvedModel;
-use crate::debug_trace::DebugTraceContext;
+use crate::debug_trace::{ConversationStateBridgeDebugTrace, DebugTraceContext};
 use crate::downstream::DownstreamCancellation;
 use crate::formats::UpstreamFormat;
 use crate::hooks::{
@@ -188,6 +188,12 @@ struct BridgeCaptureCandidate {
     ttl_seconds: u64,
     max_bytes: usize,
     local_response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct BridgePreparation {
+    capture_candidate: Option<BridgeCaptureCandidate>,
+    debug_trace: Option<ConversationStateBridgeDebugTrace>,
 }
 
 type BridgeCommitFuture = Pin<Box<dyn Future<Output = Result<Option<String>, String>> + Send>>;
@@ -1025,7 +1031,7 @@ async fn handle_request_core_with_downstream_cancellation(
     }
 
     let bridge_was_expanded = preloaded_bridge_response.is_some();
-    let bridge_capture_candidate = match prepare_conversation_state_bridge(
+    let bridge_preparation = match prepare_conversation_state_bridge(
         &namespace_state,
         &namespace,
         &bridge_owner_hash,
@@ -1051,6 +1057,10 @@ async fn handle_request_core_with_downstream_cancellation(
             );
         }
     };
+    let BridgePreparation {
+        capture_candidate: bridge_capture_candidate,
+        debug_trace: bridge_debug_trace,
+    } = bridge_preparation;
 
     let original_body = body.clone();
     let stateful_responses_controls = responses_stateful_request_controls(&original_body);
@@ -1229,10 +1239,11 @@ async fn handle_request_core_with_downstream_cancellation(
         });
     if let (Some(recorder), Some(ctx)) = (namespace_state.debug_trace.as_ref(), debug_ctx.as_ref())
     {
-        recorder.record_request_with_upstream(
+        recorder.record_request_with_upstream_and_bridge_trace(
             ctx,
             &redacted_original_body,
             &request_redactor.redact_value(&upstream_request_body),
+            bridge_debug_trace.as_ref(),
         );
     }
 
@@ -1916,11 +1927,11 @@ async fn prepare_conversation_state_bridge(
     route_config_fingerprint: BridgeRouteConfigFingerprint,
     preloaded_response: Option<StoredBridgeResponse>,
     body: &mut Value,
-) -> Result<Option<BridgeCaptureCandidate>, String> {
+) -> Result<BridgePreparation, String> {
     if client_format != UpstreamFormat::OpenAiResponses
         || upstream_format == UpstreamFormat::OpenAiResponses
     {
-        return Ok(None);
+        return Ok(BridgePreparation::default());
     }
 
     if provider_state_control_enabled(body.get("store")) {
@@ -1941,47 +1952,70 @@ async fn prepare_conversation_state_bridge(
         );
     }
 
+    let mut debug_trace = None;
     let request_items = if let Some(previous) = preloaded_response {
+        let stored_item_count = previous.transcript_items.len();
         let current_items = responses_bridge_input_items_from_body(body)?;
+        let current_item_count = current_items.len();
         validate_bridge_continuation_items(&previous.transcript_items, &current_items)?;
         let mut expanded = previous.transcript_items;
         expanded.extend(current_items);
+        let expanded_item_count = expanded.len();
         set_responses_input_items(body, expanded.clone())?;
         remove_local_bridge_state_controls(body);
+        debug_trace = Some(ConversationStateBridgeDebugTrace::replay_hit(
+            stored_item_count,
+            current_item_count,
+            expanded_item_count,
+        ));
         expanded
     } else if has_previous_response_id {
-        return Ok(None);
+        return Ok(BridgePreparation::default());
     } else {
         match responses_bridge_input_items_from_body(body) {
             Ok(items) => {
                 if bridge_items_include_tool_output(&items) {
                     remove_local_bridge_state_controls(body);
-                    return Ok(None);
+                    return Ok(BridgePreparation::default());
                 }
                 remove_local_bridge_state_controls(body);
                 items
             }
             Err(_) => {
                 remove_local_bridge_state_controls(body);
-                return Ok(None);
+                return Ok(BridgePreparation::default());
             }
         }
     };
 
     if store_disabled {
-        return Ok(None);
+        return Ok(BridgePreparation {
+            capture_candidate: None,
+            debug_trace,
+        });
     }
-    Ok(Some(BridgeCaptureCandidate {
-        namespace: namespace.to_string(),
-        owner_hash: owner_hash.to_string(),
-        client_model: requested_model.to_string(),
-        resolved_model: resolved_model.clone(),
-        route_config_fingerprint,
-        request_items,
-        ttl_seconds: namespace_state.config.conversation_state_bridge.ttl_seconds,
-        max_bytes: namespace_state.config.conversation_state_bridge.max_bytes,
-        local_response_id: stream.then(ConversationStateBridgeStore::mint_response_id),
-    }))
+
+    let max_bytes = namespace_state.config.conversation_state_bridge.max_bytes;
+    if debug_trace.is_none() {
+        debug_trace = Some(ConversationStateBridgeDebugTrace::capture_candidate(
+            request_items.len(),
+            max_bytes,
+        ));
+    }
+    Ok(BridgePreparation {
+        capture_candidate: Some(BridgeCaptureCandidate {
+            namespace: namespace.to_string(),
+            owner_hash: owner_hash.to_string(),
+            client_model: requested_model.to_string(),
+            resolved_model: resolved_model.clone(),
+            route_config_fingerprint,
+            request_items,
+            ttl_seconds: namespace_state.config.conversation_state_bridge.ttl_seconds,
+            max_bytes,
+            local_response_id: stream.then(ConversationStateBridgeStore::mint_response_id),
+        }),
+        debug_trace,
+    })
 }
 
 fn responses_store_requires_native_responses_message(upstream_format: UpstreamFormat) -> String {
