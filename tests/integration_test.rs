@@ -5319,6 +5319,43 @@ async fn responses_store_true_fails_closed_on_live_proxy_path() {
 }
 
 #[tokio::test]
+async fn openai_chat_to_anthropic_explicit_cache_control_reaches_upstream_top_level_without_extra_body(
+) {
+    let (mock_base, _mock, captured) = spawn_auth_capture_anthropic_mock().await;
+    let config = proxy_config(&mock_base, UpstreamFormat::Anthropic);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let res = Client::new()
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": {
+                "anthropic": {
+                    "cache_control": { "type": "ephemeral", "ttl": "1h" }
+                }
+            },
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let requests = captured.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].body["cache_control"],
+        json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+    assert!(
+        requests[0].body.get("extra_body").is_none(),
+        "upstream body = {:?}",
+        requests[0].body
+    );
+}
+
+#[tokio::test]
 async fn anthropic_namespace_messages_works() {
     let (mock_base, _mock) = spawn_anthropic_mock().await;
     let config = proxy_config(&mock_base, UpstreamFormat::Anthropic);
@@ -7765,6 +7802,7 @@ async fn concurrent_openai_to_anthropic_requests_keep_headers_isolated_without_i
         assert_eq!(version, Some("2023-06-01"));
 
         assert_eq!(req.body["stream"], false);
+        assert!(req.body.get("cache_control").is_none());
 
         let system = req.body["system"]
             .as_array()

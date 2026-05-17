@@ -39,7 +39,7 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 
 1. Current slice delivered：已完成 Responses stateful-control detector 的 `background` / `store` enabled-semantics alignment / translation-boundary unification slice。
 2. Route/config owner hardening delivered：状态桥 continuation 已用内部 route/config fingerprint 和 namespace revision 做当前 runtime 复校验，drift 在 upstream dispatch 前 400 fail closed；fingerprint 不是用户配置或产品功能。
-3. Prompt-cache explicit support next：在 3 协议矩阵上做 explicit provider-native prompt-cache request-control support。
+3. Prompt-cache delivered/pending split：OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射已交付；下一步是在 3 协议矩阵上做 broader prompt-cache translated support，并把 future reviewed `auto_safe` 继续留作后续评审。
 4. Tool/custom tool replay 和 stream capture later；`auto_safe` synthesis 和 routing-affinity 继续延后评审。
 
 如果必须完全并行开发，其他两个 workstream 必须把所有 Gemini 相关改动视为 remove-native-gemini workstream 的独占范围，不再添加新的 Gemini cache/state 测试或 helper。
@@ -58,7 +58,7 @@ Native Gemini 是当前复杂度最高、收益最低的一条协议线：
 
 - Prompt-cache 计划不再需要处理 Gemini `cachedContent` 生命周期、`extra_body.google.cached_content` 透传和 Gemini cache handle 跨协议失败问题。
 - Conversation state bridge 不再需要把 OpenAI Responses replay 到 Gemini `generateContent`。
-- Zero-transform forwarding 矩阵从 4x4 收敛到 3x3，测试和文档都更容易稳定。
+- 内部 raw same-protocol forwarding 判断矩阵从 4x4 收敛到 3x3，测试和文档都更容易稳定。
 
 ## 保留什么
 
@@ -77,7 +77,7 @@ upstreams:
 这条路径的原则：
 
 - 它是 OpenAI-compatible wire protocol，不是 Gemini format。
-- 同协议时可以内部标记为 OpenAI Chat `RequestTransformationNotRequired`，并使用 raw same-protocol forwarding 优化；前提是不需要 body mutation。这个标记只是内部 request-processing fact，不是用户可选产品行为。
+- 同协议且不需要 body mutation 时，可以内部判定为 OpenAI Chat `RequestTransformationNotRequired` 并使用 raw same-protocol forwarding 优化。这个判定只是内部 request-processing fact，不是用户可选产品行为。
 - Gemini 模型名，例如 `gemini-3-flash-preview`，只是 model string，不让 `llmup` 进入 Gemini-native adapter。
 - OpenAI-compatible provider extensions 默认不做特殊支持；如果以后确实需要，必须单独做范围评审。
 
@@ -340,7 +340,7 @@ upstreams:
 换来的收益：
 
 - 协议矩阵从 4x4 降到 3x3。
-- Zero-transform forwarding 定义更清楚。
+- 内部 raw same-protocol forwarding 边界更清楚。
 - Prompt-cache 计划避免 Gemini provider resource lifecycle。
 - State bridge 不需要兼容 Gemini opaque state。
 - 测试、文档、用户配置、错误模型都更容易理解。

@@ -1079,6 +1079,18 @@ pub(super) fn responses_to_messages(
             normalized_output_shape_to_openai_response_format(output_shape),
         );
     }
+    if target_format == UpstreamFormat::Anthropic {
+        if let Some(cache_control) = controls.anthropic_cache_control.as_ref() {
+            out.insert(
+                "extra_body".to_string(),
+                serde_json::json!({
+                    "anthropic": {
+                        "cache_control": cache_control
+                    }
+                }),
+            );
+        }
+    }
 
     // Convert tools from Responses API format to Chat Completions format.
     // Stable-name bridge rewrites Responses custom tools into canonical wrapper function tools.

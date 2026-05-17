@@ -1892,6 +1892,9 @@ fn openai_to_claude(body: &mut Value) -> Result<(), String> {
     if let Some(metadata) = body.get("metadata") {
         result["metadata"] = metadata.clone();
     }
+    if let Some(cache_control) = controls.anthropic_cache_control.as_ref() {
+        result["cache_control"] = cache_control.clone();
+    }
     if let Some(tool_policy) = controls.tool_policy.as_ref() {
         result["tool_choice"] = normalized_tool_policy_to_claude_tool_choice(
             tool_policy,

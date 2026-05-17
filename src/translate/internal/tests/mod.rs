@@ -3507,6 +3507,42 @@ fn translate_request_openai_to_claude_has_system_and_messages() {
 }
 
 #[test]
+fn translate_request_openai_to_claude_maps_extra_body_anthropic_cache_control_to_top_level() {
+    let mut body = json!({
+        "model": "claude-3",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "anthropic": {
+                "cache_control": { "type": "ephemeral", "ttl": "5m" }
+            }
+        }
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::Anthropic,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        body["cache_control"],
+        json!({ "type": "ephemeral", "ttl": "5m" })
+    );
+    assert!(body.get("extra_body").is_none(), "body = {body:?}");
+    let messages = body["messages"].as_array().expect("messages");
+    let user_blocks = messages[0]["content"].as_array().expect("user content");
+    assert!(
+        user_blocks
+            .iter()
+            .all(|block| block.get("cache_control").is_none()),
+        "block-level cache_control must not be synthesized: {body:?}"
+    );
+}
+
+#[test]
 fn translate_request_openai_to_claude_preserves_unsigned_thinking_without_replay_provenance() {
     let mut body = json!({
         "model": "claude-3",
@@ -4564,6 +4600,38 @@ fn translate_request_responses_to_claude_maps_json_schema_output_shape() {
 }
 
 #[test]
+fn translate_request_responses_to_claude_maps_extra_body_anthropic_cache_control_to_top_level() {
+    let mut body = json!({
+        "model": "claude-3",
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{ "type": "input_text", "text": "Hi" }]
+        }],
+        "extra_body": {
+            "anthropic": {
+                "cache_control": { "type": "ephemeral", "ttl": "1h" }
+            }
+        }
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::Anthropic,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(
+        body["cache_control"],
+        json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+    assert!(body.get("extra_body").is_none(), "body = {body:?}");
+}
+
+#[test]
 fn translate_request_openai_json_object_output_shape_to_claude_rejects() {
     for (client_format, mut body) in [
         (
@@ -4822,6 +4890,294 @@ fn assess_request_translation_openai_to_anthropic_warns_on_prediction_and_web_se
         joined.contains("web_search_options"),
         "warnings = {warnings:?}"
     );
+}
+
+#[test]
+fn translate_request_openai_to_claude_rejects_invalid_extra_body_anthropic_cache_control() {
+    let cases = [
+        ("non_object", json!("ephemeral")),
+        ("missing_type", json!({ "ttl": "5m" })),
+        ("wrong_type", json!({ "type": "persistent" })),
+        ("bad_ttl", json!({ "type": "ephemeral", "ttl": "10m" })),
+        ("non_string_ttl", json!({ "type": "ephemeral", "ttl": 300 })),
+        (
+            "unexpected_field",
+            json!({ "type": "ephemeral", "ttl": "5m", "scope": "tools" }),
+        ),
+    ];
+
+    for (label, cache_control) in cases {
+        let mut body = json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": { "anthropic": { "cache_control": cache_control } }
+        });
+
+        let err = translate_request(
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::Anthropic,
+            "claude-3",
+            &mut body,
+            false,
+        )
+        .expect_err("invalid extra_body.anthropic.cache_control should fail closed");
+
+        assert!(
+            err.contains("extra_body.anthropic.cache_control"),
+            "label = {label}, err = {err}"
+        );
+    }
+}
+
+#[test]
+fn translate_request_openai_family_to_non_anthropic_rejects_extra_body_anthropic_cache_control() {
+    for (client_format, upstream_format, mut body) in [
+        (
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiResponses,
+            json!({
+                "model": "gpt-4o",
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "extra_body": {
+                    "anthropic": {
+                        "cache_control": { "type": "ephemeral", "ttl": "5m" }
+                    }
+                }
+            }),
+        ),
+        (
+            UpstreamFormat::OpenAiResponses,
+            UpstreamFormat::OpenAiCompletion,
+            json!({
+                "model": "gpt-4o",
+                "input": "Hi",
+                "extra_body": {
+                    "anthropic": {
+                        "cache_control": { "type": "ephemeral", "ttl": "5m" }
+                    }
+                }
+            }),
+        ),
+    ] {
+        let err = translate_request(client_format, upstream_format, "gpt-4o", &mut body, false)
+            .expect_err(
+                "Anthropic explicit cache control must not be dropped on non-Anthropic targets",
+            );
+
+        assert!(
+            err.contains("extra_body.anthropic.cache_control"),
+            "err = {err}"
+        );
+        assert!(err.contains("Anthropic"), "err = {err}");
+    }
+}
+
+#[test]
+fn translate_request_openai_to_claude_rejects_extra_body_google_cached_content() {
+    for (field, extra_body) in [
+        (
+            "cached_content",
+            json!({ "google": { "cached_content": "cachedContents/abc123" } }),
+        ),
+        (
+            "cachedContent",
+            json!({ "google": { "cachedContent": "cachedContents/abc123" } }),
+        ),
+    ] {
+        let mut body = json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": extra_body
+        });
+
+        let err = translate_request(
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::Anthropic,
+            "claude-3",
+            &mut body,
+            false,
+        )
+        .expect_err("Gemini cached content must fail closed on translated paths");
+
+        assert!(
+            err.contains("extra_body.google"),
+            "field = {field}, err = {err}"
+        );
+    }
+}
+
+#[test]
+fn translate_request_openai_to_claude_rejects_content_part_cache_control() {
+    let mut chat_body = json!({
+        "model": "claude-3",
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "Hi",
+                "cache_control": { "type": "ephemeral" }
+            }]
+        }]
+    });
+
+    let chat_err = translate_request(
+        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::Anthropic,
+        "claude-3",
+        &mut chat_body,
+        false,
+    )
+    .expect_err("OpenAI Chat content-part cache_control should fail closed");
+    assert!(chat_err.contains("cache_control"), "err = {chat_err}");
+
+    let mut responses_body = json!({
+        "model": "claude-3",
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "Hi",
+                "cache_control": { "type": "ephemeral" }
+            }]
+        }]
+    });
+
+    let responses_err = translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::Anthropic,
+        "claude-3",
+        &mut responses_body,
+        false,
+    )
+    .expect_err("OpenAI Responses content-part cache_control should fail closed");
+    assert!(
+        responses_err.contains("cache_control"),
+        "err = {responses_err}"
+    );
+}
+
+#[test]
+fn translate_request_openai_to_claude_rejects_known_tool_cache_control_positions() {
+    for (label, mut body) in [
+        (
+            "tool_definition",
+            json!({
+                "model": "claude-3",
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_weather",
+                        "parameters": { "type": "object", "properties": {} }
+                    },
+                    "cache_control": { "type": "ephemeral" }
+                }]
+            }),
+        ),
+        (
+            "assistant_tool_call",
+            json!({
+                "model": "claude-3",
+                "messages": [{
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_weather",
+                            "arguments": "{\"city\":\"Tokyo\"}"
+                        },
+                        "cache_control": { "type": "ephemeral" }
+                    }]
+                }]
+            }),
+        ),
+        (
+            "tool_result",
+            json!({
+                "model": "claude-3",
+                "messages": [{
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": "sunny",
+                    "cache_control": { "type": "ephemeral" }
+                }]
+            }),
+        ),
+    ] {
+        let err = translate_request(
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::Anthropic,
+            "claude-3",
+            &mut body,
+            false,
+        )
+        .expect_err("known OpenAI Chat tool cache_control positions should fail closed");
+
+        assert!(
+            err.contains("cache_control"),
+            "label = {label}, err = {err}"
+        );
+    }
+}
+
+#[test]
+fn translate_request_responses_to_claude_rejects_known_tool_cache_control_positions() {
+    for (label, mut body) in [
+        (
+            "tool_definition",
+            json!({
+                "model": "claude-3",
+                "input": "Hi",
+                "tools": [{
+                    "type": "function",
+                    "name": "lookup_weather",
+                    "parameters": { "type": "object", "properties": {} },
+                    "cache_control": { "type": "ephemeral" }
+                }]
+            }),
+        ),
+        (
+            "function_call",
+            json!({
+                "model": "claude-3",
+                "input": [{
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup_weather",
+                    "arguments": "{\"city\":\"Tokyo\"}",
+                    "cache_control": { "type": "ephemeral" }
+                }]
+            }),
+        ),
+        (
+            "function_call_output",
+            json!({
+                "model": "claude-3",
+                "input": [{
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "sunny",
+                    "cache_control": { "type": "ephemeral" }
+                }]
+            }),
+        ),
+    ] {
+        let err = translate_request(
+            UpstreamFormat::OpenAiResponses,
+            UpstreamFormat::Anthropic,
+            "claude-3",
+            &mut body,
+            false,
+        )
+        .expect_err("known OpenAI Responses tool cache_control positions should fail closed");
+
+        assert!(
+            err.contains("cache_control"),
+            "label = {label}, err = {err}"
+        );
+    }
 }
 
 #[test]

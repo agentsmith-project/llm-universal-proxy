@@ -2427,6 +2427,50 @@ fn classify_request_processing_preserves_openai_family_prompt_cache_across_trans
 }
 
 #[test]
+fn classify_request_processing_marks_openai_to_anthropic_explicit_cache_control_extension_as_mapped(
+) {
+    let chat_body = serde_json::json!({
+        "model": "claude-3",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "anthropic": {
+                "cache_control": { "type": "ephemeral", "ttl": "5m" }
+            }
+        }
+    });
+    let chat_to_anthropic =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::Anthropic,
+            &chat_body,
+        ));
+    assert_eq!(
+        serde_json::to_value(chat_to_anthropic.provider_native_prompt_cache).unwrap(),
+        serde_json::json!("explicit_extension_mapped")
+    );
+
+    let responses_body = serde_json::json!({
+        "model": "claude-3",
+        "input": "Hi",
+        "extra_body": {
+            "anthropic": {
+                "cache_control": { "type": "ephemeral", "ttl": "1h" }
+            }
+        }
+    });
+    let responses_to_anthropic =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiResponses,
+            crate::formats::UpstreamFormat::Anthropic,
+            &responses_body,
+        ));
+    assert_eq!(
+        serde_json::to_value(responses_to_anthropic.provider_native_prompt_cache).unwrap(),
+        serde_json::json!("explicit_extension_mapped")
+    );
+}
+
+#[test]
 fn request_translation_policy_requires_body_mutation_only_for_injecting_policy_hooks() {
     let body = serde_json::json!({
         "model": "gpt-4o-mini",

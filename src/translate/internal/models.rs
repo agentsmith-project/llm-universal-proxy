@@ -145,6 +145,7 @@ pub(crate) struct NormalizedRequestControls {
     pub reasoning_effort: Option<Value>,
     pub prompt_cache_key: Option<Value>,
     pub prompt_cache_retention: Option<Value>,
+    pub anthropic_cache_control: Option<Value>,
     pub safety_identifier: Option<Value>,
     pub parallel_tool_calls: Option<Value>,
     pub store: Option<Value>,

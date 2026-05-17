@@ -102,7 +102,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 3. 只保存可重放会话事件，不保存可直接返回给用户的响应缓存条目。
 4. 不服务缓存响应。每次客户端请求都必须调用目标 provider 生成新响应。
 5. 不反解 provider-private state。`encrypted_content`、opaque reasoning、provider compact state 等不能跨协议重建。
-6. 不在 zero-transform forwarding 中启用。native OpenAI Responses upstream 继续透传 provider state；状态桥只在需要请求构造/转换的路径上展开本地 state。
+6. 不在内部 raw same-protocol forwarding 路径中启用。native OpenAI Responses upstream 继续透传 provider state；状态桥只在需要请求构造/转换的路径上展开本地 state。
 7. 明确最小 owner 边界。namespace 和认证主体必须参与状态隔离，避免不同调用方互相读取状态。
 8. 只实现简单 TTL 和全局最大内存占用。状态过期、进程重启、状态不存在时直接 fail closed。
 9. `store: false` 默认不保存状态。
@@ -373,7 +373,7 @@ Post-MVP 支持：
 
 1. Conversation state 展开。
 2. Source -> target protocol translation。
-3. Provider prompt-cache optimization。
+3. Provider-native prompt-cache request-control support。
 4. Upstream request。
 
 ## 安全与隔离
@@ -413,14 +413,14 @@ Current-main delivery status:
 - Delivered: Phase 0/1/2 的配置、内存 store、`resp_llmup_*`、TTL/max_bytes、owner hash、非流式 text-only capture/replay。
 - Delivered slice: Phase 5 中的 `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice。
 - Delivered slice: route/config owner hardening，包括内部 route/config fingerprint、当前 runtime 复校验、drift pre-dispatch 400 fail closed，以及未变配置下的 no-model single-upstream replay。
-- Pending next: prompt-cache explicit support 的集成。
+- Pending next: broader prompt-cache translated support；OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射已交付，future reviewed `auto_safe` 仍留作后续评审。
 - Later: Phase 3 tool/custom tool replay、Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation。
 
 ### Phase 0：合同冻结与文档更新
 
 交付：
 
-- 更新 `CONSTITUTION.md`：默认 stateless；可选纯内存 `ConversationStateBridge` 是明确配置的兼容增强。
+- 更新 `CONSTITUTION.md`：默认 stateless；可选纯内存 `ConversationStateBridge` 是最大安全兼容策略下明确配置的 state expansion 能力。
 - 更新 state-continuity docs：区分 provider-owned state、llmup-owned bridge state、cache。
 - 新增配置 schema 文档和默认关闭说明。
 
@@ -549,7 +549,7 @@ Post-MVP 覆盖：
 
 推荐下一步顺序：
 
-1. Prompt-cache explicit support next：在已交付的状态展开与 route/config owner 绑定上，接入 explicit provider-native prompt-cache request-control support。
+1. Broader prompt-cache translated support next：在已交付的状态展开、route/config owner 绑定，以及 OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射上，继续推进更广的 translated support；future reviewed `auto_safe` 仍留作后续评审。
 2. Tool/custom tool replay later：之后再评估 function_call/custom_tool_call、tool output、reasoning summary replay。
 3. Stream capture later：最后再评估 streaming response capture 和本地 Conversations API bridge。
 

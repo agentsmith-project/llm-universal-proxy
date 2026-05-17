@@ -16,6 +16,10 @@ use super::models::{
     NormalizedLogprobsControls, NormalizedOpenAiAudioContract, NormalizedOpenAiFamilyToolDef,
     SemanticToolKind, SharedControlProfile, TranslationAssessment,
 };
+use super::openai_family::{
+    openai_extra_body_anthropic_cache_control, openai_extra_body_google_cached_content,
+    validated_openai_extra_body_anthropic_cache_control,
+};
 use super::openai_responses::{
     responses_compaction_summary_text, responses_input_item_is_compaction,
     responses_input_item_is_message, responses_input_item_type, responses_reasoning_summary_text,
@@ -56,6 +60,151 @@ pub(super) fn responses_stateful_request_controls_for_translate(body: &Value) ->
 
 fn stateful_control_is_enabled(value: Option<&Value>) -> bool {
     !matches!(value, None | Some(Value::Null) | Some(Value::Bool(false)))
+}
+
+fn openai_family_format(format: UpstreamFormat) -> bool {
+    matches!(
+        format,
+        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
+    )
+}
+
+fn assess_openai_family_prompt_cache_extensions(
+    assessment: &mut TranslationAssessment,
+    client_format: UpstreamFormat,
+    upstream_format: UpstreamFormat,
+    body: &Value,
+) {
+    if !openai_family_format(client_format) || client_format == upstream_format {
+        return;
+    }
+
+    if openai_extra_body_google_cached_content(body).is_some() {
+        assessment.reject(format!(
+            "extra_body.google.cached_content requires Gemini cache scope and cannot be translated to {}; the proxy does not map Gemini cached content",
+            translation_target_label(upstream_format)
+        ));
+    }
+
+    if openai_extra_body_anthropic_cache_control(body).is_some() {
+        if upstream_format != UpstreamFormat::Anthropic {
+            assessment.reject(format!(
+                "extra_body.anthropic.cache_control is an explicit Anthropic prompt-cache control and cannot be translated to {}; target Anthropic is required",
+                translation_target_label(upstream_format)
+            ));
+        } else if let Err(message) = validated_openai_extra_body_anthropic_cache_control(body) {
+            assessment.reject(message);
+        }
+    }
+
+    if upstream_format == UpstreamFormat::Anthropic {
+        let paths = openai_known_cache_control_paths(client_format, body);
+        if !paths.is_empty() {
+            let quoted = paths
+                .iter()
+                .map(|path| format!("`{path}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            assessment.reject(format!(
+                "OpenAI block-level/provider `cache_control` is not supported on translated Anthropic paths; use `extra_body.anthropic.cache_control` for top-level Anthropic cache control instead of {quoted}"
+            ));
+        }
+    }
+}
+
+fn openai_known_cache_control_paths(client_format: UpstreamFormat, body: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    match client_format {
+        UpstreamFormat::OpenAiCompletion => {
+            collect_top_level_tool_cache_control_paths(body, &mut paths);
+            if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+                for (message_index, message) in messages.iter().enumerate() {
+                    if let Some(content) = message.get("content") {
+                        collect_content_position_cache_control_paths(
+                            content,
+                            format!("messages[{message_index}].content"),
+                            &mut paths,
+                        );
+                    }
+                    if message.get("role").and_then(Value::as_str) == Some("assistant") {
+                        if let Some(tool_calls) =
+                            message.get("tool_calls").and_then(Value::as_array)
+                        {
+                            for (tool_call_index, tool_call) in tool_calls.iter().enumerate() {
+                                if tool_call.get("cache_control").is_some() {
+                                    paths.push(format!(
+                                        "messages[{message_index}].tool_calls[{tool_call_index}].cache_control"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    if message.get("role").and_then(Value::as_str) == Some("tool")
+                        && message.get("cache_control").is_some()
+                    {
+                        paths.push(format!("messages[{message_index}].cache_control"));
+                    }
+                }
+            }
+        }
+        UpstreamFormat::OpenAiResponses => {
+            collect_top_level_tool_cache_control_paths(body, &mut paths);
+            if let Some(input) = body.get("input").and_then(Value::as_array) {
+                for (item_index, item) in input.iter().enumerate() {
+                    if responses_input_item_is_message(item) {
+                        if let Some(content) = item.get("content") {
+                            collect_content_position_cache_control_paths(
+                                content,
+                                format!("input[{item_index}].content"),
+                                &mut paths,
+                            );
+                        }
+                    }
+                    if matches!(
+                        responses_input_item_type(item),
+                        Some("function_call" | "function_call_output")
+                    ) && item.get("cache_control").is_some()
+                    {
+                        paths.push(format!("input[{item_index}].cache_control"));
+                    }
+                }
+            }
+        }
+        UpstreamFormat::Anthropic => {}
+    }
+    paths
+}
+
+fn collect_top_level_tool_cache_control_paths(body: &Value, paths: &mut Vec<String>) {
+    if let Some(tools) = body.get("tools").and_then(Value::as_array) {
+        for (tool_index, tool) in tools.iter().enumerate() {
+            if tool.get("cache_control").is_some() {
+                paths.push(format!("tools[{tool_index}].cache_control"));
+            }
+        }
+    }
+}
+
+fn collect_content_position_cache_control_paths(
+    content: &Value,
+    base_path: String,
+    paths: &mut Vec<String>,
+) {
+    match content {
+        Value::Array(parts) => {
+            for (part_index, part) in parts.iter().enumerate() {
+                if part.get("cache_control").is_some() {
+                    paths.push(format!("{base_path}[{part_index}].cache_control"));
+                }
+            }
+        }
+        Value::Object(_) => {
+            if content.get("cache_control").is_some() {
+                paths.push(format!("{base_path}.cache_control"));
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn cross_protocol_store_warning_message(
@@ -1480,6 +1629,13 @@ pub(crate) fn assess_request_translation(
     if client_format == upstream_format {
         return assessment;
     }
+
+    assess_openai_family_prompt_cache_extensions(
+        &mut assessment,
+        client_format,
+        upstream_format,
+        body,
+    );
 
     if let Some(message) =
         cross_protocol_requested_choice_count_message(client_format, upstream_format, body)

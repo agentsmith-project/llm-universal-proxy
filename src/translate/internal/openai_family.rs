@@ -136,6 +136,86 @@ pub(super) fn openai_normalized_decoding_controls(body: &Value) -> NormalizedDec
     }
 }
 
+pub(super) fn openai_extra_body_anthropic_cache_control(body: &Value) -> Option<&Value> {
+    body.get("extra_body")
+        .and_then(|extra_body| extra_body.get("anthropic"))
+        .and_then(|anthropic| anthropic.get("cache_control"))
+}
+
+pub(super) fn openai_extra_body_google_cached_content(body: &Value) -> Option<&Value> {
+    body.get("extra_body")
+        .and_then(|extra_body| extra_body.get("google"))
+        .and_then(|google| {
+            google
+                .get("cached_content")
+                .or_else(|| google.get("cachedContent"))
+        })
+}
+
+pub(super) fn validated_openai_extra_body_anthropic_cache_control(
+    body: &Value,
+) -> Result<Option<Value>, String> {
+    let Some(cache_control) = openai_extra_body_anthropic_cache_control(body) else {
+        return Ok(None);
+    };
+    validate_openai_extra_body_anthropic_cache_control(cache_control)?;
+    Ok(Some(cache_control.clone()))
+}
+
+fn validate_openai_extra_body_anthropic_cache_control(cache_control: &Value) -> Result<(), String> {
+    let Some(object) = cache_control.as_object() else {
+        return Err(openai_extra_body_anthropic_cache_control_message(
+            "value must be an object",
+        ));
+    };
+
+    for key in object.keys() {
+        if key != "type" && key != "ttl" {
+            return Err(openai_extra_body_anthropic_cache_control_message(
+                "only `type` and optional `ttl` are supported",
+            ));
+        }
+    }
+
+    match object.get("type").and_then(Value::as_str) {
+        Some("ephemeral") => {}
+        Some(_) => {
+            return Err(openai_extra_body_anthropic_cache_control_message(
+                "`type` must be \"ephemeral\"",
+            ));
+        }
+        None => {
+            return Err(openai_extra_body_anthropic_cache_control_message(
+                "`type` is required",
+            ));
+        }
+    }
+
+    if let Some(ttl) = object.get("ttl") {
+        match ttl.as_str() {
+            Some("5m" | "1h") => {}
+            Some(_) => {
+                return Err(openai_extra_body_anthropic_cache_control_message(
+                    "`ttl` must be \"5m\" or \"1h\"",
+                ));
+            }
+            None => {
+                return Err(openai_extra_body_anthropic_cache_control_message(
+                    "`ttl` must be a string",
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn openai_extra_body_anthropic_cache_control_message(detail: &str) -> String {
+    format!(
+        "extra_body.anthropic.cache_control must be an object with `type`: \"ephemeral\" and optional `ttl`: \"5m\" or \"1h\"; {detail}"
+    )
+}
+
 pub(super) fn openai_function_tool_name(value: &Value) -> Option<&str> {
     if value.get("type").and_then(Value::as_str) != Some("function") {
         return None;
@@ -349,6 +429,7 @@ pub(super) fn openai_normalized_request_controls(
         reasoning_effort: body.get("reasoning_effort").cloned(),
         prompt_cache_key: body.get("prompt_cache_key").cloned(),
         prompt_cache_retention: body.get("prompt_cache_retention").cloned(),
+        anthropic_cache_control: validated_openai_extra_body_anthropic_cache_control(body)?,
         safety_identifier: body.get("safety_identifier").cloned(),
         parallel_tool_calls: body.get("parallel_tool_calls").cloned(),
         store: body.get("store").cloned(),
@@ -369,6 +450,7 @@ pub(super) fn responses_normalized_request_controls(
         reasoning_effort: responses_reasoning_effort(body),
         prompt_cache_key: body.get("prompt_cache_key").cloned(),
         prompt_cache_retention: body.get("prompt_cache_retention").cloned(),
+        anthropic_cache_control: validated_openai_extra_body_anthropic_cache_control(body)?,
         safety_identifier: body.get("safety_identifier").cloned(),
         parallel_tool_calls: body.get("parallel_tool_calls").cloned(),
         store: body.get("store").cloned(),

@@ -108,11 +108,11 @@ Reasoning effort such as `xhigh` is a client/request-side setting, not part of t
 
 `llmup` gives clients a stable local protocol surface, not unlimited provider equivalence.
 
-- raw same-protocol forwarding is a byte-preserving optimization for routes that can avoid body mutation and response normalization
+- raw same-protocol forwarding is a byte-preserving optimization implemented only as an internal request-processing optimization for routes that can avoid body mutation and response normalization
 - translated paths use a single maximum safe compatibility strategy and may warn or reject non-portable provider-native features
 - fail-closed behavior is a hard portability boundary, not a lower compatibility setting
 - native extensions and provider-owned lifecycle state require native upstream handling unless a documented shim says otherwise
-- Responses reasoning/compaction continuity may warn and drop an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; raw/native forwarding preserves provider-owned state only when implemented as a zero-transformation request-processing optimization
+- Responses reasoning/compaction continuity may warn and drop an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; raw/native forwarding preserves provider-owned state only when implemented as an internal request-processing optimization
 - the quickstart includes conservative text-only `surface_defaults`; turn on search, image, or parallel-tool flags only when that model surface really supports them
 - multimodal `surface.modalities.input` gates media types, not every source transport; HTTP(S) image/PDF URLs are distinct from provider or local URIs such as `gs://`, `s3://`, and `file://`
 - Gemini models remain usable through Google's OpenAI-compatible endpoint by configuring that upstream as `format: openai-completion`; native Gemini `generateContent` wire format is not an active proxy surface
