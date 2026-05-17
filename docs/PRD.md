@@ -34,7 +34,7 @@ Each client tool typically speaks only one protocol. Each upstream endpoint typi
 | Developer using Codex CLI | Wants to use a non-OpenAI model (GLM, MiniMax, Kimi, local vLLM) through Codex's Responses-only interface |
 | Developer using Claude Code | Wants to route Claude Code requests to a non-Anthropic upstream for cost or availability reasons |
 | Team with multiple LLM providers | Wants a single stable endpoint that normalizes model naming across providers |
-| Operator running local models | Wants to expose a local vLLM/Ollama instance to any LLM client tool regardless of protocol |
+| Operator running local models | Wants to expose a local vLLM/Ollama instance through supported public protocol surfaces used by supported client tools |
 | AI infrastructure engineer | Wants an observability layer for request/response auditing and usage metering |
 
 ---

@@ -25,7 +25,7 @@ Make the pre-GA behavior easy to reason about:
 - Maximum safe compatibility is the implementation goal for every route.
 - `RequestTransformationNotRequired` and `RequestTransformationRequired` are internal request-processing classifications, not product behavior.
 - Observability records whether a request needs construction, protocol conversion, or enhancement. Same-protocol requests that do not need mutation use raw provider forwarding as an internal request-processing optimization under the same goal.
-- Provider-native prompt-cache request controls are currently preserved as original payload on supported native paths. Delivered translated slices map OpenAI-family `extra_body.anthropic.cache_control` to Anthropic top-level `cache_control`, and Anthropic-shaped `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` to OpenAI-family target top-level fields. Current main exposes the coarse-grained disposition in debug traces/hooks, emits fine-grained debug trace `request.prompt_cache_request_control` details inside the request object, and fails closed on same-protocol explicit extensions aimed at the wrong provider. Hooks and external `llmup` observability keep only the coarse `provider_prompt_cache_request_control` value. No additional translated cache-control expansion is on the current handoff path.
+- Provider-native prompt-cache request controls are currently preserved as original payload on supported native paths. Delivered translated slices map OpenAI-family `extra_body.anthropic.cache_control` to Anthropic top-level `cache_control`, and Anthropic-shaped `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` to OpenAI-family target top-level fields. Current main exposes the coarse-grained disposition in debug traces/hooks, emits fine-grained debug trace `request.prompt_cache_request_control` details inside the request object, and fails closed on same-protocol explicit extensions aimed at the wrong provider. Hooks and external `llmup` observability keep only the coarse `provider_prompt_cache_request_control` value. No additional translated cache-control expansion is in current deliverables; any expansion is a non-current separate scope review item.
 - The proxy does not cache responses/results, prompts, embeddings, tokens, KV state, or provider cache resources.
 - The proxy does not invent a cross-provider cache abstraction.
 
@@ -170,7 +170,7 @@ There are two different activities:
 
 This plan includes the first activity and excludes the second. An OpenAI `prompt_cache_key` or Anthropic `cache_control` remains a request to the provider; it is not a `llmup` cache.
 
-Keep provider-native prompt-cache request-control facts explicit for the delivered preserve/map/drop behavior. Current main emits fine-grained debug trace request details as `request.prompt_cache_request_control`; hook payloads and external `llmup` observability intentionally remain coarse. A broader shared IR/disposition refactor beyond the delivered behavior is not a current handoff task.
+Keep provider-native prompt-cache request-control facts explicit for the delivered preserve/map/drop behavior. Current main emits fine-grained debug trace request details as `request.prompt_cache_request_control`; hook payloads and external `llmup` observability intentionally remain coarse. Treat these fields as delivered trace vocabulary, not a new prompt-cache IR. Broader mapping or shared-IR work is a non-current separate scope review item.
 
 Tracked facts for the delivered behavior:
 
@@ -206,13 +206,13 @@ Do not:
 - Infer stable/static content from message text meaning.
 - Add Google/Gemini-specific cache extensions, including `cachedContent`, `cached_content`, `cachedContents/*`, or `extra_body.google.cached_content`, in this plan.
 
-### Provider-Native Prompt-Cache Request-Control Disposition
+### Provider-Native Prompt-Cache Request-Control Trace Vocabulary
 
-Prompt-cache behavior is computed internally from the target request shape and explicit provider-native fields. The handoff target is an internal disposition model:
+Prompt-cache trace vocabulary is computed internally from the target request shape and explicit provider-native fields. It describes the delivered preserve/map/omit behavior and does not create a prompt-cache IR:
 
 - `preserved_native`: keep provider-native fields unchanged on same-protocol or OpenAI-family paths where the target can honor them.
 - `explicit_extension_mapped`: map a documented explicit provider-native extension only after the target request shape is known.
-- `dropped`: internal trace disposition for a portability omission; emit a portability warning and omit provider-native cache controls when the target cannot honor them.
+- `dropped`: trace value for a portability omission; emit a portability warning and omit provider-native cache controls when the target cannot honor them.
 
 Explicit provider-native support is an internal implementation detail under the same maximum safe compatibility goal. This plan does not define automatic prompt-cache key or breakpoint insertion.
 
@@ -234,11 +234,11 @@ Already present:
 Known gaps / non-current scope:
 
 - Debug trace request metadata for existing provider prompt-cache preserve/map/drop behavior is delivered as `request.prompt_cache_request_control`. Hook payloads and external `llmup` observability remain coarse by design.
-- Remaining translated provider-native request-control mapping beyond the delivered top-level explicit extensions is intentionally not on the current handoff path.
+- Remaining translated provider-native request-control mapping beyond the delivered top-level explicit extensions is intentionally not in current deliverables.
 - OpenAI-shaped requests routed to Anthropic have only the explicit top-level `extra_body.anthropic.cache_control` mapping.
 - OpenAI-shaped content parts and tool structures routed to Anthropic do not preserve explicit per-block Anthropic `cache_control` extension fields; known attempts fail closed.
 - Anthropic-shaped requests routed to OpenAI can use only the explicit target-provider `extra_body.openai.prompt_cache_key` extension.
-- A broader shared disposition object or additional mapping work requires separate scope review and must not add automatic controls, `llmup` cache behavior, config, or mode.
+- Broader mapping or shared-IR work is a non-current separate scope review item and must not add automatic controls, `llmup` cache behavior, config, or mode.
 - Streaming raw-forwarding coverage should be kept honest in tests, but it is not a prompt-cache handoff expansion.
 
 ### Translated Prompt-Cache Rules
@@ -297,7 +297,7 @@ Disallowed translated support:
 Out-of-scope marker notes:
 
 - Current main does not implement OpenAI-shaped block-marker mapping. Known OpenAI content/tool `cache_control` markers fail closed rather than being silently omitted or partially preserved.
-- Additional translated cache-control mapping is not a current handoff task. Any expansion must start with a separate scope review and must not add automatic markers or `llmup` cache behavior.
+- Additional translated cache-control mapping is not a current deliverable. Any expansion must start with a separate scope review and must not add automatic markers or `llmup` cache behavior.
 - Unsupported or ambiguous markers fail closed when the caller explicitly requested provider prompt caching.
 
 Provider-specific request-control notes:
@@ -383,7 +383,7 @@ Current-main delivery status:
 - Delivered slice: prompt-cache trace/docs guardrails are in place. Debug trace request objects emit fine-grained `request.prompt_cache_request_control` details for existing provider prompt-cache preserve/map/drop behavior; hook payloads and external `llmup` observability remain coarse; `provider_cache_usage` emission rules are unchanged; the field mapping matrix documents explicit mapping, warn/omit, fail-closed, and not-`llmup`-cache guardrails.
 - Delivered dependency: Conversation State Bridge route/config owner hardening is complete. Continuations re-check the current runtime/internal fingerprint before upstream dispatch and fail closed on drift; this fingerprint is not a product feature or user configuration.
 - Delivered dependency: Conversation State Bridge now supports ordinary Responses `function_call` / `function_call_output` and portable `custom_tool_call` / `custom_tool_call_output` local replay for non-streaming translated continuation, visible reasoning summary replay, plus first-response streaming completed visible output capture. Only the first `stream:true` response can commit local replay state after the completed terminal event; later continuation still uses non-streaming replay, and `stream:true` + `previous_response_id` still fails closed.
-- Pending/deferred: no prompt-cache request-control expansion is on the current handoff path. Anything beyond the delivered explicit top-level extensions requires separate scope review. Do not add a policy/config surface for cache-aware routing or automatic provider cache controls.
+- Pending/deferred: no prompt-cache request-control expansion is in current deliverables. Anything beyond the delivered explicit top-level extensions requires separate scope review. Do not add a policy/config surface for cache-aware routing or automatic provider cache controls.
 - Guardrail: raw same-protocol forwarding remains an internal request-processing fact. It must not be documented or handed off as a product behavior.
 
 ### Phase 0: Freeze The Contract
@@ -450,8 +450,8 @@ Acceptance tests:
 
 Deliverables:
 
-- Keep provider-native prompt-cache request-control facts explicit for delivered preserve/map/drop behavior; broader shared IR/disposition refactors are not current handoff work.
-- Add internal prompt-cache disposition tracking after effective route/model resolution.
+- Keep provider-native prompt-cache request-control facts explicit for delivered preserve/map/drop behavior; broader shared-IR work is not a current deliverable and requires non-current separate scope review.
+- Emit the delivered trace vocabulary after effective route/model resolution.
 - Delivered: explicit OpenAI-shaped to Anthropic support for `extra_body.anthropic.cache_control` -> top-level Anthropic `cache_control`.
 - Delivered: explicit Anthropic-shaped to OpenAI-family support for `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` -> OpenAI-family top-level fields.
 - Keep OpenAI-shaped content/tool `cache_control` unsupported in current main; known markers fail closed.
@@ -459,7 +459,7 @@ Deliverables:
 - Do not add OpenAI `prompt_cache_key` unless the request supplied an explicit supported OpenAI extension.
 - Continue emitting portability warnings and omitting low-risk non-portable provider cache controls when the target provider cannot honor them.
 - Keep translation marker-free unless an explicit extension is present.
-- Delivered: debug trace request fields show internal disposition, target provider, mapped/target fields, explicit source, optional TTL/retention source, and omit reason for existing provider prompt-cache request-control behavior.
+- Delivered: debug trace request fields show the trace value, target provider, mapped/target fields, explicit source, optional TTL/retention source, and omit reason for existing provider prompt-cache request-control behavior.
 
 Acceptance tests:
 
@@ -524,7 +524,7 @@ Required local tests:
 | Streaming | Raw SSE event preservation for ordinary success streams |
 | Headers | Auth rewrite and hop-by-hop stripping are explicit; provider protocol headers are preserved where safe |
 | Provider prompt-cache support | Native cache request fields and usage fields preserved; explicit translated extensions map only to their target provider; optional same-protocol zero-transform/native-preserved observation does not mutate output, drive routing, or cache anything |
-| Provider prompt-cache coverage | Delivered preserve/map/drop behavior is covered across the Explicit Provider-Native Coverage Checklist; broader mapping or shared IR expansion is not current handoff work |
+| Provider prompt-cache coverage | Delivered preserve/map/drop behavior is covered across the Explicit Provider-Native Coverage Checklist; broader mapping or shared IR expansion is not current deliverable work |
 | Request processing | Same-format routes that avoid mutation and normalization use internal raw same-protocol forwarding; cross-format or shimmed routes use maximum-safe request construction |
 | Regressions | Maximum-safe cross-format behavior remains in the maximum-safe path |
 

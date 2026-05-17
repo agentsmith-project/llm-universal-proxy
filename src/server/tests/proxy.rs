@@ -2024,6 +2024,131 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_map
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn debug_trace_records_prompt_cache_components_for_openai_to_anthropic_mixed_mapping_and_drop(
+) {
+    let server_response_body = serde_json::json!({
+        "id": "msg_mixed_cache_mapping",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3",
+        "content": [{ "type": "text", "text": "ok" }],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_anthropic_messages_mock(server_response_body).await;
+    let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
+    let state = app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::Anthropic);
+    enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/chat/completions".to_string(),
+        serde_json::json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "prompt_cache_key": "stable-prefix",
+            "prompt_cache_retention": "24h",
+            "extra_body": {
+                "anthropic": {
+                    "cache_control": { "type": "ephemeral", "ttl": "5m" }
+                }
+            },
+            "stream": false
+        }),
+        "claude-3".to_string(),
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let warnings = response
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("prompt_cache_key")),
+        "warnings = {warnings:?}"
+    );
+    let _ = response_text(response).await;
+
+    let trace = wait_for_debug_trace_response(&trace_path).await;
+    let request_entry = debug_trace_request_entry(&trace);
+    assert_llmup_external_observability(&request_entry, "constructed", "explicit_extension_mapped");
+    let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
+    assert_eq!(
+        prompt_cache_detail,
+        &serde_json::json!({
+            "target_provider": "anthropic",
+            "disposition": "explicit_extension_mapped",
+            "source_fields": ["extra_body.anthropic.cache_control"],
+            "target_fields": ["cache_control"],
+            "ttl_or_retention_source": "extra_body.anthropic.cache_control.ttl",
+            "components": [
+                {
+                    "disposition": "explicit_extension_mapped",
+                    "source_fields": ["extra_body.anthropic.cache_control"],
+                    "target_fields": ["cache_control"],
+                    "ttl_or_retention_source": "extra_body.anthropic.cache_control.ttl"
+                },
+                {
+                    "disposition": "dropped",
+                    "source_fields": ["prompt_cache_key", "prompt_cache_retention"],
+                    "target_fields": [],
+                    "ttl_or_retention_source": "prompt_cache_retention",
+                    "omitted_reason": "openai_prompt_cache_key_not_anthropic_cache_control_or_breakpoint"
+                }
+            ]
+        }),
+        "request_entry = {request_entry:?}"
+    );
+    assert!(
+        !serde_json::to_string(prompt_cache_detail)
+            .expect("prompt-cache trace detail serializes")
+            .contains("stable-prefix"),
+        "prompt-cache trace detail must not contain key values: {prompt_cache_detail:?}"
+    );
+    let hook_payload = wait_for_hook_payload(&hook_payloads).await;
+    assert_llmup_external_observability(&hook_payload, "constructed", "explicit_extension_mapped");
+    assert_prompt_cache_request_control_detail_absent_from_hook_payload(&hook_payload);
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]["cache_control"],
+        serde_json::json!({ "type": "ephemeral", "ttl": "5m" })
+    );
+    assert!(
+        requests[0].get("prompt_cache_key").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+    assert!(
+        requests[0].get("prompt_cache_retention").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+    assert!(
+        requests[0].get("extra_body").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mapping() {
     let server_response_body = serde_json::json!({
         "id": "chatcmpl_explicit_openai_cache_mapping",
@@ -2113,6 +2238,139 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mappin
     );
     assert!(
         requests[0].get("cache_control").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+    assert!(
+        !json_contains_key(&requests[0], "cache_control"),
+        "upstream body = {:?}",
+        requests[0]
+    );
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn debug_trace_records_prompt_cache_components_for_anthropic_to_openai_mixed_mapping_and_drop(
+) {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_mixed_openai_cache_mapping",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/anthropic/v1/messages".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "max_tokens": 32,
+            "system": [
+                { "type": "text", "text": "System", "cache_control": { "type": "ephemeral", "ttl": "5m" } }
+            ],
+            "messages": [{
+                "role": "user",
+                "content": [{ "type": "text", "text": "Hi" }]
+            }],
+            "extra_body": {
+                "openai": {
+                    "prompt_cache_key": "stable-prefix",
+                    "prompt_cache_retention": "24h"
+                }
+            },
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::Anthropic,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let warnings = response
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("cache_control")),
+        "warnings = {warnings:?}"
+    );
+    let _ = response_text(response).await;
+
+    let trace = wait_for_debug_trace_response(&trace_path).await;
+    let request_entry = debug_trace_request_entry(&trace);
+    assert_llmup_external_observability(&request_entry, "constructed", "explicit_extension_mapped");
+    let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
+    assert_eq!(
+        prompt_cache_detail,
+        &serde_json::json!({
+            "target_provider": "openai_family",
+            "disposition": "explicit_extension_mapped",
+            "source_fields": [
+                "extra_body.openai.prompt_cache_key",
+                "extra_body.openai.prompt_cache_retention"
+            ],
+            "target_fields": ["prompt_cache_key", "prompt_cache_retention"],
+            "ttl_or_retention_source": "extra_body.openai.prompt_cache_retention",
+            "components": [
+                {
+                    "disposition": "explicit_extension_mapped",
+                    "source_fields": [
+                        "extra_body.openai.prompt_cache_key",
+                        "extra_body.openai.prompt_cache_retention"
+                    ],
+                    "target_fields": ["prompt_cache_key", "prompt_cache_retention"],
+                    "ttl_or_retention_source": "extra_body.openai.prompt_cache_retention"
+                },
+                {
+                    "disposition": "dropped",
+                    "source_fields": ["system[].cache_control"],
+                    "target_fields": [],
+                    "ttl_or_retention_source": "system[].cache_control.ttl",
+                    "omitted_reason": "anthropic_cache_control_not_openai_prompt_cache_key"
+                }
+            ]
+        }),
+        "request_entry = {request_entry:?}"
+    );
+    assert!(
+        !serde_json::to_string(prompt_cache_detail)
+            .expect("prompt-cache trace detail serializes")
+            .contains("stable-prefix"),
+        "prompt-cache trace detail must not contain key values: {prompt_cache_detail:?}"
+    );
+    let hook_payload = wait_for_hook_payload(&hook_payloads).await;
+    assert_llmup_external_observability(&hook_payload, "constructed", "explicit_extension_mapped");
+    assert_prompt_cache_request_control_detail_absent_from_hook_payload(&hook_payload);
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["prompt_cache_key"], "stable-prefix");
+    assert_eq!(requests[0]["prompt_cache_retention"], "24h");
+    assert!(
+        requests[0].get("extra_body").is_none(),
         "upstream body = {:?}",
         requests[0]
     );

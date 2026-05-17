@@ -2,11 +2,8 @@ use serde::{ser::SerializeStruct, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::formats::UpstreamFormat;
-use crate::prompt_cache_controls::{
-    anthropic_extra_body_openai_prompt_cache_key_present, anthropic_protocol_cache_control_present,
-    openai_extra_body_anthropic_cache_control_present,
-    openai_family_prompt_cache_top_level_fields_present,
-};
+use crate::prompt_cache_controls::classify_provider_prompt_cache_request_control;
+pub use crate::prompt_cache_controls::PromptCacheRequestControl;
 use crate::provider_state_controls::responses_stateful_request_controls_present;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -22,16 +19,6 @@ pub enum StateBridgeModifier {
     Off,
     CaptureCandidate,
     Expanded,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PromptCacheRequestControl {
-    None,
-    #[serde(rename = "preserved_native")]
-    Preserved,
-    ExplicitExtensionMapped,
-    Dropped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,54 +224,5 @@ fn classify_provider_native_prompt_cache(
     upstream_format: UpstreamFormat,
     body: &Value,
 ) -> PromptCacheRequestControl {
-    if openai_family_format(client_format)
-        && upstream_format == UpstreamFormat::Anthropic
-        && openai_extra_body_anthropic_cache_control_present(body)
-    {
-        return PromptCacheRequestControl::ExplicitExtensionMapped;
-    }
-
-    if openai_family_format(client_format)
-        && upstream_format == UpstreamFormat::Anthropic
-        && openai_family_prompt_cache_top_level_fields_present(body)
-    {
-        return PromptCacheRequestControl::Dropped;
-    }
-
-    if client_format == UpstreamFormat::Anthropic
-        && openai_family_format(upstream_format)
-        && anthropic_extra_body_openai_prompt_cache_key_present(body)
-    {
-        return PromptCacheRequestControl::ExplicitExtensionMapped;
-    }
-
-    if client_format == UpstreamFormat::Anthropic
-        && openai_family_format(upstream_format)
-        && anthropic_protocol_cache_control_present(body)
-    {
-        return PromptCacheRequestControl::Dropped;
-    }
-
-    if openai_family_format(client_format)
-        && openai_family_format(upstream_format)
-        && openai_family_prompt_cache_top_level_fields_present(body)
-    {
-        return PromptCacheRequestControl::Preserved;
-    }
-
-    if client_format == upstream_format
-        && client_format == UpstreamFormat::Anthropic
-        && anthropic_protocol_cache_control_present(body)
-    {
-        PromptCacheRequestControl::Preserved
-    } else {
-        PromptCacheRequestControl::None
-    }
-}
-
-fn openai_family_format(format: UpstreamFormat) -> bool {
-    matches!(
-        format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
-    )
+    classify_provider_prompt_cache_request_control(client_format, upstream_format, body)
 }

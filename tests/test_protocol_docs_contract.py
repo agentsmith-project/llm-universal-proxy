@@ -93,6 +93,20 @@ class ProtocolDocsContractTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, pipeline)
 
+    def test_prd_target_users_are_limited_to_supported_public_surfaces(self):
+        text = read_doc("docs/PRD.md")
+        target_users = text.split("### 1.4 Target Users", 1)[1].split(
+            "\n---", 1
+        )[0]
+
+        for snippet in (
+            "any LLM client tool " + "regardless of protocol",
+            "regardless " + "of protocol",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertNotIn(snippet, target_users)
+        self.assertIn("supported public protocol " + "surfaces", target_users)
+
     def test_prompt_cache_docs_do_not_plan_cache_affinity_routing(self):
         paths = (
             "docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md",
@@ -176,6 +190,28 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "Provider-cache auto-injection is out of scope; explicit mapping must be trace-visible.",
             cache_baseline,
         )
+
+    def test_prompt_cache_plan_records_trace_vocabulary_not_handoff_work(self):
+        text = read_doc(
+            "docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md"
+        )
+
+        for snippet in (
+            "handoff " + "target",
+            "internal disposition " + "model",
+            "current " + "handoff path",
+            "current " + "handoff task",
+            "broader shared disposition " + "object",
+            "Add internal prompt-cache " + "disposition tracking",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertNotIn(snippet, text)
+        for snippet in (
+            "delivered " + "trace vocabulary",
+            "non-current " + "separate scope review",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, text)
 
     def test_prompt_cache_field_mapping_matrix_documents_guardrails(self):
         text = read_doc("docs/protocol-baselines/matrices/field-mapping-matrix.md")
@@ -281,6 +317,23 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "there is no persistence, retrieval, cache, Conversations API bridge",
             config,
         )
+
+    def test_state_bridge_plan_does_not_introduce_future_retention_config_surface(self):
+        text = read_doc(
+            "docs/engineering/pre-ga-conversation-state-bridge-plan.md"
+        ).casefold()
+
+        for snippet in (
+            "route-" + "level no-" + "store",
+            "route-" + "level " + "z" + "dr",
+            "zero data " + "retention",
+            "per-" + "route retention",
+            "store" + "_policy",
+            "no" + "_store",
+            "no-" + "store",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertNotIn(snippet, text)
 
     def test_public_product_docs_and_python_contracts_reject_old_product_strategy_language(self):
         paths = [

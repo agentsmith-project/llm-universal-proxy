@@ -279,7 +279,7 @@ struct BridgeResponse {
 - `store: false/null`：请求仍继续调用上游，但不保存 response state；如果之后 client 用对应历史 ID 继续 `previous_response_id` replay，会因为本地 store 没有可展开状态而 fail closed。local continuation 可以在 replay 后带 `store:false/null`，但不会保存下一轮 response state。
 - 省略 `store`：当 route 允许 capture 且没有 `store:false/null` no-save 控制时保存本地 replay state。
 - 显式 `store:true`：跨协议路径 fail closed，因为这是 provider persistence request，只能由 native OpenAI Responses 上游保持语义。
-- 如果未来引入 route-level no-store/ZDR policy，它必须禁用 bridge 保存；初版只需要尊重请求级 `store:false/null`。
+- 本地 no-save 语义只来自请求级 `store:false/null`；初版不新增任何保存策略配置面。
 
 ### `background`
 
