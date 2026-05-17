@@ -26,7 +26,7 @@
 - 展开后的上下文继续走现有协议转换器，目标 provider 看到的是完整 transcript，而不是 OpenAI Responses 的状态句柄。
 - 状态桥只保存会话重放所需的输入/输出事件，不缓存或复用模型响应。
 - 不可安全 replay 的情况保持 fail closed；本地 replay 只接受 `llmup` 自己生成并仍然有效的本地 ID。
-- 状态桥是最大安全兼容目标下的 state expansion。它会使请求需要构造/转换，必须在 trace 和 warnings 中可见；它不是独立产品行为，也不引入用户可选处理策略。
+- 状态桥是最大安全兼容目标下的 state expansion。它会使请求需要构造/转换，必须在 trace 和 warnings 中可见；它不是独立产品行为，也不引入用户配置的处理策略。
 - 最大安全兼容性仍是唯一实现目标。
 
 一句话边界：这是 `ConversationStateBridge`，不是 cache。
@@ -76,7 +76,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 - OpenAI Responses 原生 state/resource 路由透传，包括 `/responses/compact`、`/responses/{id}/input_items`、`/conversations/*`。
 - 省略 `model` 的 stateful OpenAI Responses 请求可以在唯一、明确的 native Responses upstream 上路由。
 - OpenAI Responses 带完整 `input` 时，可以通过 `responses_to_messages()` 转成 Chat-style messages，再进入现有 Anthropic/OpenAI Chat 转换链。Native Gemini 分支已不是 active target。
-- `conversation_state_bridge` 已有 `ttl_seconds`、`max_bytes` 保留边界配置；不再暴露用户可见的兼容能力开关。
+- `conversation_state_bridge` 是内置短期内存 state expansion helper，只暴露 `ttl_seconds`、`max_bytes` 保留边界配置；不再暴露用户可见的兼容能力开关。
 - `ConversationStateBridgeStore` 已挂在 `AppState`，使用内存 HashMap、`resp_llmup_*` ID、TTL、全局 `max_bytes` 和 owner hash。
 - 非流式 text Responses -> OpenAI Chat / Anthropic continuation 已实现：第一轮保存 user text 和 assistant text，第二轮用本地 `previous_response_id` 展开历史后再进入现有转换链。
 - 普通 Responses `function_call` / `function_call_output` 与 portable `custom_tool_call` / `custom_tool_call_output` 本地 replay 已实现：只保存 `type`、`call_id`、`name`、`arguments` / `input` / `output` 可移植字段；不保存 tools、tool_choice 或 parallel controls；非 portable custom、proxied、namespaced provider/internal 工具语义继续 fail closed 或不提交本地 replay state。
@@ -90,17 +90,15 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 - usage hook `provider_cache_usage` 已完成：只在同协议 zero-transform/native-preserved raw observed provider usage 上输出 source-field telemetry；cross-protocol translated routes 和 same-format constructed routes 暂不输出，避免把 client-visible normalized usage 误当 provider raw source telemetry。该 telemetry 只读，不驱动 cache store、lookup、key、eviction、response reuse、routing 或 fallback。
 - 文档和测试已经锁定“provider-owned state 不重建”的现有行为。
 
-仍未完成：
+未交付 / Deferred：
 
-- remaining trace metadata work：如需继续提 trace cleanup，只限细粒度 trace metadata 以及其它 consolidation，不再把 enabled-semantics 或 shared detector helper 小切片列为下一步。
-- proxy-key 与 client-provider-key 都已有本地 replay owner hash；client-provider-key 继续包含 provider key，proxy-key 绑定 data-auth generation/auth kind，不引入新用户配置。
-- streaming continuation replay 尚未实现；当前本地 replay 只支持第一轮 streaming completed visible output capture，后续 `previous_response_id` continuation 仍必须非流式，`stream:true` + `previous_response_id` 仍 fail closed。
-- 细粒度 trace metadata 尚未完成；需要补齐 bridge enabled、hit/miss/expired/owner_mismatch、replay item count、memory limit 等不含 prompt 内容的 metadata。
+- Current only if needed：early lookup failure trace 小设计。正常路径 state bridge debug trace request metadata 已交付；miss/expired/owner_mismatch 发生在 debug request entry 创建前，当前只承诺 fail closed，不承诺已有 trace reason。
+- Deferred/future：streaming continuation replay/capture 尚未实现；当前本地 replay 只支持第一轮 streaming completed visible output capture，后续 `previous_response_id` continuation 仍必须非流式，`stream:true` + `previous_response_id` 仍 fail closed。
 
 已接受的 pre-GA 方向变化：
 
 - `docs/CONSTITUTION.md` 已记录 provider-owned lifecycle state reconstruction 仍 out of scope，并把本地 transcript replay 限定为 built-in、短期、纯内存、llmup-owned local ID 的 state expansion helper。
-- 本计划不引入持久化数据库。宪章措辞应保持：内存 `ConversationStateBridge` 是最大安全兼容目标下的内部 state expansion 能力，不是另一套产品行为或用户可选开关。
+- 本计划不引入持久化数据库。宪章措辞应保持：内存 `ConversationStateBridge` 是最大安全兼容目标下的内置短期 state expansion helper，不是另一套产品行为或用户可配置的兼容模式开关。
 
 ## 设计原则
 
@@ -141,7 +139,7 @@ conversation_state_bridge:
 
 ## 请求处理观测
 
-不新增单独主路径或用户可选策略。状态桥参与 capture 或 expansion 时，请求处理观测为 `RequestTransformationRequired`，并在外部 `llmup` 观测中暴露事实性的 `local_state_handling` 字段；默认无本地 state 处理时省略该字段。这表示请求需要显式 state expansion 后再构造/转换，仍属于单一最大安全兼容目标。provider-native prompt-cache 合成仍只是 provider-native request-control support：
+不新增单独主路径或用户配置的处理策略。状态桥参与 capture 或 expansion 时，请求处理观测为 `RequestTransformationRequired`，并在外部 `llmup` 观测中暴露事实性的 `local_state_handling` 字段；无 capture/replay 时省略该字段。这表示请求需要显式 state expansion 后再构造/转换，仍属于单一最大安全兼容目标。provider-native prompt-cache 合成仍只是 provider-native request-control support：
 
 ```text
 enum RequestProcessing {
@@ -174,7 +172,7 @@ local_state_handling: omitted | capture_candidate | expanded
 插入点要求：
 
 - 状态展开/lookup 必须发生在 `resolve_requested_model_or_error()` 和 `original_body` 进入 boundary assessment 之前。否则 model-less `previous_response_id` 会先被现有 stateful routing 逻辑拒绝。
-- Bridge preprocessor 成功后，要消费并移除本地 `previous_response_id` 和 disabled `store:false/null` 控制，把历史和当前 `input` 合成显式 `input`，再进入现有 `assess_request_translation_with_surface()` 和 `translate_request_with_policy()`；enabled `store` 必须在跨协议路径上 fail closed，不能被 mutation 隐藏。
+- Bridge preprocessor 成功后，要消费并移除本地 `previous_response_id` 和 `store:false/null` no-save 控制，把历史和当前 `input` 合成显式 `input`，再进入现有 `assess_request_translation_with_surface()` 和 `translate_request_with_policy()`；enabled `store` 必须在跨协议路径上 fail closed，不能被 mutation 隐藏。
 - 第一轮保存必须记录 resolved route owner；第二轮省略 `model` 时用 store owner 恢复路由，第二轮显式 `model` 与 store owner 冲突时 fail closed。
 - 状态 store 挂在 `AppState`，不要塞进 `RuntimeState` 快照，避免每次认证上下文 clone 大状态。
 
@@ -277,9 +275,9 @@ struct BridgeResponse {
 
 规则：
 
-- Bridge preprocessor 只能消费 disabled `store:false/null` 作为本地 no-save policy；enabled `store` 必须保留 hard boundary 语义。
+- Bridge preprocessor 只能消费 `store:false/null` 作为本地 no-save policy；enabled `store` 必须保留 hard boundary 语义。
 - `store: false/null`：请求仍继续调用上游，但不保存 response state；如果之后 client 用对应历史 ID 继续 `previous_response_id` replay，会因为本地 store 没有可展开状态而 fail closed。local continuation 可以在 replay 后带 `store:false/null`，但不会保存下一轮 response state。
-- 省略 `store`：当内存状态桥已配置且 route 允许时保存本地 replay state。
+- 省略 `store`：当 route 允许 capture 且没有 `store:false/null` no-save 控制时保存本地 replay state。
 - 显式 `store:true`：跨协议路径 fail closed，因为这是 provider persistence request，只能由 native OpenAI Responses 上游保持语义。
 - 如果未来引入 route-level no-store/ZDR policy，它必须禁用 bridge 保存；初版只需要尊重请求级 `store:false/null`。
 
@@ -293,7 +291,7 @@ struct BridgeResponse {
 - 纯内存 store 无法在进程重启后保留任务状态。
 - 需要独立任务队列、polling state、cancel 行为和生命周期语义。
 
-行为：当内存状态桥已配置时仍 fail closed，并在错误中说明当前不支持 background lifecycle emulation。
+行为：跨协议路径仍 fail closed，并在错误中说明当前不支持 background lifecycle emulation。
 
 ### `prompt`
 
@@ -331,7 +329,7 @@ struct BridgeResponse {
 1. 第一轮 `stream:true` 请求在 response created 阶段预分配本地 response ID。
 2. streaming sink 收集 completed streaming visible output，可还原为可重放 assistant text 和 visible reasoning summary。
 3. 只有收到 completed terminal event 后提交状态；`response.completed` bytes 交给 client 前 state 必须已写入。
-4. 客户端断连、上游错误、stream parse fatal 或 incomplete terminal 时不提交 completed 状态；可选记录 aborted metadata，但不能用于 replay。
+4. 客户端断连、上游错误、stream parse fatal 或 incomplete terminal 时不提交 completed 状态；可以记录 aborted metadata，但不能用于 replay。
 5. 流式事件中客户端可见 ID 必须与最终 store ID 一致。
 6. 当前只支持第一轮 streaming completed visible output capture；后续 continuation 仍走非流式 replay，`stream:true` + `previous_response_id` 仍 fail closed。
 
@@ -393,10 +391,10 @@ struct BridgeResponse {
 - store lookup 只有四种结果：命中、未找到、过期、owner mismatch。除命中外都 fail closed。
 - debug trace / hook 不应记录 prompt 内容。
 
-仍需补强：
+补强状态：
 
-- proxy-key owner 隔离不新增用户配置，继续由 data-auth runtime generation/auth kind 形成简单边界。
-- route/config fingerprint 不对外暴露为产品功能；配置更新即旧 local state fail closed，不做迁移、持久化或 fallback。
+- proxy-key owner 隔离已由 data-auth runtime generation/auth kind 形成简单边界，不新增用户配置。
+- route/config fingerprint 仅作为内部保护；配置更新即旧 local state fail closed，不做迁移、持久化或 fallback。
 - debug trace 已补齐正常路径 request metadata：first-request capture candidate 和 continuation replay hit/expanded item counts。early lookup failure（miss/expired/owner_mismatch）当前发生在 debug request entry 创建前，需要单独小设计；新增的 `request.conversation_state_bridge` metadata 不记录状态 ID、prompt 文本、owner hash、provider key、route fingerprint 或 namespace revision。
 
 内存保护：
@@ -408,7 +406,7 @@ struct BridgeResponse {
 
 隐私保护：
 
-- 纯内存不等于无数据保留。文档必须明确：开启状态桥会在 `llmup` 进程内保存 prompt 和模型输出，直到 TTL 或进程退出。
+- 纯内存不等于无数据保留。文档必须明确：状态桥 capture/replay 会在 `llmup` 进程内保存 prompt 和模型输出，直到 TTL 或进程退出。
 - `store: false/null` 不保存。
 - 不允许 hook/debug 输出状态内容。
 
@@ -427,19 +425,19 @@ Current-main delivery status:
 - Delivered slice: shared detector / trace cleanup 已交付；Responses stateful controls 和 provider prompt-cache coarse detection 已收敛到共享只读 helper，外部 trace/hook enum 值不变。
 - Delivered slice: Conversation State Bridge 正常路径 debug trace request metadata 已交付；first request 记录 capture candidate、request item count、max_bytes，continuation 记录 replay hit、stored/current/expanded item counts。hook 和外部 `llmup` 仍只暴露 coarse `local_state_handling`，early lookup failure trace 需要单独小设计。
 - Handoff guardrail: 当前 handoff 不继续扩展 prompt-cache request-control；custom tool replay 和 `provider_cache_usage` telemetry 已交付，不再作为下一步前置项。
-- Next: early lookup failure trace 小设计。Streaming continuation capture 仅作为后续扩展，不是当前 handoff 第一项。
+- Current only if needed: early lookup failure trace 小设计。Streaming continuation capture 仅作为后续扩展，不是当前 handoff 第一项。
 
 ### Phase 0：合同冻结与文档更新
 
 交付：
 
-- 更新 `CONSTITUTION.md`：默认 stateless；可选纯内存 `ConversationStateBridge` 是最大安全兼容目标下明确配置的 state expansion 能力。
+- 更新 `CONSTITUTION.md`：默认 stateless；内置短期内存 `ConversationStateBridge` 是最大安全兼容目标下的 state expansion helper，只配置 `ttl_seconds` / `max_bytes` 保留边界。
 - 更新 state-continuity docs：区分 provider-owned state、llmup-owned bridge state、cache。
 - 新增配置 schema 文档，且文档只暴露 `ttl_seconds` / `max_bytes` 保留边界。
 
 验收：
 
-- 未配置状态桥时，现有 fail-closed 测试全部保持。
+- 无 capture/replay 时省略 `local_state_handling`，现有 provider-owned stateful controls fail-closed 测试全部保持。
 - 文档明确不做 response cache、provider cache、semantic cache、持久化、Conversations API、本地 retrieval。
 
 ### Phase 1：内存 Store 骨架
@@ -454,7 +452,7 @@ Current-main delivery status:
 验收：
 
 - store 单元测试覆盖 create/get/expire/max_bytes/owner mismatch/restart-miss 语义。
-- 默认配置不创建 store 或 store disabled。
+- 只配置 `ttl_seconds` / `max_bytes` 保留边界；无 capture/replay 时省略 `local_state_handling`。
 
 ### Phase 2：非流式 `previous_response_id` Replay
 
@@ -527,7 +525,7 @@ Current-main delivery status:
 - 在 debug trace 正常 request 路径中记录 capture candidate 和 replay hit/expanded item counts。
 - state miss/expired/owner_mismatch 当前是 debug request entry 之前的 early 400；如需 trace，需要单独设计早期失败 entry。
 - 确认 hook/debug 不包含状态内容。
-- 已完成 `background` / `store` enabled-semantics alignment 和 shared detector cleanup：`background:false|null` 和 `store:false|null` 不触发 provider-owned stateful fail-closed；`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。剩余工作只包括细粒度 trace metadata 以及其它 consolidation。
+- 已完成 `background` / `store` enabled-semantics alignment 和 shared detector cleanup：`background:false|null` 和 `store:false|null` 不触发 provider-owned stateful fail-closed；`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。early lookup failure trace 如需继续做，另起小设计；其它 consolidation 不作为当前 handoff。
 
 验收：
 
@@ -550,11 +548,11 @@ Current-main delivery status:
 
 | 区域 | 覆盖要求 |
 | --- | --- |
-| 默认行为 | bridge off 时，现有 stateful controls 跨协议 fail closed |
+| 无 capture/replay | 省略 `local_state_handling`；现有 provider-owned stateful controls 跨协议 fail closed |
 | 非流式 text replay | Responses -> Chat/Anthropic 的 `previous_response_id` 多轮上下文展开 |
 | 隔离 | namespace/auth subject mismatch fail closed |
 | Route owner | model-less continuation 使用保存的 upstream/model/config owner；显式 model 或 config revision/hash 冲突 fail closed |
-| TTL | expired state fail closed 且有 trace reason |
+| TTL | expired state fail closed；early failure trace 另起小设计，不承诺已有 trace reason |
 | max_bytes | 超过全局内存上限时不提交 state，且有 warning/trace |
 | store:false/null | 请求仍调用上游但不保存；后续使用对应历史 replay 时因无本地状态 fail closed；local continuation 可 replay 但不保存下一轮；不泄露内容 |
 | detector enabled-semantics | `background:false|null` / `store:false|null` 不触发 provider-owned stateful fail-closed；enabled controls 仍 fail closed |
@@ -571,12 +569,12 @@ Current-main delivery status:
 | --- | --- |
 | 流式扩展 | 如后续单独评审 streaming continuation capture，需要覆盖 completed 后可 replay、abort/error 不可 replay |
 
-## Handoff 任务顺序
+## Handoff 状态
 
-推荐下一步顺序：
-
-1. Delivered: shared detector / trace cleanup：共享 detector helper 已交付；细粒度 trace metadata consolidation 不新增产品配置面。
-2. Streaming continuation capture：仅作为后续单独评审项，不作为当前 handoff 第一项；本地 Conversations API bridge 属于非当前方向。
+1. Delivered：shared detector / trace cleanup。共享 detector helper 已交付，外部 trace/hook enum 值不变，不新增产品配置面。
+2. Delivered：normal-path state bridge debug trace metadata。first request 记录 capture candidate、request item count、max_bytes；continuation 记录 replay hit、stored/current/expanded item counts；hook 和外部 `llmup` 仍只暴露 coarse `local_state_handling`。
+3. Current only if needed：early lookup failure trace 小设计。miss/expired/owner_mismatch 当前只承诺 fail closed；如果要记录 trace，需要先设计 early failure entry，且不得输出状态 ID、prompt 文本、owner hash、provider key、route fingerprint 或 namespace revision。
+4. Deferred：streaming continuation replay/capture。第一轮 streaming completed visible output capture 已交付；`stream:true` + `previous_response_id` 仍 fail closed，后续 streaming replay/capture 仅作为未来单独评审项。
 
 主要代码区域：
 
