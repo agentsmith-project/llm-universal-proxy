@@ -218,6 +218,15 @@ upstreams:
     .unwrap()
 }
 
+fn responses_custom_text_tool_definition() -> Value {
+    json!({
+        "type": "custom",
+        "name": "code_exec",
+        "description": "Executes code",
+        "format": { "type": "text" }
+    })
+}
+
 #[derive(Clone, Default)]
 struct CapturedBridgeBodies {
     bodies: Arc<Mutex<Vec<Value>>>,
@@ -4900,6 +4909,77 @@ async fn conversation_state_bridge_replays_function_call_output_to_openai_chat_u
 }
 
 #[tokio::test]
+async fn conversation_state_bridge_replays_function_call_output_object_to_openai_chat_upstream() {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_lookup_weather",
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "arguments": "{\"city\":\"Tokyo\"}"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Weather in Tokyo?",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let output = json!({ "temperature": 24, "unit": "C", "condition": "sunny" });
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_lookup_weather",
+                "output": output
+            }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        second.status().is_success(),
+        "status: {} body: {:?}",
+        second.status(),
+        second.text().await.unwrap_or_default()
+    );
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "replay = {replay:?}");
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["tool_call_id"], "call_lookup_weather");
+    assert_eq!(
+        messages[2]["content"],
+        json!({ "temperature": 24, "unit": "C", "condition": "sunny" })
+    );
+}
+
+#[tokio::test]
 async fn conversation_state_bridge_replays_function_call_output_to_anthropic_upstream() {
     let (mock_base, _mock, captured) = spawn_sequenced_anthropic_tool_mock(json!({
         "type": "tool_use",
@@ -5024,6 +5104,187 @@ async fn conversation_state_bridge_replays_function_call_output_to_anthropic_ups
     assert_eq!(messages[3]["content"][0]["text"], "OK");
     assert_eq!(messages[4]["role"], "user");
     assert_eq!(messages[4]["content"][0]["text"], "Summarize the weather.");
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_replays_custom_tool_call_output_to_openai_chat_upstream() {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_custom_exec",
+        "type": "custom",
+        "custom": {
+            "name": "code_exec",
+            "input": "print('hi')"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Run code",
+            "tools": [responses_custom_text_tool_definition()],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "custom_tool_call response should create local replay state, body = {first_body:?}"
+    );
+    assert_eq!(first_body["output"][0]["type"], "custom_tool_call");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_custom_exec",
+                    "output": "exit 0"
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "Now answer with the result." }]
+                }
+            ],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 4, "replay = {replay:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], "Run code");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_custom_exec");
+    assert_eq!(messages[1]["tool_calls"][0]["type"], "function");
+    assert_eq!(
+        messages[1]["tool_calls"][0]["function"]["name"],
+        "code_exec"
+    );
+    let arguments: Value = serde_json::from_str(
+        messages[1]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(arguments, json!({ "input": "print('hi')" }));
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["tool_call_id"], "call_custom_exec");
+    assert_eq!(messages[2]["content"], "exit 0");
+    assert_eq!(messages[3]["role"], "user");
+    assert_eq!(messages[3]["content"], "Now answer with the result.");
+    assert!(replay.get("tools").is_none());
+    assert!(replay.get("previous_response_id").is_none());
+    assert!(replay.get("store").is_none());
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_replays_custom_tool_call_output_to_anthropic_upstream() {
+    let (mock_base, _mock, captured) = spawn_sequenced_anthropic_tool_mock(json!({
+        "type": "tool_use",
+        "id": "call_custom_exec",
+        "name": "code_exec",
+        "input": { "input": "print('hi')" }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Run code",
+            "tools": [responses_custom_text_tool_definition()],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "custom_tool_call response should create local replay state, body = {first_body:?}"
+    );
+    assert_eq!(first_body["output"][0]["type"], "custom_tool_call");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_custom_exec",
+                    "output": "exit 0"
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "Now answer with the result." }]
+                }
+            ],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "replay = {replay:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["text"], "Run code");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][0]["type"], "tool_use");
+    assert_eq!(messages[1]["content"][0]["id"], "call_custom_exec");
+    assert_eq!(messages[1]["content"][0]["name"], "code_exec");
+    assert_eq!(
+        messages[1]["content"][0]["input"],
+        json!({ "input": "print('hi')" })
+    );
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+    assert_eq!(messages[2]["content"][0]["tool_use_id"], "call_custom_exec");
+    assert_eq!(messages[2]["content"][0]["content"], "exit 0");
+    assert_eq!(messages[2]["content"][1]["type"], "text");
+    assert_eq!(
+        messages[2]["content"][1]["text"],
+        "Now answer with the result."
+    );
+    assert!(replay.get("tools").is_none());
+    assert!(replay.get("previous_response_id").is_none());
+    assert!(replay.get("store").is_none());
 }
 
 #[tokio::test]
@@ -5313,7 +5574,8 @@ async fn conversation_state_bridge_rejects_extra_function_call_output_after_pend
 }
 
 #[tokio::test]
-async fn conversation_state_bridge_custom_tool_call_response_does_not_create_local_replay_state() {
+async fn conversation_state_bridge_rejects_missing_custom_tool_call_output_for_pending_call_before_dispatch(
+) {
     let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
         "id": "call_custom_exec",
         "type": "custom",
@@ -5344,18 +5606,336 @@ async fn conversation_state_bridge_custom_tool_call_response_does_not_create_loc
         .unwrap();
     assert!(first.status().is_success(), "status: {}", first.status());
     let first_body: Value = first.json().await.unwrap();
-    assert_eq!(first_body["output"][0]["type"], "custom_tool_call");
-    let response_id = first_body["id"].as_str().unwrap_or_default().to_string();
-    assert!(
-        !response_id.starts_with("resp_llmup_"),
-        "custom_tool_call must not create local replay state, body = {first_body:?}"
-    );
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
 
     let second = client
         .post(format!("{proxy_base}/openai/v1/responses"))
         .json(&json!({
             "model": "GLM-5",
-            "previous_response_id": response_id,
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("custom_tool_call_output") && message.contains("pending"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_function_call_output_for_pending_custom_call_before_dispatch(
+) {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_custom_exec",
+        "type": "custom",
+        "custom": {
+            "name": "code_exec",
+            "input": "print('hi')"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Run code",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_custom_exec",
+                "output": "ok"
+            }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("function_call_output") && message.contains("custom_tool_call_output"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_custom_tool_call_output_for_pending_function_call_before_dispatch(
+) {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_lookup_weather",
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "arguments": "{\"city\":\"Tokyo\"}"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Weather in Tokyo?",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [{
+                "type": "custom_tool_call_output",
+                "call_id": "call_lookup_weather",
+                "output": "Sunny, 24C"
+            }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("custom_tool_call_output") && message.contains("function_call_output"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_mismatched_custom_tool_call_output_before_dispatch() {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_custom_exec",
+        "type": "custom",
+        "custom": {
+            "name": "code_exec",
+            "input": "print('hi')"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Run code",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [{
+                "type": "custom_tool_call_output",
+                "call_id": "call_other",
+                "output": "ok"
+            }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("custom_tool_call_output") && message.contains("pending"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_extra_custom_tool_call_output_after_pending_prefix_before_dispatch(
+) {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_custom_exec",
+        "type": "custom",
+        "custom": {
+            "name": "code_exec",
+            "input": "print('hi')"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Run code",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_custom_exec",
+                    "output": "ok"
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_extra",
+                    "output": "unexpected"
+                }
+            ],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("custom_tool_call_output") && message.contains("extra"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_store_true_custom_tool_call_output_without_pending_call_before_dispatch(
+) {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_custom_exec",
+        "type": "custom",
+        "custom": {
+            "name": "code_exec",
+            "input": "print('hi')"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let response = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "store": true,
             "input": [{
                 "type": "custom_tool_call_output",
                 "call_id": "call_custom_exec",
@@ -5366,13 +5946,19 @@ async fn conversation_state_bridge_custom_tool_call_response_does_not_create_loc
         .send()
         .await
         .unwrap();
-    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = response.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("custom_tool_call_output") && message.contains("pending"),
+        "message = {message}"
+    );
     assert_eq!(
         captured
-            .wait_for_count(2, Duration::from_millis(200))
+            .wait_for_count(1, Duration::from_millis(200))
             .await
             .len(),
-        1
+        0
     );
 }
 

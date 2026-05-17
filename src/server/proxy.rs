@@ -1802,12 +1802,15 @@ async fn prepare_conversation_state_bridge(
     } else {
         match responses_bridge_input_items_from_body(body) {
             Ok(items) => {
-                if bridge_items_include_function_call_output(&items) {
+                if bridge_items_include_tool_output(&items) {
                     if store_true {
-                        return Err(
-                            "conversation_state_bridge replay cannot store OpenAI Responses `function_call_output` without a pending `function_call` from local `previous_response_id`"
-                                .to_string(),
-                        );
+                        let output_type = first_bridge_tool_output_type(&items);
+                        let call_type = bridge_tool_output_kind_for_item_type(output_type)
+                            .map(BridgeToolCallKind::call_item_type)
+                            .unwrap_or("tool_call");
+                        return Err(format!(
+                            "conversation_state_bridge replay cannot store OpenAI Responses `{output_type}` without a pending `{call_type}` from local `previous_response_id`"
+                        ));
                     }
                     remove_local_bridge_state_controls(body);
                     return Ok(None);
@@ -1900,16 +1903,13 @@ fn responses_bridge_input_item(item: &Value) -> Result<Value, String> {
     match responses_bridge_item_type(item) {
         Some("message") => responses_text_input_item(item),
         Some("function_call_output") => responses_function_call_output_item(item),
-        Some("custom_tool_call_output") => Err(
-            "conversation_state_bridge memory replay does not support `custom_tool_call_output`"
-                .to_string(),
-        ),
+        Some("custom_tool_call_output") => responses_custom_tool_call_output_item(item),
         Some("function_call" | "custom_tool_call") => Err(
-            "conversation_state_bridge memory replay only accepts assistant `function_call` items from captured upstream output"
+            "conversation_state_bridge memory replay only accepts assistant `function_call` or `custom_tool_call` items from captured upstream output"
                 .to_string(),
         ),
         _ => Err(
-            "conversation_state_bridge replay only supports text message and ordinary `function_call_output` input items"
+            "conversation_state_bridge replay only supports text message, `function_call_output`, and `custom_tool_call_output` input items"
                 .to_string(),
         ),
     }
@@ -1988,145 +1988,256 @@ fn responses_bridge_item_type(item: &Value) -> Option<&str> {
         .or_else(|| item.get("role").and_then(Value::as_str).map(|_| "message"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BridgeToolCallKind {
+    Function,
+    Custom,
+}
+
+impl BridgeToolCallKind {
+    fn call_item_type(self) -> &'static str {
+        match self {
+            Self::Function => "function_call",
+            Self::Custom => "custom_tool_call",
+        }
+    }
+
+    fn output_item_type(self) -> &'static str {
+        match self {
+            Self::Function => "function_call_output",
+            Self::Custom => "custom_tool_call_output",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PendingBridgeToolCall {
+    call_id: String,
+    kind: BridgeToolCallKind,
+}
+
 fn responses_function_call_output_item(item: &Value) -> Result<Value, String> {
+    responses_tool_call_output_item(item, "function_call_output", false)
+}
+
+fn responses_custom_tool_call_output_item(item: &Value) -> Result<Value, String> {
+    responses_tool_call_output_item(item, "custom_tool_call_output", true)
+}
+
+fn responses_tool_call_output_item(
+    item: &Value,
+    item_type: &str,
+    text_only_output: bool,
+) -> Result<Value, String> {
     if item.get("namespace").is_some() {
-        return Err(
-            "conversation_state_bridge memory replay does not support namespaced `function_call_output` items"
-                .to_string(),
-        );
+        return Err(format!(
+            "conversation_state_bridge memory replay does not support namespaced `{item_type}` items"
+        ));
     }
     if item.get("proxied_tool_kind").is_some() {
-        return Err(
-            "conversation_state_bridge memory replay does not support proxied tool output replay"
-                .to_string(),
-        );
+        return Err(format!(
+            "conversation_state_bridge memory replay does not support proxied `{item_type}` replay"
+        ));
     }
-    let call_id = non_empty_string_field(item, "call_id", "function_call_output")?;
+    let call_id = non_empty_string_field(item, "call_id", item_type)?;
     let output = item.get("output").ok_or_else(|| {
-        "conversation_state_bridge memory replay requires `function_call_output.output`".to_string()
+        format!("conversation_state_bridge memory replay requires `{item_type}.output`")
     })?;
-    validate_responses_tool_output_shape(output)?;
+    let output = responses_portable_tool_output(output, item_type, text_only_output)?;
     Ok(serde_json::json!({
-        "type": "function_call_output",
+        "type": item_type,
         "call_id": call_id,
-        "output": output.clone()
+        "output": output
     }))
 }
 
-fn responses_function_call_output_call_id(item: &Value) -> Result<&str, String> {
-    non_empty_string_field(item, "call_id", "function_call_output")
+fn responses_tool_call_output_call_id(item: &Value) -> Result<&str, String> {
+    let item_type = responses_bridge_item_type(item).unwrap_or("tool_call_output");
+    non_empty_string_field(item, "call_id", item_type)
 }
 
-fn bridge_items_include_function_call_output(items: &[Value]) -> bool {
+fn bridge_tool_call_kind_for_item_type(item_type: &str) -> Option<BridgeToolCallKind> {
+    match item_type {
+        "function_call" => Some(BridgeToolCallKind::Function),
+        "custom_tool_call" => Some(BridgeToolCallKind::Custom),
+        _ => None,
+    }
+}
+
+fn bridge_tool_output_kind_for_item_type(item_type: &str) -> Option<BridgeToolCallKind> {
+    match item_type {
+        "function_call_output" => Some(BridgeToolCallKind::Function),
+        "custom_tool_call_output" => Some(BridgeToolCallKind::Custom),
+        _ => None,
+    }
+}
+
+fn responses_bridge_tool_output_kind(item: &Value) -> Option<BridgeToolCallKind> {
+    responses_bridge_item_type(item).and_then(bridge_tool_output_kind_for_item_type)
+}
+
+fn bridge_items_include_tool_output(items: &[Value]) -> bool {
     items
         .iter()
-        .any(|item| responses_bridge_item_type(item) == Some("function_call_output"))
+        .any(|item| responses_bridge_tool_output_kind(item).is_some())
+}
+
+fn first_bridge_tool_output_type(items: &[Value]) -> &'static str {
+    items
+        .iter()
+        .find_map(|item| {
+            responses_bridge_tool_output_kind(item).map(|kind| kind.output_item_type())
+        })
+        .unwrap_or("tool_call_output")
 }
 
 fn validate_bridge_continuation_items(
     stored_items: &[Value],
     current_items: &[Value],
 ) -> Result<(), String> {
-    let pending = pending_bridge_function_call_ids(stored_items)?;
-    let current_outputs = current_items
+    let pending = pending_bridge_tool_calls(stored_items)?;
+    let current_output_count = current_items
         .iter()
-        .filter(|item| responses_bridge_item_type(item) == Some("function_call_output"))
-        .collect::<Vec<_>>();
+        .filter(|item| responses_bridge_tool_output_kind(item).is_some())
+        .count();
 
     if pending.is_empty() {
-        if current_outputs.is_empty() {
+        if current_output_count == 0 {
             return Ok(());
         }
-        return Err(
-            "conversation_state_bridge replay received `function_call_output` but the local previous_response_id has no pending `function_call`"
-                .to_string(),
-        );
+        let output_type = first_bridge_tool_output_type(current_items);
+        let call_type = bridge_tool_output_kind_for_item_type(output_type)
+            .map(BridgeToolCallKind::call_item_type)
+            .unwrap_or("tool_call");
+        return Err(format!(
+            "conversation_state_bridge replay received `{output_type}` but the local previous_response_id has no pending `{call_type}`"
+        ));
     }
 
     if current_items.len() < pending.len() {
         return Err(format!(
-            "conversation_state_bridge replay has pending function calls {:?}; the continuation submitted {} `function_call_output` item(s)",
-            pending,
-            current_outputs.len()
+            "conversation_state_bridge replay has pending tool calls {:?}; the continuation submitted {} tool output item(s)",
+            pending, current_output_count
         ));
     }
 
     let pending_set = pending.iter().cloned().collect::<BTreeSet<_>>();
     let mut seen = BTreeSet::new();
     for item in current_items.iter().take(pending.len()) {
-        if responses_bridge_item_type(item) != Some("function_call_output") {
+        let Some(kind) = responses_bridge_tool_output_kind(item) else {
             return Err(format!(
-                "conversation_state_bridge replay has pending function calls {:?}; the continuation must begin with matching `function_call_output` items",
-                pending
+                "conversation_state_bridge replay has pending tool calls {:?}; the continuation must begin with matching {} item(s)",
+                pending,
+                bridge_pending_output_type_summary(&pending)
+            ));
+        };
+        let output_type = kind.output_item_type();
+        let call_id = responses_tool_call_output_call_id(item)?;
+        let pending_call = PendingBridgeToolCall {
+            call_id: call_id.to_string(),
+            kind,
+        };
+        if !seen.insert(pending_call.clone()) {
+            return Err(format!(
+                "conversation_state_bridge replay received duplicate `{output_type}` for pending call_id `{call_id}`"
             ));
         }
-        let call_id = responses_function_call_output_call_id(item)?;
-        if !seen.insert(call_id.to_string()) {
+        if !pending_set.contains(&pending_call) {
+            if let Some(expected) = pending.iter().find(|pending| pending.call_id == call_id) {
+                return Err(format!(
+                    "conversation_state_bridge replay received `{output_type}` for call_id `{call_id}`, but pending `{}` requires `{}`",
+                    expected.kind.call_item_type(),
+                    expected.kind.output_item_type()
+                ));
+            }
             return Err(format!(
-                "conversation_state_bridge replay received duplicate `function_call_output` for pending call_id `{call_id}`"
-            ));
-        }
-        if !pending_set.contains(call_id) {
-            return Err(format!(
-                "conversation_state_bridge replay received `function_call_output` for call_id `{call_id}`, which does not match pending local call_id(s) {:?}",
+                "conversation_state_bridge replay received `{output_type}` for call_id `{call_id}`, which does not match pending local tool call(s) {:?}",
                 pending
             ));
         }
     }
 
     for item in current_items.iter().skip(pending.len()) {
-        if responses_bridge_item_type(item) == Some("function_call_output") {
-            let call_id = responses_function_call_output_call_id(item)?;
+        if let Some(kind) = responses_bridge_tool_output_kind(item) {
+            let output_type = kind.output_item_type();
+            let call_id = responses_tool_call_output_call_id(item)?;
             return Err(format!(
-                "conversation_state_bridge replay received extra `function_call_output` for call_id `{call_id}` after the pending output prefix"
+                "conversation_state_bridge replay received extra `{output_type}` for call_id `{call_id}` after the pending output prefix"
             ));
         }
         if responses_bridge_item_type(item) != Some("message") {
             return Err(
-                "conversation_state_bridge replay only allows text message input after pending `function_call_output` prefix"
+                "conversation_state_bridge replay only allows text message input after pending tool output prefix"
                     .to_string(),
             );
         }
     }
 
-    if let Some(missing) = pending.iter().find(|call_id| !seen.contains(*call_id)) {
+    if let Some(missing) = pending.iter().find(|pending| !seen.contains(*pending)) {
         return Err(format!(
-            "conversation_state_bridge replay is missing required `function_call_output` for pending call_id `{missing}`"
+            "conversation_state_bridge replay is missing required `{}` for pending call_id `{}`",
+            missing.kind.output_item_type(),
+            missing.call_id
         ));
     }
     Ok(())
 }
 
-fn pending_bridge_function_call_ids(items: &[Value]) -> Result<Vec<String>, String> {
+fn bridge_pending_output_type_summary(pending: &[PendingBridgeToolCall]) -> String {
+    let output_types = pending
+        .iter()
+        .map(|pending| pending.kind.output_item_type())
+        .collect::<BTreeSet<_>>();
+    output_types
+        .into_iter()
+        .map(|item_type| format!("`{item_type}`"))
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+fn pending_bridge_tool_calls(items: &[Value]) -> Result<Vec<PendingBridgeToolCall>, String> {
     let mut pending = Vec::new();
     for item in items {
         match responses_bridge_item_type(item) {
-            Some("function_call") => {
-                let call_id = non_empty_string_field(item, "call_id", "function_call")?;
-                if pending.iter().any(|pending_id| pending_id == call_id) {
+            Some("function_call" | "custom_tool_call") => {
+                let item_type = responses_bridge_item_type(item).unwrap_or("tool_call");
+                let kind = bridge_tool_call_kind_for_item_type(item_type).unwrap();
+                let call_id = non_empty_string_field(item, "call_id", item_type)?;
+                let pending_call = PendingBridgeToolCall {
+                    call_id: call_id.to_string(),
+                    kind,
+                };
+                if pending.iter().any(|pending| pending == &pending_call) {
                     return Err(format!(
-                        "conversation_state_bridge replay state contains duplicate pending function_call call_id `{call_id}`"
+                        "conversation_state_bridge replay state contains duplicate pending {item_type} call_id `{call_id}`"
                     ));
                 }
-                pending.push(call_id.to_string());
+                pending.push(pending_call);
             }
-            Some("function_call_output") => {
-                let call_id = responses_function_call_output_call_id(item)?;
-                let Some(index) = pending.iter().position(|pending_id| pending_id == call_id)
-                else {
+            Some("function_call_output" | "custom_tool_call_output") => {
+                let item_type = responses_bridge_item_type(item).unwrap_or("tool_call_output");
+                let kind = bridge_tool_output_kind_for_item_type(item_type).unwrap();
+                let call_id = responses_tool_call_output_call_id(item)?;
+                if !pending.iter().any(|pending| pending.call_id == call_id) {
                     return Err(format!(
-                        "conversation_state_bridge replay state contains `function_call_output` for unknown call_id `{call_id}`"
+                        "conversation_state_bridge replay state contains `{item_type}` for unknown call_id `{call_id}`"
+                    ));
+                }
+                let Some(index) = pending
+                    .iter()
+                    .position(|pending| pending.call_id == call_id && pending.kind == kind)
+                else {
+                    let expected = pending.iter().find(|pending| pending.call_id == call_id);
+                    let expected_output_type = expected
+                        .map(|pending| pending.kind.output_item_type())
+                        .unwrap_or("tool_call_output");
+                    return Err(format!(
+                        "conversation_state_bridge replay state contains `{item_type}` for call_id `{call_id}`, but pending call requires `{expected_output_type}`"
                     ));
                 };
                 pending.remove(index);
             }
             Some("message") => {}
-            Some("custom_tool_call" | "custom_tool_call_output") => {
-                return Err(
-                    "conversation_state_bridge replay state contains unsupported custom tool items"
-                        .to_string(),
-                );
-            }
             Some(other) => {
                 return Err(format!(
                     "conversation_state_bridge replay state contains unsupported `{other}` item"
@@ -2143,27 +2254,42 @@ fn pending_bridge_function_call_ids(items: &[Value]) -> Result<Vec<String>, Stri
     Ok(pending)
 }
 
-fn validate_responses_tool_output_shape(output: &Value) -> Result<(), String> {
-    let Value::Array(items) = output else {
-        return Ok(());
-    };
-    for item in items {
-        match item.get("type").and_then(Value::as_str) {
-            Some("input_text" | "output_text") => {}
-            Some(other) => {
-                return Err(format!(
-                    "conversation_state_bridge memory replay cannot store `function_call_output.output` array item type `{other}`"
-                ));
+fn responses_portable_tool_output(
+    output: &Value,
+    item_type: &str,
+    text_only_output: bool,
+) -> Result<Value, String> {
+    match output {
+        Value::String(_) => Ok(output.clone()),
+        Value::Array(items) => {
+            let mut portable = Vec::with_capacity(items.len());
+            for item in items {
+                match item.get("type").and_then(Value::as_str) {
+                    Some("input_text" | "output_text") => {
+                        portable.push(serde_json::json!({
+                            "type": item.get("type").and_then(Value::as_str).unwrap_or("input_text"),
+                            "text": item.get("text").and_then(Value::as_str).unwrap_or("")
+                        }));
+                    }
+                    Some(other) => {
+                        return Err(format!(
+                            "conversation_state_bridge memory replay cannot store `{item_type}.output` array item type `{other}`"
+                        ));
+                    }
+                    None => {
+                        return Err(format!(
+                            "conversation_state_bridge memory replay requires typed text items in `{item_type}.output` arrays"
+                        ));
+                    }
+                }
             }
-            None => {
-                return Err(
-                    "conversation_state_bridge memory replay requires typed text items in `function_call_output.output` arrays"
-                        .to_string(),
-                );
-            }
+            Ok(Value::Array(portable))
         }
+        _ if text_only_output => Err(format!(
+            "conversation_state_bridge memory replay requires `{item_type}.output` to be a string or text array"
+        )),
+        _ => Ok(output.clone()),
     }
-    Ok(())
 }
 
 fn non_empty_string_field<'a>(
@@ -2232,12 +2358,9 @@ fn responses_bridge_output_item(item: &Value) -> Result<Value, String> {
     match responses_bridge_item_type(item) {
         Some("message") => responses_text_output_item(item),
         Some("function_call") => responses_function_call_item(item),
-        Some("custom_tool_call") => Err(
-            "conversation_state_bridge memory capture does not support `custom_tool_call` local replay"
-                .to_string(),
-        ),
+        Some("custom_tool_call") => responses_custom_tool_call_item(item),
         _ => Err(
-            "conversation_state_bridge memory capture only supports assistant text message output and ordinary `function_call` output"
+            "conversation_state_bridge memory capture only supports assistant text message output, `function_call`, and `custom_tool_call` output"
                 .to_string(),
         ),
     }
@@ -2288,6 +2411,32 @@ fn responses_function_call_item(item: &Value) -> Result<Value, String> {
         "call_id": call_id,
         "name": name,
         "arguments": arguments
+    }))
+}
+
+fn responses_custom_tool_call_item(item: &Value) -> Result<Value, String> {
+    if item.get("namespace").is_some() {
+        return Err(
+            "conversation_state_bridge memory capture does not support namespaced `custom_tool_call` output"
+                .to_string(),
+        );
+    }
+    if item.get("proxied_tool_kind").is_some() {
+        return Err(
+            "conversation_state_bridge memory capture does not support proxied custom tool call replay"
+                .to_string(),
+        );
+    }
+    let call_id = non_empty_string_field(item, "call_id", "custom_tool_call")?;
+    let name = non_empty_string_field(item, "name", "custom_tool_call")?;
+    let input = item.get("input").and_then(Value::as_str).ok_or_else(|| {
+        "conversation_state_bridge memory capture requires `custom_tool_call.input`".to_string()
+    })?;
+    Ok(serde_json::json!({
+        "type": "custom_tool_call",
+        "call_id": call_id,
+        "name": name,
+        "input": input
     }))
 }
 
