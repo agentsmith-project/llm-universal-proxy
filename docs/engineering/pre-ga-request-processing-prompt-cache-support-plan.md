@@ -429,6 +429,7 @@ Current-main delivery status:
 - Delivered slice: OpenAI-family -> Anthropic explicit extension mapping for `extra_body.anthropic.cache_control` to top-level Anthropic `cache_control`, with fail-closed validation and no `llmup` cache.
 - Delivered slice: Anthropic -> OpenAI-family explicit target-provider extension mapping for `extra_body.openai.prompt_cache_key` and optional `prompt_cache_retention`, with fail-closed validation and no `llmup` cache.
 - Delivered dependency: Conversation State Bridge route/config owner hardening is complete. Continuations re-check the current runtime/internal fingerprint before upstream dispatch and fail closed on drift; this fingerprint is not a product feature or user configuration.
+- Delivered dependency: Conversation State Bridge now supports ordinary Responses `function_call` / `function_call_output` local replay for non-streaming translated continuation. Custom tool replay and stream capture remain deferred.
 - Pending: Remaining prompt-cache translated support beyond the delivered explicit top-level extensions, plus any future reviewed synthesis. Do not add a policy/config surface for synthesized request controls.
 - Guardrail: raw same-protocol forwarding remains an internal request-processing fact. It must not be documented or handed off as a product behavior.
 
@@ -594,8 +595,8 @@ Routing-affinity tests are intentionally absent from the required local matrix. 
 Recommended next order:
 
 1. Remaining prompt-cache translated/block-level review next: build on the delivered top-level explicit extensions and state-bridge owner hardening.
-2. Tool/custom tool replay later: keep function/custom tool replay behind the remaining prompt-cache translated/block-level review.
-3. Stream capture later: keep streaming response capture behind tool/custom tool replay.
+2. Custom tool replay later: ordinary function_call replay is delivered; keep custom tool replay behind the remaining prompt-cache translated/block-level review.
+3. Stream capture later: keep streaming response capture behind custom tool replay.
 4. Keep any future synthesis behind a later policy review with trace-visible deterministic inputs and no user/operator mode.
 
 Deferred: review narrow routing-affinity only after basic provider prompt-cache request controls are complete.

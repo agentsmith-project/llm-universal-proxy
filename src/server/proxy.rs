@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1790,7 +1790,8 @@ async fn prepare_conversation_state_bridge(
     let has_previous_response_id = body.get("previous_response_id").is_some();
 
     let request_items = if let Some(previous) = preloaded_response {
-        let current_items = responses_text_input_items_from_body(body)?;
+        let current_items = responses_bridge_input_items_from_body(body)?;
+        validate_bridge_continuation_items(&previous.transcript_items, &current_items)?;
         let mut expanded = previous.transcript_items;
         expanded.extend(current_items);
         set_responses_input_items(body, expanded.clone())?;
@@ -1799,8 +1800,18 @@ async fn prepare_conversation_state_bridge(
     } else if has_previous_response_id {
         return Ok(None);
     } else {
-        match responses_text_input_items_from_body(body) {
+        match responses_bridge_input_items_from_body(body) {
             Ok(items) => {
+                if bridge_items_include_function_call_output(&items) {
+                    if store_true {
+                        return Err(
+                            "conversation_state_bridge replay cannot store OpenAI Responses `function_call_output` without a pending `function_call` from local `previous_response_id`"
+                                .to_string(),
+                        );
+                    }
+                    remove_local_bridge_state_controls(body);
+                    return Ok(None);
+                }
                 remove_local_bridge_state_controls(body);
                 items
             }
@@ -1867,7 +1878,7 @@ fn set_responses_input_items(body: &mut Value, items: Vec<Value>) -> Result<(), 
     Ok(())
 }
 
-fn responses_text_input_items_from_body(body: &Value) -> Result<Vec<Value>, String> {
+fn responses_bridge_input_items_from_body(body: &Value) -> Result<Vec<Value>, String> {
     let input = body.get("input").ok_or_else(|| {
         "conversation_state_bridge replay requires OpenAI Responses `input`".to_string()
     })?;
@@ -1879,19 +1890,33 @@ fn responses_text_input_items_from_body(body: &Value) -> Result<Vec<Value>, Stri
         )]),
         Value::Array(items) => items
             .iter()
-            .map(responses_text_input_item)
+            .map(responses_bridge_input_item)
             .collect::<Result<Vec<_>, _>>(),
+        _ => Err("conversation_state_bridge replay only supports text OpenAI Responses `input` or portable input items".to_string()),
+    }
+}
+
+fn responses_bridge_input_item(item: &Value) -> Result<Value, String> {
+    match responses_bridge_item_type(item) {
+        Some("message") => responses_text_input_item(item),
+        Some("function_call_output") => responses_function_call_output_item(item),
+        Some("custom_tool_call_output") => Err(
+            "conversation_state_bridge memory replay does not support `custom_tool_call_output`"
+                .to_string(),
+        ),
+        Some("function_call" | "custom_tool_call") => Err(
+            "conversation_state_bridge memory replay only accepts assistant `function_call` items from captured upstream output"
+                .to_string(),
+        ),
         _ => Err(
-            "conversation_state_bridge MVP only supports text OpenAI Responses `input`".to_string(),
+            "conversation_state_bridge replay only supports text message and ordinary `function_call_output` input items"
+                .to_string(),
         ),
     }
 }
 
 fn responses_text_input_item(item: &Value) -> Result<Value, String> {
-    let item_type = item
-        .get("type")
-        .and_then(Value::as_str)
-        .or_else(|| item.get("role").and_then(Value::as_str).map(|_| "message"));
+    let item_type = responses_bridge_item_type(item);
     if item_type != Some("message") {
         return Err(
             "conversation_state_bridge MVP only replays text message input items".to_string(),
@@ -1957,6 +1982,203 @@ fn responses_text_message_item(role: &str, text_type: &str, text: &str) -> Value
     })
 }
 
+fn responses_bridge_item_type(item: &Value) -> Option<&str> {
+    item.get("type")
+        .and_then(Value::as_str)
+        .or_else(|| item.get("role").and_then(Value::as_str).map(|_| "message"))
+}
+
+fn responses_function_call_output_item(item: &Value) -> Result<Value, String> {
+    if item.get("namespace").is_some() {
+        return Err(
+            "conversation_state_bridge memory replay does not support namespaced `function_call_output` items"
+                .to_string(),
+        );
+    }
+    if item.get("proxied_tool_kind").is_some() {
+        return Err(
+            "conversation_state_bridge memory replay does not support proxied tool output replay"
+                .to_string(),
+        );
+    }
+    let call_id = non_empty_string_field(item, "call_id", "function_call_output")?;
+    let output = item.get("output").ok_or_else(|| {
+        "conversation_state_bridge memory replay requires `function_call_output.output`".to_string()
+    })?;
+    validate_responses_tool_output_shape(output)?;
+    Ok(serde_json::json!({
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": output.clone()
+    }))
+}
+
+fn responses_function_call_output_call_id(item: &Value) -> Result<&str, String> {
+    non_empty_string_field(item, "call_id", "function_call_output")
+}
+
+fn bridge_items_include_function_call_output(items: &[Value]) -> bool {
+    items
+        .iter()
+        .any(|item| responses_bridge_item_type(item) == Some("function_call_output"))
+}
+
+fn validate_bridge_continuation_items(
+    stored_items: &[Value],
+    current_items: &[Value],
+) -> Result<(), String> {
+    let pending = pending_bridge_function_call_ids(stored_items)?;
+    let current_outputs = current_items
+        .iter()
+        .filter(|item| responses_bridge_item_type(item) == Some("function_call_output"))
+        .collect::<Vec<_>>();
+
+    if pending.is_empty() {
+        if current_outputs.is_empty() {
+            return Ok(());
+        }
+        return Err(
+            "conversation_state_bridge replay received `function_call_output` but the local previous_response_id has no pending `function_call`"
+                .to_string(),
+        );
+    }
+
+    if current_items.len() < pending.len() {
+        return Err(format!(
+            "conversation_state_bridge replay has pending function calls {:?}; the continuation submitted {} `function_call_output` item(s)",
+            pending,
+            current_outputs.len()
+        ));
+    }
+
+    let pending_set = pending.iter().cloned().collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for item in current_items.iter().take(pending.len()) {
+        if responses_bridge_item_type(item) != Some("function_call_output") {
+            return Err(format!(
+                "conversation_state_bridge replay has pending function calls {:?}; the continuation must begin with matching `function_call_output` items",
+                pending
+            ));
+        }
+        let call_id = responses_function_call_output_call_id(item)?;
+        if !seen.insert(call_id.to_string()) {
+            return Err(format!(
+                "conversation_state_bridge replay received duplicate `function_call_output` for pending call_id `{call_id}`"
+            ));
+        }
+        if !pending_set.contains(call_id) {
+            return Err(format!(
+                "conversation_state_bridge replay received `function_call_output` for call_id `{call_id}`, which does not match pending local call_id(s) {:?}",
+                pending
+            ));
+        }
+    }
+
+    for item in current_items.iter().skip(pending.len()) {
+        if responses_bridge_item_type(item) == Some("function_call_output") {
+            let call_id = responses_function_call_output_call_id(item)?;
+            return Err(format!(
+                "conversation_state_bridge replay received extra `function_call_output` for call_id `{call_id}` after the pending output prefix"
+            ));
+        }
+        if responses_bridge_item_type(item) != Some("message") {
+            return Err(
+                "conversation_state_bridge replay only allows text message input after pending `function_call_output` prefix"
+                    .to_string(),
+            );
+        }
+    }
+
+    if let Some(missing) = pending.iter().find(|call_id| !seen.contains(*call_id)) {
+        return Err(format!(
+            "conversation_state_bridge replay is missing required `function_call_output` for pending call_id `{missing}`"
+        ));
+    }
+    Ok(())
+}
+
+fn pending_bridge_function_call_ids(items: &[Value]) -> Result<Vec<String>, String> {
+    let mut pending = Vec::new();
+    for item in items {
+        match responses_bridge_item_type(item) {
+            Some("function_call") => {
+                let call_id = non_empty_string_field(item, "call_id", "function_call")?;
+                if pending.iter().any(|pending_id| pending_id == call_id) {
+                    return Err(format!(
+                        "conversation_state_bridge replay state contains duplicate pending function_call call_id `{call_id}`"
+                    ));
+                }
+                pending.push(call_id.to_string());
+            }
+            Some("function_call_output") => {
+                let call_id = responses_function_call_output_call_id(item)?;
+                let Some(index) = pending.iter().position(|pending_id| pending_id == call_id)
+                else {
+                    return Err(format!(
+                        "conversation_state_bridge replay state contains `function_call_output` for unknown call_id `{call_id}`"
+                    ));
+                };
+                pending.remove(index);
+            }
+            Some("message") => {}
+            Some("custom_tool_call" | "custom_tool_call_output") => {
+                return Err(
+                    "conversation_state_bridge replay state contains unsupported custom tool items"
+                        .to_string(),
+                );
+            }
+            Some(other) => {
+                return Err(format!(
+                    "conversation_state_bridge replay state contains unsupported `{other}` item"
+                ));
+            }
+            None => {
+                return Err(
+                    "conversation_state_bridge replay state contains an input item without `type`"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(pending)
+}
+
+fn validate_responses_tool_output_shape(output: &Value) -> Result<(), String> {
+    let Value::Array(items) = output else {
+        return Ok(());
+    };
+    for item in items {
+        match item.get("type").and_then(Value::as_str) {
+            Some("input_text" | "output_text") => {}
+            Some(other) => {
+                return Err(format!(
+                    "conversation_state_bridge memory replay cannot store `function_call_output.output` array item type `{other}`"
+                ));
+            }
+            None => {
+                return Err(
+                    "conversation_state_bridge memory replay requires typed text items in `function_call_output.output` arrays"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn non_empty_string_field<'a>(
+    item: &'a Value,
+    field: &str,
+    item_type: &str,
+) -> Result<&'a str, String> {
+    item.get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!("conversation_state_bridge memory replay requires `{item_type}.{field}`")
+        })
+}
+
 async fn commit_conversation_state_bridge_capture(
     store: &ConversationStateBridgeStore,
     candidate: BridgeCaptureCandidate,
@@ -1965,7 +2187,7 @@ async fn commit_conversation_state_bridge_capture(
     if response.get("status").and_then(Value::as_str) != Some("completed") {
         return Ok(None);
     }
-    let output_items = responses_text_output_items_from_response(response)?;
+    let output_items = responses_bridge_output_items_from_response(response)?;
     if output_items.is_empty() {
         return Ok(None);
     }
@@ -1993,7 +2215,7 @@ async fn commit_conversation_state_bridge_capture(
     Ok(Some(local_id))
 }
 
-fn responses_text_output_items_from_response(response: &Value) -> Result<Vec<Value>, String> {
+fn responses_bridge_output_items_from_response(response: &Value) -> Result<Vec<Value>, String> {
     let output = response
         .get("output")
         .and_then(Value::as_array)
@@ -2002,8 +2224,23 @@ fn responses_text_output_items_from_response(response: &Value) -> Result<Vec<Val
         })?;
     output
         .iter()
-        .map(responses_text_output_item)
+        .map(responses_bridge_output_item)
         .collect::<Result<Vec<_>, _>>()
+}
+
+fn responses_bridge_output_item(item: &Value) -> Result<Value, String> {
+    match responses_bridge_item_type(item) {
+        Some("message") => responses_text_output_item(item),
+        Some("function_call") => responses_function_call_item(item),
+        Some("custom_tool_call") => Err(
+            "conversation_state_bridge memory capture does not support `custom_tool_call` local replay"
+                .to_string(),
+        ),
+        _ => Err(
+            "conversation_state_bridge memory capture only supports assistant text message output and ordinary `function_call` output"
+                .to_string(),
+        ),
+    }
 }
 
 fn responses_text_output_item(item: &Value) -> Result<Value, String> {
@@ -2027,6 +2264,46 @@ fn responses_text_output_item(item: &Value) -> Result<Value, String> {
         "output_text",
         &text,
     ))
+}
+
+fn responses_function_call_item(item: &Value) -> Result<Value, String> {
+    if item.get("namespace").is_some() {
+        return Err(
+            "conversation_state_bridge memory capture does not support namespaced `function_call` output"
+                .to_string(),
+        );
+    }
+    if item.get("proxied_tool_kind").is_some() {
+        return Err(
+            "conversation_state_bridge memory capture does not support proxied tool call replay"
+                .to_string(),
+        );
+    }
+    let call_id = non_empty_string_field(item, "call_id", "function_call")?;
+    let name = non_empty_string_field(item, "name", "function_call")?;
+    let arguments = non_empty_string_field(item, "arguments", "function_call")?;
+    validate_json_object_arguments(arguments)?;
+    Ok(serde_json::json!({
+        "type": "function_call",
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments
+    }))
+}
+
+fn validate_json_object_arguments(arguments: &str) -> Result<(), String> {
+    let value: Value = serde_json::from_str(arguments).map_err(|error| {
+        format!(
+            "conversation_state_bridge memory capture requires `function_call.arguments` to be valid JSON object text: {error}"
+        )
+    })?;
+    if !value.is_object() {
+        return Err(
+            "conversation_state_bridge memory capture requires `function_call.arguments` to decode to a JSON object"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -218,6 +218,155 @@ upstreams:
     .unwrap()
 }
 
+#[derive(Clone, Default)]
+struct CapturedBridgeBodies {
+    bodies: Arc<Mutex<Vec<Value>>>,
+}
+
+impl CapturedBridgeBodies {
+    fn push(&self, body: Value) {
+        self.bodies.lock().unwrap().push(body);
+    }
+
+    fn snapshot(&self) -> Vec<Value> {
+        self.bodies.lock().unwrap().clone()
+    }
+
+    async fn wait_for_count(&self, count: usize, timeout: Duration) -> Vec<Value> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let snapshot = self.snapshot();
+            if snapshot.len() >= count || tokio::time::Instant::now() >= deadline {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SequencedOpenAiCompletionState {
+    captured: CapturedBridgeBodies,
+    calls: Arc<AtomicUsize>,
+    first_tool_calls: Vec<Value>,
+}
+
+async fn spawn_sequenced_openai_completion_tool_mock(
+    first_tool_call: Value,
+) -> (String, tokio::task::JoinHandle<()>, CapturedBridgeBodies) {
+    spawn_sequenced_openai_completion_tool_calls_mock(vec![first_tool_call]).await
+}
+
+async fn spawn_sequenced_openai_completion_tool_calls_mock(
+    first_tool_calls: Vec<Value>,
+) -> (String, tokio::task::JoinHandle<()>, CapturedBridgeBodies) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let captured = CapturedBridgeBodies::default();
+    let state = SequencedOpenAiCompletionState {
+        captured: captured.clone(),
+        calls: Arc::new(AtomicUsize::new(0)),
+        first_tool_calls,
+    };
+    let app = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(sequenced_openai_completion_tool_handler),
+        )
+        .route(
+            "/chat/completions",
+            post(sequenced_openai_completion_tool_handler),
+        );
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.with_state(state)).await.ok();
+    });
+    (base, handle, captured)
+}
+
+async fn sequenced_openai_completion_tool_handler(
+    State(state): State<SequencedOpenAiCompletionState>,
+    Json(body): Json<Value>,
+) -> Response {
+    state.captured.push(body.clone());
+    let call_index = state.calls.fetch_add(1, Ordering::SeqCst);
+    let message = if call_index == 0 {
+        json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": state.first_tool_calls.clone()
+        })
+    } else {
+        json!({ "role": "assistant", "content": "OK" })
+    };
+    let finish_reason = if call_index == 0 {
+        "tool_calls"
+    } else {
+        "stop"
+    };
+    let resp = json!({
+        "id": if call_index == 0 { "chatcmpl-tool-first" } else { "chatcmpl-tool-second" },
+        "object": "chat.completion",
+        "created": 1,
+        "model": body.get("model").cloned().unwrap_or_else(|| json!("mock")),
+        "choices": [{ "index": 0, "message": message, "finish_reason": finish_reason }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    (StatusCode::OK, Json(resp)).into_response()
+}
+
+#[derive(Clone)]
+struct SequencedAnthropicState {
+    captured: CapturedBridgeBodies,
+    calls: Arc<AtomicUsize>,
+    first_tool_use: Value,
+}
+
+async fn spawn_sequenced_anthropic_tool_mock(
+    first_tool_use: Value,
+) -> (String, tokio::task::JoinHandle<()>, CapturedBridgeBodies) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let captured = CapturedBridgeBodies::default();
+    let state = SequencedAnthropicState {
+        captured: captured.clone(),
+        calls: Arc::new(AtomicUsize::new(0)),
+        first_tool_use,
+    };
+    let app = Router::new()
+        .route("/v1/messages", post(sequenced_anthropic_tool_handler))
+        .route("/messages", post(sequenced_anthropic_tool_handler));
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.with_state(state)).await.ok();
+    });
+    (base, handle, captured)
+}
+
+async fn sequenced_anthropic_tool_handler(
+    State(state): State<SequencedAnthropicState>,
+    Json(body): Json<Value>,
+) -> Response {
+    state.captured.push(body.clone());
+    let call_index = state.calls.fetch_add(1, Ordering::SeqCst);
+    let (content, stop_reason) = if call_index == 0 {
+        (json!([state.first_tool_use.clone()]), "tool_use")
+    } else {
+        (json!([{ "type": "text", "text": "OK" }]), "end_turn")
+    };
+    let resp = json!({
+        "id": if call_index == 0 { "msg_tool_first" } else { "msg_tool_second" },
+        "type": "message",
+        "role": "assistant",
+        "content": content,
+        "model": body.get("model").cloned().unwrap_or_else(|| json!("claude-3")),
+        "stop_reason": stop_reason,
+        "stop_sequence": null,
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    (StatusCode::OK, Json(resp)).into_response()
+}
+
 fn config_with_alias(
     upstream_base: &str,
     format: UpstreamFormat,
@@ -4627,6 +4776,604 @@ async fn conversation_state_bridge_replays_text_history_to_anthropic_upstream() 
     assert_eq!(messages[2]["role"], "user");
     assert_eq!(messages[2]["content"][0]["text"], "Second");
     assert!(replay.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_replays_function_call_output_to_openai_chat_upstream() {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_lookup_weather",
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "arguments": "{\"city\":\"Tokyo\"}"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Weather in Tokyo?",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "function_call response should create local replay state, body = {first_body:?}"
+    );
+    assert_eq!(first_body["output"][0]["type"], "function_call");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_lookup_weather",
+                    "output": "Sunny, 24C"
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "Now answer with the result." }]
+                }
+            ],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+    let second_body: Value = second.json().await.unwrap();
+    let second_local_id = second_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        second_local_id.starts_with("resp_llmup_"),
+        "tool result continuation should create the next local replay state, body = {second_body:?}"
+    );
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 4, "replay = {replay:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], "Weather in Tokyo?");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_lookup_weather");
+    assert_eq!(
+        messages[1]["tool_calls"][0]["function"]["name"],
+        "lookup_weather"
+    );
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["tool_call_id"], "call_lookup_weather");
+    assert_eq!(messages[2]["content"], "Sunny, 24C");
+    assert_eq!(messages[3]["role"], "user");
+    assert_eq!(messages[3]["content"], "Now answer with the result.");
+    assert!(replay.get("previous_response_id").is_none());
+    assert!(replay.get("store").is_none());
+
+    let third = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": second_local_id,
+            "input": "Summarize the weather.",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(third.status().is_success(), "status: {}", third.status());
+
+    let requests = captured.wait_for_count(3, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 3, "captured = {requests:?}");
+    let replay = &requests[2];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 6, "third replay = {replay:?}");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_lookup_weather");
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["tool_call_id"], "call_lookup_weather");
+    assert_eq!(messages[2]["content"], "Sunny, 24C");
+    assert_eq!(messages[3]["role"], "user");
+    assert_eq!(messages[3]["content"], "Now answer with the result.");
+    assert_eq!(messages[4]["role"], "assistant");
+    assert_eq!(messages[4]["content"], "OK");
+    assert_eq!(messages[5]["role"], "user");
+    assert_eq!(messages[5]["content"], "Summarize the weather.");
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_replays_function_call_output_to_anthropic_upstream() {
+    let (mock_base, _mock, captured) = spawn_sequenced_anthropic_tool_mock(json!({
+        "type": "tool_use",
+        "id": "call_lookup_weather",
+        "name": "lookup_weather",
+        "input": { "city": "Tokyo" }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Weather in Tokyo?",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "function_call response should create local replay state, body = {first_body:?}"
+    );
+    assert_eq!(first_body["output"][0]["type"], "function_call");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_lookup_weather",
+                    "output": "Sunny, 24C"
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "Now answer with the result." }]
+                }
+            ],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+    let second_body: Value = second.json().await.unwrap();
+    let second_local_id = second_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        second_local_id.starts_with("resp_llmup_"),
+        "tool result continuation should create the next local replay state, body = {second_body:?}"
+    );
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "replay = {replay:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["text"], "Weather in Tokyo?");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][0]["type"], "tool_use");
+    assert_eq!(messages[1]["content"][0]["id"], "call_lookup_weather");
+    assert_eq!(messages[1]["content"][0]["name"], "lookup_weather");
+    assert_eq!(messages[1]["content"][0]["input"]["city"], "Tokyo");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+    assert_eq!(
+        messages[2]["content"][0]["tool_use_id"],
+        "call_lookup_weather"
+    );
+    assert_eq!(messages[2]["content"][0]["content"], "Sunny, 24C");
+    assert_eq!(messages[2]["content"][1]["type"], "text");
+    assert_eq!(
+        messages[2]["content"][1]["text"],
+        "Now answer with the result."
+    );
+    assert!(replay.get("previous_response_id").is_none());
+    assert!(replay.get("store").is_none());
+
+    let third = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": second_local_id,
+            "input": "Summarize the weather.",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(third.status().is_success(), "status: {}", third.status());
+
+    let requests = captured.wait_for_count(3, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 3, "captured = {requests:?}");
+    let replay = &requests[2];
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 5, "third replay = {replay:?}");
+    assert_eq!(messages[1]["content"][0]["type"], "tool_use");
+    assert_eq!(messages[1]["content"][0]["id"], "call_lookup_weather");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+    assert_eq!(
+        messages[2]["content"][0]["tool_use_id"],
+        "call_lookup_weather"
+    );
+    assert_eq!(messages[2]["content"][0]["content"], "Sunny, 24C");
+    assert_eq!(messages[2]["content"][1]["type"], "text");
+    assert_eq!(
+        messages[2]["content"][1]["text"],
+        "Now answer with the result."
+    );
+    assert_eq!(messages[3]["role"], "assistant");
+    assert_eq!(messages[3]["content"][0]["text"], "OK");
+    assert_eq!(messages[4]["role"], "user");
+    assert_eq!(messages[4]["content"][0]["text"], "Summarize the weather.");
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_missing_function_call_output_for_pending_call_before_dispatch(
+) {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_lookup_weather",
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "arguments": "{\"city\":\"Tokyo\"}"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Weather in Tokyo?",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("function_call_output") && message.contains("pending"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_mismatched_function_call_output_before_dispatch() {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_lookup_weather",
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "arguments": "{\"city\":\"Tokyo\"}"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Weather in Tokyo?",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_other",
+                "output": "Sunny, 24C"
+            }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("function_call_output") && message.contains("pending"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_duplicate_function_call_output_before_dispatch() {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_calls_mock(vec![
+        json!({
+            "id": "call_lookup_weather",
+            "type": "function",
+            "function": {
+                "name": "lookup_weather",
+                "arguments": "{\"city\":\"Tokyo\"}"
+            }
+        }),
+        json!({
+            "id": "call_lookup_units",
+            "type": "function",
+            "function": {
+                "name": "lookup_units",
+                "arguments": "{\"city\":\"Tokyo\"}"
+            }
+        }),
+    ])
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Weather in Tokyo?",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_lookup_weather",
+                    "output": "Sunny, 24C"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_lookup_weather",
+                    "output": "duplicate result"
+                }
+            ],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("function_call_output") && message.contains("duplicate"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_rejects_extra_function_call_output_after_pending_prefix_before_dispatch(
+) {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_lookup_weather",
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "arguments": "{\"city\":\"Tokyo\"}"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Weather in Tokyo?",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_lookup_weather",
+                    "output": "Sunny, 24C"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_extra",
+                    "output": "unexpected"
+                }
+            ],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("function_call_output") && message.contains("extra"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_custom_tool_call_response_does_not_create_local_replay_state() {
+    let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
+        "id": "call_custom_exec",
+        "type": "custom",
+        "custom": {
+            "name": "code_exec",
+            "input": "print('hi')"
+        }
+    }))
+    .await;
+    let config = bridge_memory_proxy_config(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        60,
+        1024 * 1024,
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Run code",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    assert_eq!(first_body["output"][0]["type"], "custom_tool_call");
+    let response_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        !response_id.starts_with("resp_llmup_"),
+        "custom_tool_call must not create local replay state, body = {first_body:?}"
+    );
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": response_id,
+            "input": [{
+                "type": "custom_tool_call_output",
+                "call_id": "call_custom_exec",
+                "output": "ok"
+            }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
