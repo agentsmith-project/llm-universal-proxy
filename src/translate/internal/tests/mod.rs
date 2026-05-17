@@ -4893,6 +4893,120 @@ fn assess_request_translation_openai_to_anthropic_warns_on_prediction_and_web_se
 }
 
 #[test]
+fn assess_request_translation_openai_chat_same_format_rejects_anthropic_prompt_cache_extension() {
+    let body = json!({
+        "model": "gpt-4o",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "anthropic": {
+                "cache_control": { "type": "ephemeral", "ttl": "5m" }
+            }
+        }
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected rejection, got {assessment:?}");
+    };
+    assert!(
+        message.contains("extra_body.anthropic.cache_control"),
+        "message = {message}"
+    );
+    assert!(message.contains("target Anthropic"), "message = {message}");
+}
+
+#[test]
+fn assess_request_translation_openai_responses_same_format_rejects_anthropic_prompt_cache_extension(
+) {
+    let body = json!({
+        "model": "gpt-4o",
+        "input": "Hi",
+        "extra_body": {
+            "anthropic": {
+                "cache_control": { "type": "ephemeral", "ttl": "5m" }
+            }
+        }
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiResponses,
+        &body,
+    );
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected rejection, got {assessment:?}");
+    };
+    assert!(
+        message.contains("extra_body.anthropic.cache_control"),
+        "message = {message}"
+    );
+    assert!(message.contains("target Anthropic"), "message = {message}");
+}
+
+#[test]
+fn assess_request_translation_anthropic_same_format_rejects_openai_prompt_cache_extension() {
+    let body = json!({
+        "model": "claude-3",
+        "max_tokens": 32,
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "openai": {
+                "prompt_cache_key": "stable-prefix"
+            }
+        }
+    });
+
+    let assessment =
+        assess_request_translation(UpstreamFormat::Anthropic, UpstreamFormat::Anthropic, &body);
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected rejection, got {assessment:?}");
+    };
+    assert!(message.contains("extra_body.openai"), "message = {message}");
+    assert!(message.contains("target OpenAI"), "message = {message}");
+}
+
+#[test]
+fn assess_request_translation_same_format_allows_unknown_extra_body_fields() {
+    for (client_format, upstream_format, body) in [
+        (
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiCompletion,
+            json!({
+                "model": "gpt-4o",
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "extra_body": { "foo": { "cache_control": "business-value" } }
+            }),
+        ),
+        (
+            UpstreamFormat::OpenAiResponses,
+            UpstreamFormat::OpenAiResponses,
+            json!({
+                "model": "gpt-4o",
+                "input": "Hi",
+                "extra_body": { "foo": { "prompt_cache_key": "business-value" } }
+            }),
+        ),
+        (
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::Anthropic,
+            json!({
+                "model": "claude-3",
+                "max_tokens": 32,
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "extra_body": { "foo": { "prompt_cache_key": "business-value" } }
+            }),
+        ),
+    ] {
+        let assessment = assess_request_translation(client_format, upstream_format, &body);
+        assert_eq!(assessment.decision(), TranslationDecision::Allow);
+    }
+}
+
+#[test]
 fn translate_request_openai_to_claude_rejects_invalid_extra_body_anthropic_cache_control() {
     let cases = [
         ("non_object", json!("ephemeral")),

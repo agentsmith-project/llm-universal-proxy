@@ -70,6 +70,42 @@ fn openai_family_format(format: UpstreamFormat) -> bool {
     )
 }
 
+fn assess_prompt_cache_extension_target_mismatch(
+    assessment: &mut TranslationAssessment,
+    client_format: UpstreamFormat,
+    upstream_format: UpstreamFormat,
+    body: &Value,
+) {
+    if openai_family_format(client_format)
+        && upstream_format != UpstreamFormat::Anthropic
+        && openai_extra_body_anthropic_cache_control(body).is_some()
+    {
+        assessment.reject(format!(
+            "extra_body.anthropic.cache_control is an explicit Anthropic prompt-cache control and cannot be forwarded to {}; target Anthropic is required",
+            translation_target_label(upstream_format)
+        ));
+    }
+
+    if client_format == UpstreamFormat::Anthropic
+        && !openai_family_format(upstream_format)
+        && anthropic_extra_body_openai_prompt_cache_control_present(body)
+    {
+        assessment.reject(format!(
+            "extra_body.openai prompt-cache controls are explicit OpenAI prompt-cache controls and cannot be forwarded to {}; target OpenAI is required",
+            translation_target_label(upstream_format)
+        ));
+    }
+}
+
+fn anthropic_extra_body_openai_prompt_cache_control_present(body: &Value) -> bool {
+    body.get("extra_body")
+        .and_then(|extra_body| extra_body.get("openai"))
+        .is_some_and(|openai| {
+            openai.get("prompt_cache_key").is_some()
+                || openai.get("prompt_cache_retention").is_some()
+        })
+}
+
 fn assess_openai_family_prompt_cache_extensions(
     assessment: &mut TranslationAssessment,
     client_format: UpstreamFormat,
@@ -87,13 +123,10 @@ fn assess_openai_family_prompt_cache_extensions(
         ));
     }
 
-    if openai_extra_body_anthropic_cache_control(body).is_some() {
-        if upstream_format != UpstreamFormat::Anthropic {
-            assessment.reject(format!(
-                "extra_body.anthropic.cache_control is an explicit Anthropic prompt-cache control and cannot be translated to {}; target Anthropic is required",
-                translation_target_label(upstream_format)
-            ));
-        } else if let Err(message) = validated_openai_extra_body_anthropic_cache_control(body) {
+    if upstream_format == UpstreamFormat::Anthropic
+        && openai_extra_body_anthropic_cache_control(body).is_some()
+    {
+        if let Err(message) = validated_openai_extra_body_anthropic_cache_control(body) {
             assessment.reject(message);
         }
     }
@@ -1641,6 +1674,13 @@ pub(crate) fn assess_request_translation(
     if let Some(message) = openai_request_file_mime_conflict_message(client_format, body) {
         assessment.reject(message);
     }
+
+    assess_prompt_cache_extension_target_mismatch(
+        &mut assessment,
+        client_format,
+        upstream_format,
+        body,
+    );
 
     if client_format == upstream_format {
         return assessment;
