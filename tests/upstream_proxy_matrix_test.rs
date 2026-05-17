@@ -29,6 +29,115 @@ use tokio::net::TcpListener;
 static UPSTREAM_PROXY_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 const TEST_PROVIDER_KEY: &str = "provider-secret";
+const RAW_RESPONSE_CONTENT_TYPE: &str = "application/json; charset=utf-8; boundary=raw-canary";
+const RAW_CHAT_REQUEST: &str = r#"{
+  "model": "gpt-4o-mini",
+  "messages": [
+    { "role": "user", "content": "ping" }
+  ],
+  "prompt_cache_key": "stable-prefix",
+  "temperature": 1e0
+}"#;
+const RAW_RESPONSES_REQUEST: &str = r#"{
+  "model": "gpt-4.1",
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "input_text", "text": "ping" }
+      ]
+    }
+  ],
+  "prompt_cache_key": "responses-prefix",
+  "temperature": 1e0
+}"#;
+const RAW_ANTHROPIC_REQUEST: &str = r#"{
+  "model": "claude-3-5-sonnet",
+  "max_tokens": 0,
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "ping",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    }
+  ],
+  "temperature": 1e0
+}"#;
+const RAW_CHAT_SUCCESS_RESPONSE: &str = r#"{
+  "id" : "chatcmpl_raw_success",
+  "object" : "chat.completion",
+  "created" : 123,
+  "model" : "gpt-4o-mini",
+  "x_unknown" : { "field_order" : ["b", "a"], "scientific" : 1e0, "decimal" : 1.2300 },
+  "choices" : [
+    {
+      "finish_reason" : "stop",
+      "index" : 0,
+      "message" : { "content" : "raw ok", "role" : "assistant", "extra" : "kept" }
+    }
+  ],
+  "usage" : { "completion_tokens" : 1, "prompt_tokens" : 1, "total_tokens" : 2 }
+}
+"#;
+const RAW_RESPONSES_SUCCESS_RESPONSE: &str = r#"{
+  "id" : "resp_raw_success",
+  "object" : "response",
+  "created_at" : 123,
+  "model" : "gpt-4.1",
+  "x_unknown" : { "field_order" : ["b", "a"], "scientific" : 1e0, "decimal" : 1.2300 },
+  "output" : [
+    {
+      "id" : "msg_raw",
+      "type" : "message",
+      "role" : "assistant",
+      "content" : [
+        { "type" : "output_text", "text" : "raw ok", "extra" : "kept" }
+      ]
+    }
+  ],
+  "usage" : { "input_tokens" : 1, "output_tokens" : 1, "total_tokens" : 2 }
+}
+"#;
+const RAW_ANTHROPIC_SUCCESS_RESPONSE: &str = r#"{
+  "id" : "msg_raw_success",
+  "type" : "message",
+  "role" : "assistant",
+  "content" : [
+    { "type" : "text", "text" : "raw ok", "extra" : "kept" }
+  ],
+  "model" : "claude-3-5-sonnet",
+  "stop_reason" : "end_turn",
+  "stop_sequence" : null,
+  "x_unknown" : { "field_order" : ["b", "a"], "scientific" : 1e0, "decimal" : 1.2300 },
+  "usage" : { "input_tokens" : 1, "output_tokens" : 1 }
+}
+"#;
+const RAW_OPENAI_ERROR_RESPONSE: &str = r#"{
+  "error" : {
+    "message" : "raw provider error",
+    "type" : "rate_limit_exceeded",
+    "param" : null,
+    "code" : "rate_limit",
+    "x_unknown" : { "scientific" : 1e0, "decimal" : 1.2300 }
+  },
+  "top_unknown" : ["b", "a"]
+}
+"#;
+const RAW_ANTHROPIC_ERROR_RESPONSE: &str = r#"{
+  "type" : "error",
+  "error" : {
+    "type" : "rate_limit_error",
+    "message" : "raw provider error",
+    "x_unknown" : { "scientific" : 1e0, "decimal" : 1.2300 }
+  },
+  "top_unknown" : ["b", "a"]
+}
+"#;
 
 fn direct_data_client() -> Client {
     let mut headers = ReqwestHeaderMap::new();
@@ -64,6 +173,48 @@ impl CapturedUpstreamRequests {
     fn snapshot(&self) -> Vec<CapturedUpstreamRequest> {
         self.requests.lock().unwrap().clone()
     }
+}
+
+#[derive(Clone)]
+struct RawUpstreamResponse {
+    status: StatusCode,
+    content_type: &'static str,
+    body: &'static str,
+}
+
+impl RawUpstreamResponse {
+    fn success(body: &'static str) -> Self {
+        Self {
+            status: StatusCode::OK,
+            content_type: RAW_RESPONSE_CONTENT_TYPE,
+            body,
+        }
+    }
+
+    fn provider_error(body: &'static str) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            content_type: RAW_RESPONSE_CONTENT_TYPE,
+            body,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RawResponseUpstreamState {
+    captured: CapturedUpstreamRequests,
+    response: RawUpstreamResponse,
+}
+
+#[derive(Clone, Copy)]
+struct RawForwardingCase {
+    name: &'static str,
+    format: UpstreamFormat,
+    llmup_path: &'static str,
+    upstream_path: &'static str,
+    request_body: &'static str,
+    success_body: &'static str,
+    error_body: &'static str,
 }
 
 struct ScopedEnvVar {
@@ -166,6 +317,32 @@ async fn spawn_openai_capture_upstream() -> (
     (base, handle, captured)
 }
 
+async fn spawn_raw_response_capture_upstream(
+    response: RawUpstreamResponse,
+) -> (
+    String,
+    tokio::task::JoinHandle<()>,
+    CapturedUpstreamRequests,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let captured = CapturedUpstreamRequests::default();
+    let state = RawResponseUpstreamState {
+        captured: captured.clone(),
+        response,
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(raw_openai_chat_handler))
+        .route("/v1/responses", post(raw_openai_responses_create_handler))
+        .route("/v1/messages", post(raw_anthropic_messages_handler))
+        .with_state(state);
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    (base, handle, captured)
+}
+
 async fn openai_chat_handler(
     State(captured): State<CapturedUpstreamRequests>,
     method: Method,
@@ -212,6 +389,14 @@ async fn openai_chat_handler(
     response
 }
 
+async fn raw_openai_chat_handler(
+    State(state): State<RawResponseUpstreamState>,
+    method: Method,
+    raw_body: Bytes,
+) -> Response {
+    raw_response_with_capture(state, method, "/v1/chat/completions", raw_body)
+}
+
 async fn openai_responses_create_handler(
     State(captured): State<CapturedUpstreamRequests>,
     method: Method,
@@ -245,6 +430,14 @@ async fn openai_responses_create_handler(
         .into_response()
 }
 
+async fn raw_openai_responses_create_handler(
+    State(state): State<RawResponseUpstreamState>,
+    method: Method,
+    raw_body: Bytes,
+) -> Response {
+    raw_response_with_capture(state, method, "/v1/responses", raw_body)
+}
+
 async fn anthropic_messages_handler(
     State(captured): State<CapturedUpstreamRequests>,
     method: Method,
@@ -272,6 +465,46 @@ async fn anthropic_messages_handler(
         })),
     )
         .into_response()
+}
+
+async fn raw_anthropic_messages_handler(
+    State(state): State<RawResponseUpstreamState>,
+    method: Method,
+    raw_body: Bytes,
+) -> Response {
+    raw_response_with_capture(state, method, "/v1/messages", raw_body)
+}
+
+fn raw_response_with_capture(
+    state: RawResponseUpstreamState,
+    method: Method,
+    path: &str,
+    raw_body: Bytes,
+) -> Response {
+    let (body, raw_body) = parse_captured_json_body(raw_body);
+    capture_request(
+        &state.captured,
+        method,
+        path,
+        Some(body.clone()),
+        Some(raw_body),
+    );
+
+    Response::builder()
+        .status(state.response.status)
+        .header("Content-Type", state.response.content_type)
+        .header(
+            "Content-Length",
+            state.response.body.as_bytes().len().to_string(),
+        )
+        .header("request-id", "req_raw_phase_3a")
+        .header("x-request-id", "xreq_raw_phase_3a")
+        .header("openai-processing-ms", "42")
+        .header("retry-after", "3")
+        .header("x-ratelimit-remaining-requests", "17")
+        .header("set-cookie", "session=must-not-forward")
+        .body(Body::from(state.response.body))
+        .unwrap()
 }
 
 async fn openai_responses_get_handler(
@@ -365,6 +598,209 @@ async fn post_raw_json(client: &Client, url: String, raw_json: &str) -> reqwest:
         .send()
         .await
         .unwrap()
+}
+
+fn raw_forwarding_cases() -> [RawForwardingCase; 3] {
+    [
+        RawForwardingCase {
+            name: "openai chat",
+            format: UpstreamFormat::OpenAiCompletion,
+            llmup_path: "/openai/v1/chat/completions",
+            upstream_path: "/v1/chat/completions",
+            request_body: RAW_CHAT_REQUEST,
+            success_body: RAW_CHAT_SUCCESS_RESPONSE,
+            error_body: RAW_OPENAI_ERROR_RESPONSE,
+        },
+        RawForwardingCase {
+            name: "openai responses",
+            format: UpstreamFormat::OpenAiResponses,
+            llmup_path: "/openai/v1/responses",
+            upstream_path: "/v1/responses",
+            request_body: RAW_RESPONSES_REQUEST,
+            success_body: RAW_RESPONSES_SUCCESS_RESPONSE,
+            error_body: RAW_OPENAI_ERROR_RESPONSE,
+        },
+        RawForwardingCase {
+            name: "anthropic messages",
+            format: UpstreamFormat::Anthropic,
+            llmup_path: "/anthropic/v1/messages",
+            upstream_path: "/v1/messages",
+            request_body: RAW_ANTHROPIC_REQUEST,
+            success_body: RAW_ANTHROPIC_SUCCESS_RESPONSE,
+            error_body: RAW_ANTHROPIC_ERROR_RESPONSE,
+        },
+    ]
+}
+
+fn header_str<'a>(headers: &'a ReqwestHeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+fn assert_raw_response_headers(headers: &ReqwestHeaderMap) {
+    assert_eq!(
+        header_str(headers, CONTENT_TYPE.as_str()),
+        Some(RAW_RESPONSE_CONTENT_TYPE)
+    );
+    assert_eq!(header_str(headers, "request-id"), Some("req_raw_phase_3a"));
+    assert_eq!(
+        header_str(headers, "x-request-id"),
+        Some("xreq_raw_phase_3a")
+    );
+    assert_eq!(header_str(headers, "openai-processing-ms"), Some("42"));
+    assert_eq!(header_str(headers, "retry-after"), Some("3"));
+    assert_eq!(
+        header_str(headers, "x-ratelimit-remaining-requests"),
+        Some("17")
+    );
+    assert!(
+        headers.get("set-cookie").is_none(),
+        "sensitive upstream response header must not be forwarded"
+    );
+}
+
+#[tokio::test]
+async fn same_format_non_stream_success_response_forwards_exact_upstream_bytes() {
+    for case in raw_forwarding_cases() {
+        let (upstream_base, _upstream, captured_upstream) =
+            spawn_raw_response_capture_upstream(RawUpstreamResponse::success(case.success_body))
+                .await;
+        let config = fixed_format_config(&upstream_base, case.format);
+        let (llmup_base, _llmup) = start_proxy(config).await;
+        let client = direct_data_client();
+
+        let response = post_raw_json(
+            &client,
+            format!("{llmup_base}{}", case.llmup_path),
+            case.request_body,
+        )
+        .await;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.bytes().await.unwrap();
+
+        assert_eq!(status, StatusCode::OK, "case = {}", case.name);
+        assert_eq!(
+            body.as_ref(),
+            case.success_body.as_bytes(),
+            "case = {}",
+            case.name
+        );
+        assert_raw_response_headers(&headers);
+
+        let requests = wait_for_upstream_path(&captured_upstream, case.upstream_path, 80).await;
+        let request = requests
+            .iter()
+            .find(|request| request.path == case.upstream_path)
+            .unwrap_or_else(|| panic!("{} request should reach upstream", case.name));
+        assert_eq!(
+            request.raw_body.as_deref(),
+            Some(case.request_body.as_bytes()),
+            "case = {}",
+            case.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn same_format_non_stream_provider_error_response_forwards_exact_upstream_bytes() {
+    for case in raw_forwarding_cases() {
+        let (upstream_base, _upstream, captured_upstream) = spawn_raw_response_capture_upstream(
+            RawUpstreamResponse::provider_error(case.error_body),
+        )
+        .await;
+        let config = fixed_format_config(&upstream_base, case.format);
+        let (llmup_base, _llmup) = start_proxy(config).await;
+        let client = direct_data_client();
+
+        let response = post_raw_json(
+            &client,
+            format!("{llmup_base}{}", case.llmup_path),
+            case.request_body,
+        )
+        .await;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.bytes().await.unwrap();
+
+        assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "case = {}",
+            case.name
+        );
+        assert_eq!(
+            body.as_ref(),
+            case.error_body.as_bytes(),
+            "case = {}",
+            case.name
+        );
+        assert_raw_response_headers(&headers);
+
+        let requests = wait_for_upstream_path(&captured_upstream, case.upstream_path, 80).await;
+        assert!(
+            requests
+                .iter()
+                .any(|request| request.path == case.upstream_path),
+            "{} request should reach upstream: {requests:?}",
+            case.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn alias_model_rewrite_prevents_raw_non_stream_response_forwarding() {
+    let (upstream_base, _upstream, captured_upstream) = spawn_raw_response_capture_upstream(
+        RawUpstreamResponse::success(RAW_CHAT_SUCCESS_RESPONSE),
+    )
+    .await;
+    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    config.model_aliases.insert(
+        "alias-chat".to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: "gpt-4o-mini".to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
+    let (llmup_base, _llmup) = start_proxy(config).await;
+    let client = direct_data_client();
+    let raw_json = r#"{
+  "model": "alias-chat",
+  "messages": [
+    { "role": "user", "content": "ping" }
+  ],
+  "temperature": 1.2300
+}"#;
+
+    let response = post_raw_json(
+        &client,
+        format!("{llmup_base}/openai/v1/chat/completions"),
+        raw_json,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let downstream_body = response.bytes().await.unwrap();
+    assert_ne!(
+        downstream_body.as_ref(),
+        RAW_CHAT_SUCCESS_RESPONSE.as_bytes(),
+        "alias rewrite must not activate raw response forwarding"
+    );
+
+    let requests = wait_for_upstream_path(&captured_upstream, "/v1/chat/completions", 80).await;
+    let request = requests
+        .iter()
+        .find(|request| request.path == "/v1/chat/completions")
+        .expect("chat request should reach upstream");
+    assert_ne!(request.raw_body.as_deref(), Some(raw_json.as_bytes()));
+    assert_eq!(
+        request
+            .body
+            .as_ref()
+            .and_then(|body| body.get("model"))
+            .and_then(Value::as_str),
+        Some("gpt-4o-mini")
+    );
 }
 
 #[tokio::test]

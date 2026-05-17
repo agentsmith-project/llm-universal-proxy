@@ -117,6 +117,51 @@ pub(super) fn append_upstream_protocol_response_headers(
     }
 }
 
+pub(super) fn append_raw_upstream_response_headers(
+    response: &mut Response<Body>,
+    upstream_headers: &reqwest::header::HeaderMap,
+    body_len: usize,
+    redactor: &SecretRedactor,
+) {
+    if let Some(value) = upstream_headers.get(reqwest::header::CONTENT_TYPE) {
+        response
+            .headers_mut()
+            .insert(reqwest::header::CONTENT_TYPE, value.clone());
+    }
+
+    for value in upstream_headers
+        .get_all(reqwest::header::CONTENT_ENCODING)
+        .iter()
+    {
+        if value.to_str().is_ok() {
+            response
+                .headers_mut()
+                .append(reqwest::header::CONTENT_ENCODING, value.clone());
+        }
+    }
+
+    if let Some(value) = matching_content_length(upstream_headers, body_len) {
+        response
+            .headers_mut()
+            .insert(reqwest::header::CONTENT_LENGTH, value);
+    }
+
+    for (name, value) in upstream_headers.iter() {
+        if is_forwardable_upstream_protocol_response_header(name.as_str())
+            && !response.headers().contains_key(name)
+        {
+            let Ok(value) = value.to_str() else {
+                continue;
+            };
+            let redacted_value = redactor.redact_text(value);
+            let Ok(redacted_value) = HeaderValue::from_str(&redacted_value) else {
+                continue;
+            };
+            response.headers_mut().append(name, redacted_value);
+        }
+    }
+}
+
 /// Extract only protocol-relevant headers that are safe to forward to upstream.
 /// Avoid forwarding generic browser/runtime headers from the client request.
 pub(super) fn extract_forwardable_headers(headers: &HeaderMap) -> Vec<(String, String)> {
@@ -216,6 +261,24 @@ fn is_forwardable_upstream_protocol_response_header(name: &str) -> bool {
         || name.starts_with("x-ratelimit-")
         || name.starts_with("rate-limit-")
         || name.starts_with("anthropic-ratelimit-")
+}
+
+fn matching_content_length(
+    upstream_headers: &reqwest::header::HeaderMap,
+    body_len: usize,
+) -> Option<HeaderValue> {
+    let mut values = upstream_headers
+        .get_all(reqwest::header::CONTENT_LENGTH)
+        .iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    let length = value.to_str().ok()?.trim().parse::<usize>().ok()?;
+    if length != body_len {
+        return None;
+    }
+    HeaderValue::from_str(&length.to_string()).ok()
 }
 
 #[cfg(test)]

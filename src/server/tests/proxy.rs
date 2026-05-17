@@ -2858,7 +2858,7 @@ async fn live_responses_custom_tool_bridge_to_openai_restores_non_stream_respons
 }
 
 #[tokio::test]
-async fn live_openai_responses_same_format_success_rejects_upstream_bridge_context_leak() {
+async fn live_openai_responses_transformation_required_rejects_upstream_bridge_context_leak() {
     let response_body = serde_json::json!({
         "_llmup_tool_bridge_context": {
             "version": 2,
@@ -2882,6 +2882,22 @@ async fn live_openai_responses_same_format_success_rejects_upstream_bridge_conte
     let (mock_base, requests, server) = spawn_openai_responses_mock(response_body).await;
     let state =
         app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiResponses);
+    {
+        let mut runtime = state.runtime.write().await;
+        let namespace = runtime
+            .namespaces
+            .get_mut(DEFAULT_NAMESPACE)
+            .expect("default namespace");
+        namespace.config.model_aliases.insert(
+            "responses-alias".to_string(),
+            crate::config::ModelAlias {
+                upstream_name: "primary".to_string(),
+                upstream_model: "gpt-4o-mini".to_string(),
+                limits: None,
+                surface: None,
+            },
+        );
+    }
 
     let response = handle_request_core(
         state,
@@ -2889,11 +2905,11 @@ async fn live_openai_responses_same_format_success_rejects_upstream_bridge_conte
         HeaderMap::new(),
         "/openai/v1/responses".to_string(),
         serde_json::json!({
-            "model": "gpt-4o-mini",
+            "model": "responses-alias",
             "input": "Hi",
             "stream": false
         }),
-        "gpt-4o-mini".to_string(),
+        "responses-alias".to_string(),
         crate::formats::UpstreamFormat::OpenAiResponses,
         None,
     )
@@ -2915,11 +2931,13 @@ async fn live_openai_responses_same_format_success_rejects_upstream_bridge_conte
 
     let recorded = requests.lock().await;
     assert_eq!(recorded.len(), 1, "requests = {recorded:?}");
+    assert_eq!(recorded[0]["model"], "gpt-4o-mini");
     server.abort();
 }
 
 #[tokio::test]
-async fn live_openai_responses_same_format_success_rejects_reserved_tool_identity_without_leak() {
+async fn live_openai_responses_transformation_required_rejects_reserved_tool_identity_without_leak()
+{
     let response_body = serde_json::json!({
         "id": "resp_reserved_identity",
         "object": "response",
@@ -2935,6 +2953,22 @@ async fn live_openai_responses_same_format_success_rejects_reserved_tool_identit
     let (mock_base, requests, server) = spawn_openai_responses_mock(response_body).await;
     let state =
         app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiResponses);
+    {
+        let mut runtime = state.runtime.write().await;
+        let namespace = runtime
+            .namespaces
+            .get_mut(DEFAULT_NAMESPACE)
+            .expect("default namespace");
+        namespace.config.model_aliases.insert(
+            "responses-alias".to_string(),
+            crate::config::ModelAlias {
+                upstream_name: "primary".to_string(),
+                upstream_model: "gpt-4o-mini".to_string(),
+                limits: None,
+                surface: None,
+            },
+        );
+    }
 
     let response = handle_request_core(
         state,
@@ -2942,11 +2976,11 @@ async fn live_openai_responses_same_format_success_rejects_reserved_tool_identit
         HeaderMap::new(),
         "/openai/v1/responses".to_string(),
         serde_json::json!({
-            "model": "gpt-4o-mini",
+            "model": "responses-alias",
             "input": "Hi",
             "stream": false
         }),
-        "gpt-4o-mini".to_string(),
+        "responses-alias".to_string(),
         crate::formats::UpstreamFormat::OpenAiResponses,
         None,
     )
@@ -2968,6 +3002,7 @@ async fn live_openai_responses_same_format_success_rejects_reserved_tool_identit
 
     let recorded = requests.lock().await;
     assert_eq!(recorded.len(), 1, "requests = {recorded:?}");
+    assert_eq!(recorded[0]["model"], "gpt-4o-mini");
     server.abort();
 }
 

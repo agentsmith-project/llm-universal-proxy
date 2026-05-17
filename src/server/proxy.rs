@@ -45,7 +45,8 @@ use super::errors::{
     normalized_non_stream_upstream_error, streaming_error_response,
 };
 use super::headers::{
-    append_upstream_protocol_response_headers, apply_upstream_headers, build_auth_headers,
+    append_raw_upstream_response_headers, append_upstream_protocol_response_headers,
+    apply_upstream_headers, build_auth_headers,
 };
 use super::public_boundary::{
     reject_internal_request_scoped_tool_bridge_context,
@@ -1103,6 +1104,8 @@ async fn handle_request_core_with_downstream_cancellation(
     );
     let upstream_client = if stream {
         upstream_state.streaming_client.clone()
+    } else if llmup.zero_transform_forwarding_active {
+        upstream_state.no_auto_decompression_client.clone()
     } else {
         upstream_state.client.clone()
     };
@@ -1315,6 +1318,52 @@ async fn handle_request_core_with_downstream_cancellation(
             return client_closed_response(client_format);
         }
     };
+    if llmup.zero_transform_forwarding_active {
+        if status.is_success() {
+            match serde_json::from_slice::<Value>(&bytes) {
+                Ok(upstream_body_for_observability) => {
+                    let public_out =
+                        request_redactor.redact_value(&upstream_body_for_observability);
+                    if let (Some(dispatcher), Some(ctx)) =
+                        (namespace_state.hooks.as_ref(), hook_ctx.clone())
+                    {
+                        dispatcher.emit_non_stream(
+                            ctx,
+                            status.as_u16(),
+                            json_response_headers(),
+                            public_out.clone(),
+                        );
+                    }
+                    if let (Some(recorder), Some(ctx)) =
+                        (namespace_state.debug_trace.as_ref(), debug_ctx.as_ref())
+                    {
+                        recorder.record_non_stream_response(ctx, status.as_u16(), &public_out);
+                    }
+                }
+                Err(_) => {
+                    warn!(
+                        "zero-transform upstream response was not valid JSON; forwarding raw body without non-stream response hook/debug capture"
+                    );
+                }
+            }
+            tracker.finish_success(status.as_u16());
+        } else {
+            tracker.finish_error(status.as_u16());
+        }
+        let body_len = bytes.len();
+        let mut response = Response::builder()
+            .status(status)
+            .body(Body::from(bytes))
+            .unwrap();
+        append_raw_upstream_response_headers(
+            &mut response,
+            &upstream_response_headers,
+            body_len,
+            &request_redactor,
+        );
+        append_compatibility_warning_headers(&mut response, &compatibility_warnings);
+        return response;
+    }
     if !status.is_success() {
         error!("Upstream returned non-success status: {}", status);
         let redacted_upstream_body = request_redactor.redact_text(&String::from_utf8_lossy(&bytes));
