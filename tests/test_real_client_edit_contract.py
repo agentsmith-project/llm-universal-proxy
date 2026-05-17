@@ -45,7 +45,7 @@ def make_fixture(module, verifier):
         timeout_secs=90,
         workspace_template=pathlib.Path("/tmp/workspace"),
         supported_clients=("claude",),
-        unsupported_lanes=("qwen-local",),
+        unsupported_targets=("qwen-local",),
     )
 
 
@@ -234,7 +234,7 @@ class RealClientEditContractTests(unittest.TestCase):
         self.assertEqual(payload["id"], "public_editing_tool_workspace_edit_contract")
         self.assertEqual(payload["kind"], "smoke")
         self.assertEqual(payload["workspace_template"], "workspace")
-        self.assertEqual(payload["unsupported_lanes"], ["qwen-local"])
+        self.assertEqual(payload["unsupported_targets"], ["qwen-local"])
         self.assertEqual(payload["verifier"]["type"], "all_of")
         self.assertEqual(
             [entry["type"] for entry in payload["verifier"]["verifiers"]],
@@ -274,10 +274,10 @@ class RealClientEditContractTests(unittest.TestCase):
             payload["prompt"],
         )
 
-    def test_lane_supports_fixture_respects_fixture_unsupported_lanes(self):
+    def test_target_supports_fixture_respects_fixture_unsupported_targets(self):
         module = load_module()
         fixture = make_fixture(module, public_editing_tool_workspace_edit_verifier())
-        qwen_lane = module.Lane(
+        qwen_target = module.MatrixTarget(
             name="qwen-local",
             required=False,
             enabled=True,
@@ -286,7 +286,7 @@ class RealClientEditContractTests(unittest.TestCase):
             skip_reason=None,
         )
 
-        self.assertFalse(module.lane_supports_fixture(qwen_lane, fixture))
+        self.assertFalse(module.target_supports_fixture(qwen_target, fixture))
 
     def test_client_supports_fixture_excludes_codex_for_public_editing_tool_workspace_contract(self):
         module = load_module()
@@ -298,7 +298,7 @@ class RealClientEditContractTests(unittest.TestCase):
     def test_expand_matrix_excludes_codex_for_public_editing_tool_workspace_contract(self):
         module = load_module()
         fixture = make_fixture(module, public_editing_tool_workspace_edit_verifier())
-        lane = module.Lane(
+        target = module.MatrixTarget(
             name="minimax-openai",
             required=True,
             enabled=True,
@@ -309,7 +309,7 @@ class RealClientEditContractTests(unittest.TestCase):
 
         cases = module.expand_matrix(
             clients=["codex", "claude"],
-            lanes=[lane],
+            targets=[target],
             fixtures=[fixture],
             phase="basic",
             skip_slow=False,

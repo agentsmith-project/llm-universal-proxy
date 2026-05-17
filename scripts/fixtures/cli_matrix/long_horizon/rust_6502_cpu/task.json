@@ -6,7 +6,7 @@
   "timeout_secs": 1800,
   "workspace_template": "workspace",
   "supported_clients": ["codex"],
-  "unsupported_lanes": ["qwen-local"],
+  "unsupported_targets": ["qwen-local"],
   "verifier": {
     "type": "all_of",
     "verifiers": [

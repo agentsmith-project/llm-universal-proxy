@@ -41,7 +41,7 @@ def make_fixture(module, verifier):
         timeout_secs=90,
         workspace_template=pathlib.Path("/tmp/workspace"),
         supported_clients=("codex",),
-        unsupported_lanes=("qwen-local",),
+        unsupported_targets=("qwen-local",),
     )
 
 

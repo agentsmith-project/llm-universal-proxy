@@ -50,7 +50,7 @@ def effective_surface_for_model(module, config, model_name: str):
 
 
 class DefaultMatrixSurfaceContractTests(unittest.TestCase):
-    def test_primary_default_matrix_lanes_provide_live_surface_requirements(self):
+    def test_primary_default_matrix_targets_provide_live_surface_requirements(self):
         module = load_module()
         parsed = module.parse_proxy_source(CONFIG_PATH.read_text(encoding="utf-8"))
 
@@ -74,7 +74,7 @@ class DefaultMatrixSurfaceContractTests(unittest.TestCase):
                 self.assertFalse(surface.supports_view_image)
                 self.assertFalse(surface.supports_parallel_calls)
 
-    def test_runtime_config_preserves_primary_lane_surface_contracts(self):
+    def test_runtime_config_preserves_primary_target_surface_contracts(self):
         module = load_module()
         parsed = module.parse_proxy_source(CONFIG_PATH.read_text(encoding="utf-8"))
 

@@ -10,7 +10,7 @@
     "claude"
   ],
   "requires_tool_loop": true,
-  "unsupported_lanes": [
+  "unsupported_targets": [
     "qwen-local"
   ],
   "verifier": {

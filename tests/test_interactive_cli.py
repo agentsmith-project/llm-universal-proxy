@@ -216,7 +216,7 @@ class InteractiveCliTests(unittest.TestCase):
         matrix_command = real_matrix.build_client_command(
             "codex",
             proxy_base,
-            real_matrix.Lane(
+            real_matrix.MatrixTarget(
                 name="preset-chat",
                 required=True,
                 enabled=True,
@@ -1222,7 +1222,7 @@ model_aliases:
             "http://upstream-proxy.example:8080",
         )
 
-    def test_start_managed_proxy_injects_qwen_surface_defaults_when_env_enables_local_lane(self):
+    def test_start_managed_proxy_injects_qwen_surface_defaults_when_env_enables_local_target(self):
         module = load_module()
 
         with tempfile.TemporaryDirectory() as temp_dir:

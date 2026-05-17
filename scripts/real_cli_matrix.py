@@ -101,8 +101,8 @@ PRESET_ENDPOINT_MODEL_ENV = "PRESET_ENDPOINT_MODEL"
 PRESET_ENDPOINT_API_KEY_ENV = "PRESET_ENDPOINT_API_KEY"
 PRESET_OPENAI_ENDPOINT_BASE_URL_ENV = "PRESET_OPENAI_ENDPOINT_BASE_URL"
 PRESET_ANTHROPIC_ENDPOINT_BASE_URL_ENV = "PRESET_ANTHROPIC_ENDPOINT_BASE_URL"
-PRESET_OPENAI_COMPATIBLE_LANE = "preset-openai-compatible"
-PRESET_ANTHROPIC_COMPATIBLE_LANE = "preset-anthropic-compatible"
+PRESET_OPENAI_COMPATIBLE_TARGET = "preset-openai-compatible"
+PRESET_ANTHROPIC_COMPATIBLE_TARGET = "preset-anthropic-compatible"
 PRESET_OPENAI_COMPATIBLE_UPSTREAM = "PRESET-OPENAI-COMPATIBLE"
 PRESET_ANTHROPIC_COMPATIBLE_UPSTREAM = "PRESET-ANTHROPIC-COMPATIBLE"
 AUTH_MODE_ENV = "LLM_UNIVERSAL_PROXY_AUTH_MODE"
@@ -496,7 +496,7 @@ class ProxySourceConfig:
 
 
 @dataclasses.dataclass
-class Lane:
+class MatrixTarget:
     name: str
     required: bool
     enabled: bool
@@ -520,7 +520,7 @@ class TaskFixture:
     prompt_template: str | None = None
     description: str = ""
     supported_clients: tuple[str, ...] = ()
-    unsupported_lanes: tuple[str, ...] = ()
+    unsupported_targets: tuple[str, ...] = ()
     requires_tool_loop: bool = False
 
     def __post_init__(self) -> None:
@@ -536,7 +536,7 @@ class TaskFixture:
 @dataclasses.dataclass
 class MatrixCase:
     client_name: str
-    lane: Lane
+    target: MatrixTarget
     fixture: TaskFixture
     case_id: str
 
@@ -966,15 +966,15 @@ def has_local_qwen(dotenv_env: dict[str, str]) -> bool:
     )
 
 
-def _primary_lane_specs() -> tuple[tuple[str, bool, str], ...]:
+def _primary_target_specs() -> tuple[tuple[str, bool, str], ...]:
     return (
         (
-            PRESET_ANTHROPIC_COMPATIBLE_LANE,
+            PRESET_ANTHROPIC_COMPATIBLE_TARGET,
             True,
             PRESET_ANTHROPIC_COMPATIBLE_UPSTREAM,
         ),
         (
-            PRESET_OPENAI_COMPATIBLE_LANE,
+            PRESET_OPENAI_COMPATIBLE_TARGET,
             True,
             PRESET_OPENAI_COMPATIBLE_UPSTREAM,
         ),
@@ -1095,22 +1095,22 @@ def _upstream_format_from_upstreams(
     return upstream_format or None
 
 
-def resolve_lanes(
+def resolve_matrix_targets(
     config: ProxySourceConfig,
     dotenv_env: dict[str, str],
     *,
     require_preset_endpoint_env: bool = True,
-) -> list[Lane]:
+) -> list[MatrixTarget]:
     if require_preset_endpoint_env:
         validate_preset_endpoint_env(config, dotenv_env)
     runtime_upstreams = _runtime_upstreams(config, dotenv_env)
-    lane_specs = _primary_lane_specs() + (
+    target_specs = _primary_target_specs() + (
         ("qwen-local", False, "LOCAL-QWEN"),
     )
-    lanes: list[Lane] = []
-    for lane_name, required, default_upstream in lane_specs:
-        alias_value = config.model_aliases.get(lane_name)
-        if alias_value is None and lane_name == "qwen-local" and has_local_qwen(dotenv_env):
+    targets: list[MatrixTarget] = []
+    for target_name, required, default_upstream in target_specs:
+        alias_value = config.model_aliases.get(target_name)
+        if alias_value is None and target_name == "qwen-local" and has_local_qwen(dotenv_env):
             alias_value = f"LOCAL-QWEN:{dotenv_env['LOCAL_QWEN_MODEL']}"
         if alias_value is not None:
             alias_value = _hydrate_preset_endpoint_model_target(alias_value, dotenv_env)
@@ -1118,13 +1118,13 @@ def resolve_lanes(
         upstream_model = None
         if alias_value and ":" in alias_value:
             upstream_name, upstream_model = alias_value.split(":", 1)
-        limits = resolve_model_limits(config, lane_name)
-        codex_metadata = resolve_codex_model_metadata(config, lane_name)
+        limits = resolve_model_limits(config, target_name)
+        codex_metadata = resolve_codex_model_metadata(config, target_name)
 
         enabled = upstream_name in runtime_upstreams
         skip_reason = None
 
-        if lane_name == "qwen-local" and has_local_qwen(dotenv_env):
+        if target_name == "qwen-local" and has_local_qwen(dotenv_env):
             enabled = True
             upstream_name = "LOCAL-QWEN"
             upstream_model = dotenv_env["LOCAL_QWEN_MODEL"]
@@ -1134,22 +1134,22 @@ def resolve_lanes(
                 )
 
         if not enabled:
-            if lane_name == "qwen-local":
+            if target_name == "qwen-local":
                 skip_reason = (
                     "LOCAL_QWEN_BASE_URL, LOCAL_QWEN_MODEL, and LOCAL_QWEN_API_KEY "
                     "are not all configured; "
-                    "optional qwen-local lane will be skipped"
+                    "optional qwen-local target will be skipped"
                 )
             else:
-                skip_reason = f"missing required routing for lane {lane_name}"
+                skip_reason = f"missing required routing for target {target_name}"
 
         upstream_format = _upstream_format_from_upstreams(runtime_upstreams, upstream_name)
-        lanes.append(
-            Lane(
-                name=lane_name,
+        targets.append(
+            MatrixTarget(
+                name=target_name,
                 required=required,
                 enabled=enabled,
-                proxy_model=lane_name,
+                proxy_model=target_name,
                 upstream_name=upstream_name,
                 upstream_format=upstream_format,
                 upstream_model=upstream_model,
@@ -1158,7 +1158,7 @@ def resolve_lanes(
                 skip_reason=skip_reason,
             )
         )
-    return lanes
+    return targets
 
 
 def _runtime_upstreams(
@@ -1687,8 +1687,8 @@ def load_fixtures(fixtures_root: pathlib.Path) -> list[TaskFixture]:
                         str(client_name)
                         for client_name in payload.get("supported_clients", [])
                     ),
-                    unsupported_lanes=tuple(
-                        str(lane_name) for lane_name in payload.get("unsupported_lanes", [])
+                    unsupported_targets=tuple(
+                        str(target_name) for target_name in payload.get("unsupported_targets", [])
                     ),
                     requires_tool_loop=fixture_requires_tool_loop(payload),
                 )
@@ -1719,10 +1719,10 @@ def phase_matches(client_name: str, fixture_kind: str, phase: str) -> bool:
     return False
 
 
-def lane_supports_fixture(lane: Lane, fixture: TaskFixture) -> bool:
-    if lane.name in fixture.unsupported_lanes:
+def target_supports_fixture(target: MatrixTarget, fixture: TaskFixture) -> bool:
+    if target.name in fixture.unsupported_targets:
         return False
-    if lane.name == "qwen-local" and fixture.kind == "long_horizon":
+    if target.name == "qwen-local" and fixture.kind == "long_horizon":
         return False
     return True
 
@@ -1735,14 +1735,14 @@ def client_supports_fixture(client_name: str, fixture: TaskFixture) -> bool:
 
 def expand_matrix(
     clients: Iterable[str],
-    lanes: Iterable[Lane],
+    targets: Iterable[MatrixTarget],
     fixtures: Iterable[TaskFixture],
     phase: str,
     skip_slow: bool,
 ) -> list[MatrixCase]:
     cases: list[MatrixCase] = []
     for client_name in clients:
-        for lane in lanes:
+        for target in targets:
             for fixture in fixtures:
                 if skip_slow and fixture.kind != "smoke":
                     continue
@@ -1750,13 +1750,13 @@ def expand_matrix(
                     continue
                 if not client_supports_fixture(client_name, fixture):
                     continue
-                if not lane_supports_fixture(lane, fixture):
+                if not target_supports_fixture(target, fixture):
                     continue
-                case_id = f"{client_name}__{lane.name}__{fixture.fixture_id}"
+                case_id = f"{client_name}__{target.name}__{fixture.fixture_id}"
                 cases.append(
                     MatrixCase(
                         client_name=client_name,
-                        lane=lane,
+                        target=target,
                         fixture=fixture,
                         case_id=case_id,
                     )
@@ -1796,7 +1796,7 @@ def canonical_upstream_format(upstream_format: str | None) -> str | None:
 
 
 def expected_fail_closed_for_case(case: MatrixCase) -> ExpectedFailClosed | None:
-    upstream_format = canonical_upstream_format(case.lane.upstream_format)
+    upstream_format = canonical_upstream_format(case.target.upstream_format)
     if upstream_format is None:
         return None
     if (
@@ -1833,13 +1833,13 @@ def expected_fail_closed_error_matches(
     )
 
 
-def classify_lane_health(lane: Lane, probe_error: str | None) -> tuple[str, str | None]:
-    if not lane.enabled:
-        status = "failed" if lane.required else "skipped"
-        return status, lane.skip_reason
+def classify_target_health(target: MatrixTarget, probe_error: str | None) -> tuple[str, str | None]:
+    if not target.enabled:
+        status = "failed" if target.required else "skipped"
+        return status, target.skip_reason
     if probe_error is None:
         return "ready", None
-    return ("failed", probe_error) if lane.required else ("skipped", probe_error)
+    return ("failed", probe_error) if target.required else ("skipped", probe_error)
 
 
 def _safe_base_env(base_env: dict[str, str]) -> dict[str, str]:
@@ -2552,22 +2552,22 @@ def fetch_live_model_profile(
     )
 
 
-def refresh_lane_model_profiles(
+def refresh_target_model_profiles(
     proxy_base: str,
-    lanes: Iterable[Lane],
+    targets: Iterable[MatrixTarget],
     *,
     proxy_key: str | None = None,
 ) -> None:
-    for lane in lanes:
-        if not lane.enabled:
+    for target in targets:
+        if not target.enabled:
             continue
         profile = fetch_live_model_profile(
             proxy_base,
-            lane.proxy_model,
+            target.proxy_model,
             proxy_key=proxy_key,
         )
-        lane.limits = profile.limits
-        lane.codex_metadata = profile.codex_metadata
+        target.limits = profile.limits
+        target.codex_metadata = profile.codex_metadata
 
 
 def http_json(
@@ -2625,23 +2625,23 @@ def probe_response_has_valid_shape(body: str) -> bool:
     return payload.get("object") == "response"
 
 
-def probe_lane(
+def probe_target(
     proxy_base: str,
-    lane: Lane,
+    target: MatrixTarget,
     *,
     proxy_key: str | None = None,
 ) -> str | None:
     status, body = http_json(
         f"{proxy_base}/openai/v1/responses",
-        {"model": lane.proxy_model, "input": "Reply with exactly PROBE_OK", "stream": False},
+        {"model": target.proxy_model, "input": "Reply with exactly PROBE_OK", "stream": False},
         timeout=60,
         bearer_token=proxy_key,
     )
     if status != 200:
-        return f"lane probe returned HTTP {status}: {body[:240]}"
+        return f"target probe returned HTTP {status}: {body[:240]}"
     if "PROBE_OK" in body or probe_response_has_valid_shape(body):
         return None
-    return "lane probe succeeded but did not return a valid response shape"
+    return "target probe succeeded but did not return a valid response shape"
 
 
 def render_fixture_prompt(fixture: TaskFixture, client_name: str) -> str:
@@ -5001,18 +5001,18 @@ def _trace_entry_route_matches_case(entry: dict[str, object], case: MatrixCase) 
         return False
 
     client_model = entry.get("client_model")
-    if isinstance(client_model, str) and client_model != case.lane.proxy_model:
+    if isinstance(client_model, str) and client_model != case.target.proxy_model:
         return False
 
     upstream_name = entry.get("upstream_name")
-    if isinstance(upstream_name, str) and upstream_name != case.lane.upstream_name:
+    if isinstance(upstream_name, str) and upstream_name != case.target.upstream_name:
         return False
 
     upstream_model = entry.get("upstream_model")
     if (
-        case.lane.upstream_model is not None
+        case.target.upstream_model is not None
         and isinstance(upstream_model, str)
-        and upstream_model != case.lane.upstream_model
+        and upstream_model != case.target.upstream_model
     ):
         return False
 
@@ -5183,15 +5183,15 @@ def build_case_diagnostics(
     )
     route_summary = _trace_route_summary(trace_entries)
     surface_snapshot: dict[str, object] = {
-        "client_model": case.lane.proxy_model,
-        "lane": case.lane.name,
-        "upstream_name": case.lane.upstream_name,
+        "client_model": case.target.proxy_model,
+        "target": case.target.name,
+        "upstream_name": case.target.upstream_name,
     }
-    if case.lane.upstream_format is not None:
-        surface_snapshot["upstream_format"] = case.lane.upstream_format
-    if case.lane.upstream_model is not None:
-        surface_snapshot["upstream_model"] = case.lane.upstream_model
-    surface_snapshot.update(_codex_metadata_snapshot(case.lane.codex_metadata))
+    if case.target.upstream_format is not None:
+        surface_snapshot["upstream_format"] = case.target.upstream_format
+    if case.target.upstream_model is not None:
+        surface_snapshot["upstream_model"] = case.target.upstream_model
+    surface_snapshot.update(_codex_metadata_snapshot(case.target.codex_metadata))
 
     client_tool_names = _trace_request_tool_names(trace_entries, "client")
     upstream_tool_names = _trace_request_tool_names(trace_entries, "upstream")
@@ -5219,7 +5219,7 @@ def build_case_diagnostics(
 def build_client_command(
     client_name: str,
     proxy_base: str,
-    lane: Lane,
+    target: MatrixTarget,
     fixture: TaskFixture,
     workspace_dir: pathlib.Path,
     client_home: pathlib.Path | None = None,
@@ -5232,7 +5232,7 @@ def build_client_command(
             "exec",
             prompt_text,
             "--model",
-            lane.proxy_model,
+            target.proxy_model,
             "--ephemeral",
             "--json",
             "--skip-git-repo-check",
@@ -5251,9 +5251,9 @@ def build_client_command(
         command.extend(
             build_codex_catalog_args(
                 client_home,
-                lane.proxy_model,
-                lane.limits,
-                lane.codex_metadata,
+                target.proxy_model,
+                target.limits,
+                target.codex_metadata,
             )
         )
         ensure_no_public_internal_tool_artifacts(
@@ -5270,7 +5270,7 @@ def build_client_command(
             "--setting-sources",
             "user",
             "--model",
-            lane.proxy_model,
+            target.proxy_model,
             "--no-session-persistence",
         ]
         if dangerous_harness:
@@ -5303,13 +5303,13 @@ def run_matrix_case(
         base_env,
         proxy_base,
         home_dir,
-        model_name=case.lane.proxy_model,
-        model_limits=case.lane.limits,
+        model_name=case.target.proxy_model,
+        model_limits=case.target.limits,
     )
     command = build_client_command(
         case.client_name,
         proxy_base,
-        case.lane,
+        case.target,
         case.fixture,
         workspace_dir,
         client_home=home_dir,
@@ -5441,7 +5441,7 @@ def run_matrix_case(
     result = {
         "case_id": case.case_id,
         "client": case.client_name,
-        "lane": case.lane.name,
+        "target": case.target.name,
         "fixture": case.fixture.fixture_id,
         "status": status,
         "message": message,
@@ -5462,7 +5462,7 @@ def run_matrix_case(
 def print_case_list(cases: list[MatrixCase]) -> None:
     for case in cases:
         print(
-            f"{case.case_id}\tclient={case.client_name}\tlane={case.lane.name}"
+            f"{case.case_id}\tclient={case.client_name}\ttarget={case.target.name}"
             f"\tkind={case.fixture.kind}"
         )
 
@@ -5625,7 +5625,7 @@ def run(argv: list[str] | None = None) -> int:
     dotenv_env = load_dotenv_file(pathlib.Path(args.env_file))
     parsed_source = parse_proxy_source(config_source.read_text(encoding="utf-8"))
     dotenv_env = merge_preset_endpoint_env(parsed_source, dotenv_env, base_env)
-    lanes = resolve_lanes(
+    targets = resolve_matrix_targets(
         parsed_source,
         dotenv_env,
         require_preset_endpoint_env=not args.list_matrix,
@@ -5633,7 +5633,7 @@ def run(argv: list[str] | None = None) -> int:
     fixtures = load_fixtures(pathlib.Path(args.fixtures_root))
     cases = expand_matrix(
         clients=CLIENT_NAMES,
-        lanes=lanes,
+        targets=targets,
         fixtures=fixtures,
         phase=args.test,
         skip_slow=args.skip_slow,
@@ -5690,26 +5690,26 @@ def run(argv: list[str] | None = None) -> int:
                 pass
             return 0
 
-        refresh_lane_model_profiles(proxy_base, lanes, proxy_key=proxy_key)
+        refresh_target_model_profiles(proxy_base, targets, proxy_key=proxy_key)
 
-        lane_probes = {
-            lane.name: classify_lane_health(
-                lane,
-                probe_lane(proxy_base, lane, proxy_key=proxy_key),
+        target_probes = {
+            target.name: classify_target_health(
+                target,
+                probe_target(proxy_base, target, proxy_key=proxy_key),
             )
-            for lane in lanes
+            for target in targets
         }
         for case in cases:
-            lane_status, lane_message = lane_probes[case.lane.name]
-            if lane_status != "ready":
+            target_status, target_message = target_probes[case.target.name]
+            if target_status != "ready":
                 results.append(
                     {
                         "case_id": case.case_id,
                         "client": case.client_name,
-                        "lane": case.lane.name,
+                        "target": case.target.name,
                         "fixture": case.fixture.fixture_id,
-                        "status": lane_status,
-                        "message": lane_message or "",
+                        "status": target_status,
+                        "message": target_message or "",
                     }
                 )
                 continue

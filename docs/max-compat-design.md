@@ -21,7 +21,7 @@ Locked contract:
 - `__llmup_custom__*` is an internal transport artifact, not a public contract.
 - `apply_patch` remains a public freeform tool on client-visible surfaces.
 - Real-client public editing contracts preserve each supported client's public tool name, such as Codex `apply_patch` and Claude Code `Edit`.
-- The intended tool bridge preserves the stable visible tool name and carries bridge provenance in request-scoped translation context.
+- The intended translated-path bridge preserves the stable visible tool name and carries bridge provenance in request-scoped translation context.
 
 The current system has the architectural seams for this work:
 
@@ -314,7 +314,7 @@ Current behavior:
 
 ## Request-Scoped Tool Bridge Context
 
-The intended tool bridge preserves the stable visible tool name and carries bridge provenance in request-scoped translation context.
+The intended translated-path bridge preserves the stable visible tool name and carries bridge provenance in request-scoped translation context.
 
 To preserve reversible decoding without exposing reserved prefixes, the live runtime carries a per-request bridge context.
 

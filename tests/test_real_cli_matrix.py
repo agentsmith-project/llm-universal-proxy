@@ -148,7 +148,7 @@ def codex_catalog_probe(catalog_payload, timeout_secs=2):
             return 124, stdout + stderr, True
 
 
-def make_lane(
+def make_target(
     module,
     *,
     name="minimax-anth",
@@ -158,7 +158,7 @@ def make_lane(
     upstream_name="MINIMAX-ANTHROPIC",
     upstream_format="anthropic",
 ):
-    return module.Lane(
+    return module.MatrixTarget(
         name=name,
         required=required,
         enabled=enabled,
@@ -215,14 +215,14 @@ def write_preset_endpoint_env_file(path: pathlib.Path, **overrides) -> pathlib.P
     return path
 
 
-def make_case(module, *, client_name, lane=None, fixture=None, case_id=None):
-    lane = lane or make_lane(module)
+def make_case(module, *, client_name, target=None, fixture=None, case_id=None):
+    target = target or make_target(module)
     fixture = fixture or make_fixture(module)
     return module.MatrixCase(
         client_name=client_name,
-        lane=lane,
+        target=target,
         fixture=fixture,
-        case_id=case_id or f"{client_name}__{lane.name}__{fixture.fixture_id}",
+        case_id=case_id or f"{client_name}__{target.name}__{fixture.fixture_id}",
     )
 
 
@@ -244,7 +244,7 @@ class RealCliMatrixTests(unittest.TestCase):
         basename = resolved_path.name
         self.assertNotIn(case.case_id, str(resolved_path))
         self.assertNotIn(case.client_name, basename)
-        self.assertNotIn(case.lane.name, basename)
+        self.assertNotIn(case.target.name, basename)
         self.assertNotIn(case.fixture.fixture_id, basename)
 
     def test_trace_tool_name_helpers_ignore_removed_native_gemini_schema(self):
@@ -278,7 +278,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "id": "bad_prompt_template",
                         "kind": "smoke",
                         "prompt": "Fallback prompt",
-                        "prompt_template": "Current lane: {lane_name}",
+                        "prompt_template": "Current target: {target_name}",
                         "verifier": {"type": "contains", "value": "PONG"},
                         "timeout_secs": 30,
                     }
@@ -288,7 +288,7 @@ class RealCliMatrixTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                "unsupported placeholder .*lane_name.*client_name",
+                "unsupported placeholder .*target_name.*client_name",
             ):
                 module.load_fixtures(fixtures_root)
 
@@ -618,86 +618,86 @@ class RealCliMatrixTests(unittest.TestCase):
             parsed.model_alias_configs["vision-openai"].surface.supports_parallel_calls
         )
 
-    def test_resolve_lanes_marks_qwen_optional_when_env_missing(self):
+    def test_resolve_matrix_targets_marks_qwen_optional_when_env_missing(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
         )
 
-        lanes = {
-            lane.name: lane
-            for lane in module.resolve_lanes(parsed, preset_endpoint_env())
+        targets = {
+            target.name: target
+            for target in module.resolve_matrix_targets(parsed, preset_endpoint_env())
         }
 
-        self.assertNotIn("minimax-anth", lanes)
-        self.assertNotIn("minimax-openai", lanes)
-        self.assertTrue(lanes["preset-anthropic-compatible"].required)
-        self.assertTrue(lanes["preset-openai-compatible"].required)
-        self.assertFalse(lanes["qwen-local"].required)
-        self.assertFalse(lanes["qwen-local"].enabled)
-        self.assertIn("LOCAL_QWEN", lanes["qwen-local"].skip_reason)
+        self.assertNotIn("minimax-anth", targets)
+        self.assertNotIn("minimax-openai", targets)
+        self.assertTrue(targets["preset-anthropic-compatible"].required)
+        self.assertTrue(targets["preset-openai-compatible"].required)
+        self.assertFalse(targets["qwen-local"].required)
+        self.assertFalse(targets["qwen-local"].enabled)
+        self.assertIn("LOCAL_QWEN", targets["qwen-local"].skip_reason)
         self.assertEqual(
-            lanes["preset-openai-compatible"].limits.context_window,
+            targets["preset-openai-compatible"].limits.context_window,
             200000,
         )
         self.assertEqual(
-            lanes["preset-openai-compatible"].limits.max_output_tokens,
+            targets["preset-openai-compatible"].limits.max_output_tokens,
             128000,
         )
         self.assertEqual(
-            lanes["preset-openai-compatible"].codex_metadata.input_modalities,
+            targets["preset-openai-compatible"].codex_metadata.input_modalities,
             ("text",),
         )
         self.assertFalse(
-            lanes["preset-openai-compatible"].codex_metadata.supports_search_tool
+            targets["preset-openai-compatible"].codex_metadata.supports_search_tool
         )
 
-    def test_resolve_lanes_hydrates_preset_upstream_model_from_dotenv(self):
+    def test_resolve_matrix_targets_hydrates_preset_upstream_model_from_dotenv(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
         )
 
-        lanes = {
-            lane.name: lane
-            for lane in module.resolve_lanes(
+        targets = {
+            target.name: target
+            for target in module.resolve_matrix_targets(
                 parsed,
                 preset_endpoint_env(PRESET_ENDPOINT_MODEL="provider-live-model"),
             )
         }
 
         self.assertEqual(
-            lanes["preset-openai-compatible"].upstream_model,
+            targets["preset-openai-compatible"].upstream_model,
             "provider-live-model",
         )
         self.assertEqual(
-            lanes["preset-anthropic-compatible"].upstream_model,
+            targets["preset-anthropic-compatible"].upstream_model,
             "provider-live-model",
         )
 
-    def test_resolve_lanes_exposes_upstream_format_from_config(self):
+    def test_resolve_matrix_targets_exposes_upstream_format_from_config(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
         )
 
-        lanes = {
-            lane.name: lane
-            for lane in module.resolve_lanes(parsed, preset_endpoint_env())
+        targets = {
+            target.name: target
+            for target in module.resolve_matrix_targets(parsed, preset_endpoint_env())
         }
 
         self.assertEqual(
-            lanes["preset-anthropic-compatible"].upstream_format,
+            targets["preset-anthropic-compatible"].upstream_format,
             "anthropic",
         )
         self.assertEqual(
-            lanes["preset-openai-compatible"].upstream_format,
+            targets["preset-openai-compatible"].upstream_format,
             "openai-completion",
         )
 
-        qwen_lanes = {
-            lane.name: lane
-            for lane in module.resolve_lanes(
+        qwen_targets = {
+            target.name: target
+            for target in module.resolve_matrix_targets(
                 parsed,
                 preset_endpoint_env(
                     LOCAL_QWEN_BASE_URL="http://127.0.0.1:9997/v1",
@@ -707,16 +707,16 @@ class RealCliMatrixTests(unittest.TestCase):
             )
         }
 
-        self.assertEqual(qwen_lanes["qwen-local"].upstream_format, "openai-completion")
+        self.assertEqual(qwen_targets["qwen-local"].upstream_format, "openai-completion")
 
-    def test_preset_trace_filter_keeps_real_provider_model_after_lane_resolution(self):
+    def test_preset_trace_filter_keeps_real_provider_model_after_target_resolution(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
         )
-        lanes = {
-            lane.name: lane
-            for lane in module.resolve_lanes(
+        targets = {
+            target.name: target
+            for target in module.resolve_matrix_targets(
                 parsed,
                 preset_endpoint_env(PRESET_ENDPOINT_MODEL="provider-live-model"),
             )
@@ -724,7 +724,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="codex",
-            lane=lanes["preset-openai-compatible"],
+            target=targets["preset-openai-compatible"],
             fixture=make_fixture(module),
         )
 
@@ -756,14 +756,14 @@ class RealCliMatrixTests(unittest.TestCase):
 
         self.assertEqual([entry["request_id"] for entry in filtered], ["req_case", "req_case"])
 
-    def test_resolve_lanes_fails_fast_when_preset_endpoint_env_is_missing(self):
+    def test_resolve_matrix_targets_fails_fast_when_preset_endpoint_env_is_missing(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
         )
 
         with self.assertRaises(ValueError) as raised:
-            module.resolve_lanes(parsed, {})
+            module.resolve_matrix_targets(parsed, {})
 
         message = str(raised.exception)
         self.assertIn("PRESET_OPENAI_ENDPOINT_BASE_URL", message)
@@ -771,15 +771,15 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertIn("PRESET_ENDPOINT_MODEL", message)
         self.assertIn("PRESET_ENDPOINT_API_KEY", message)
 
-    def test_resolve_lanes_enables_qwen_when_env_present(self):
+    def test_resolve_matrix_targets_enables_qwen_when_env_present(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
         )
 
-        lanes = {
-            lane.name: lane
-            for lane in module.resolve_lanes(
+        targets = {
+            target.name: target
+            for target in module.resolve_matrix_targets(
                 parsed,
                 preset_endpoint_env(
                     LOCAL_QWEN_BASE_URL="http://127.0.0.1:9997/v1",
@@ -789,19 +789,19 @@ class RealCliMatrixTests(unittest.TestCase):
             )
         }
 
-        self.assertTrue(lanes["qwen-local"].enabled)
-        self.assertEqual(lanes["qwen-local"].proxy_model, "qwen-local")
-        self.assertEqual(lanes["qwen-local"].upstream_name, "LOCAL-QWEN")
+        self.assertTrue(targets["qwen-local"].enabled)
+        self.assertEqual(targets["qwen-local"].proxy_model, "qwen-local")
+        self.assertEqual(targets["qwen-local"].upstream_name, "LOCAL-QWEN")
 
-    def test_resolve_lanes_skips_qwen_when_provider_key_env_is_missing(self):
+    def test_resolve_matrix_targets_skips_qwen_when_provider_key_env_is_missing(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
         )
 
-        lanes = {
-            lane.name: lane
-            for lane in module.resolve_lanes(
+        targets = {
+            target.name: target
+            for target in module.resolve_matrix_targets(
                 parsed,
                 preset_endpoint_env(
                     LOCAL_QWEN_BASE_URL="http://127.0.0.1:9997/v1",
@@ -810,8 +810,8 @@ class RealCliMatrixTests(unittest.TestCase):
             )
         }
 
-        self.assertFalse(lanes["qwen-local"].enabled)
-        self.assertIn("LOCAL_QWEN_API_KEY", lanes["qwen-local"].skip_reason)
+        self.assertFalse(targets["qwen-local"].enabled)
+        self.assertIn("LOCAL_QWEN_API_KEY", targets["qwen-local"].skip_reason)
 
     def test_build_runtime_config_overrides_listen_and_injects_qwen(self):
         module = load_module()
@@ -1481,15 +1481,15 @@ class RealCliMatrixTests(unittest.TestCase):
                     proxy_key=module.DEFAULT_PROXY_KEY,
                 )
 
-    def test_refresh_lane_model_profiles_uses_live_models_for_enabled_lanes(self):
+    def test_refresh_target_model_profiles_uses_live_models_for_enabled_targets(self):
         module = load_module()
-        enabled_lane = make_lane(
+        enabled_target = make_target(
             module,
             name="vision-openai",
             proxy_model="MINIMAX-OPENAI:MiniMax-Vision",
             upstream_name="MINIMAX-OPENAI",
         )
-        disabled_lane = make_lane(
+        disabled_target = make_target(
             module,
             name="disabled-openai",
             enabled=False,
@@ -1514,9 +1514,9 @@ class RealCliMatrixTests(unittest.TestCase):
             "fetch_live_model_profile",
             return_value=live_profile,
         ) as fetch_live_model_profile:
-            module.refresh_lane_model_profiles(
+            module.refresh_target_model_profiles(
                 "http://127.0.0.1:18888",
-                [enabled_lane, disabled_lane],
+                [enabled_target, disabled_target],
                 proxy_key="profile-proxy-key",
             )
 
@@ -1525,10 +1525,10 @@ class RealCliMatrixTests(unittest.TestCase):
             "MINIMAX-OPENAI:MiniMax-Vision",
             proxy_key="profile-proxy-key",
         )
-        self.assertEqual(enabled_lane.limits, live_profile.limits)
-        self.assertEqual(enabled_lane.codex_metadata, live_profile.codex_metadata)
-        self.assertIsNone(disabled_lane.limits)
-        self.assertIsNone(disabled_lane.codex_metadata)
+        self.assertEqual(enabled_target.limits, live_profile.limits)
+        self.assertEqual(enabled_target.codex_metadata, live_profile.codex_metadata)
+        self.assertIsNone(disabled_target.limits)
+        self.assertIsNone(disabled_target.codex_metadata)
 
     def test_build_codex_model_catalog_keeps_85_percent_of_context_when_output_limit_missing(self):
         module = load_module()
@@ -1861,7 +1861,7 @@ class RealCliMatrixTests(unittest.TestCase):
         command = module.build_client_command(
             "codex",
             "http://127.0.0.1:18888",
-            make_lane(module, name="preset-chat", proxy_model="preset-chat"),
+            make_target(module, name="preset-chat", proxy_model="preset-chat"),
             fixture,
             pathlib.Path("/tmp/workspace").resolve(),
             client_home=pathlib.Path("/tmp/codex-home").resolve(),
@@ -1874,12 +1874,12 @@ class RealCliMatrixTests(unittest.TestCase):
 
     def test_build_client_command_injects_codex_model_catalog_for_capacity_aware_alias(self):
         module = load_module()
-        lane = make_lane(module, name="minimax-openai", proxy_model="minimax-openai")
-        lane.limits = module.ModelLimits(
+        target = make_target(module, name="minimax-openai", proxy_model="minimax-openai")
+        target.limits = module.ModelLimits(
             context_window=200000,
             max_output_tokens=128000,
         )
-        lane.codex_metadata = module.CodexModelMetadata(
+        target.codex_metadata = module.CodexModelMetadata(
             input_modalities=("text",),
             supports_search_tool=False,
         )
@@ -1890,7 +1890,7 @@ class RealCliMatrixTests(unittest.TestCase):
         command = module.build_client_command(
             "codex",
             "http://127.0.0.1:18888",
-            lane,
+            target,
             fixture,
             workspace,
             client_home=home_dir,
@@ -1906,9 +1906,9 @@ class RealCliMatrixTests(unittest.TestCase):
 
     def test_build_client_command_respects_codex_metadata_search_override(self):
         module = load_module()
-        lane = make_lane(module, name="vision-openai", proxy_model="vision-openai")
-        lane.limits = module.ModelLimits(context_window=200000)
-        lane.codex_metadata = module.CodexModelMetadata(
+        target = make_target(module, name="vision-openai", proxy_model="vision-openai")
+        target.limits = module.ModelLimits(context_window=200000)
+        target.codex_metadata = module.CodexModelMetadata(
             input_modalities=("text", "image"),
             supports_search_tool=True,
         )
@@ -1917,7 +1917,7 @@ class RealCliMatrixTests(unittest.TestCase):
         command = module.build_client_command(
             "codex",
             "http://127.0.0.1:18888",
-            lane,
+            target,
             fixture,
             pathlib.Path("/tmp/workspace").resolve(),
             client_home=pathlib.Path("/tmp/codex-home").resolve(),
@@ -1930,7 +1930,7 @@ class RealCliMatrixTests(unittest.TestCase):
 
     def test_build_client_command_rejects_internal_tool_artifacts_in_public_args(self):
         module = load_module()
-        lane = make_lane(module, name="minimax-openai", proxy_model="minimax-openai")
+        target = make_target(module, name="minimax-openai", proxy_model="minimax-openai")
         fixture = make_fixture(module)
 
         with mock.patch.object(
@@ -1945,7 +1945,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 module.build_client_command(
                     "codex",
                     "http://127.0.0.1:18888",
-                    lane,
+                    target,
                     fixture,
                     pathlib.Path("/tmp/workspace").resolve(),
                     client_home=pathlib.Path("/tmp/codex-home").resolve(),
@@ -2054,7 +2054,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(
+            target=make_target(
                 module,
                 name="preset-openai-compatible",
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
@@ -2084,7 +2084,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 native_case = make_case(
                     module,
                     client_name="claude",
-                    lane=make_lane(module, upstream_format=upstream_format),
+                    target=make_target(module, upstream_format=upstream_format),
                 )
                 self.assertIsNone(module.expected_fail_closed_for_case(native_case))
 
@@ -2093,7 +2093,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 alias_case = make_case(
                     module,
                     client_name="claude",
-                    lane=make_lane(module, upstream_format=upstream_format),
+                    target=make_target(module, upstream_format=upstream_format),
                 )
                 alias_expectation = module.expected_fail_closed_for_case(alias_case)
                 self.assertIsNotNone(alias_expectation)
@@ -2105,13 +2105,13 @@ class RealCliMatrixTests(unittest.TestCase):
         native_case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(module, upstream_format="anthropic"),
+            target=make_target(module, upstream_format="anthropic"),
         )
         self.assertIsNone(module.expected_fail_closed_for_case(native_case))
 
-    def test_classify_lane_health_skips_optional_qwen_probe_failures(self):
+    def test_classify_target_health_skips_optional_qwen_probe_failures(self):
         module = load_module()
-        optional_lane = module.Lane(
+        optional_target = module.MatrixTarget(
             name="qwen-local",
             required=False,
             enabled=True,
@@ -2119,7 +2119,7 @@ class RealCliMatrixTests(unittest.TestCase):
             upstream_name="LOCAL-QWEN",
             skip_reason=None,
         )
-        required_lane = module.Lane(
+        required_target = module.MatrixTarget(
             name="minimax-anth",
             required=True,
             enabled=True,
@@ -2129,15 +2129,15 @@ class RealCliMatrixTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            module.classify_lane_health(optional_lane, "connection refused")[0], "skipped"
+            module.classify_target_health(optional_target, "connection refused")[0], "skipped"
         )
         self.assertEqual(
-            module.classify_lane_health(required_lane, "connection refused")[0], "failed"
+            module.classify_target_health(required_target, "connection refused")[0], "failed"
         )
 
-    def test_probe_lane_accepts_valid_responses_shape_without_exact_probe_text(self):
+    def test_probe_target_accepts_valid_responses_shape_without_exact_probe_text(self):
         module = load_module()
-        lane = make_lane(
+        target = make_target(
             module,
             name="qwen-local",
             required=False,
@@ -2171,9 +2171,9 @@ class RealCliMatrixTests(unittest.TestCase):
             ),
         ) as http_json:
             self.assertIsNone(
-                module.probe_lane(
+                module.probe_target(
                     "http://127.0.0.1:18888",
-                    lane,
+                    target,
                     proxy_key="probe-proxy-key",
                 )
             )
@@ -2182,9 +2182,9 @@ class RealCliMatrixTests(unittest.TestCase):
             "probe-proxy-key",
         )
 
-    def test_probe_lane_rejects_http_200_body_without_response_shape(self):
+    def test_probe_target_rejects_http_200_body_without_response_shape(self):
         module = load_module()
-        lane = make_lane(
+        target = make_target(
             module,
             name="qwen-local",
             required=False,
@@ -2195,9 +2195,9 @@ class RealCliMatrixTests(unittest.TestCase):
         with mock.patch.object(module, "http_json", return_value=(200, '{"ok":true}')):
             self.assertIn(
                 "valid response shape",
-                module.probe_lane(
+                module.probe_target(
                     "http://127.0.0.1:18888",
-                    lane,
+                    target,
                     proxy_key=module.DEFAULT_PROXY_KEY,
                 ),
             )
@@ -2587,7 +2587,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(module),
+            target=make_target(module),
             fixture=make_fixture(module, prompt="Reply with exactly PONG"),
         )
         observed = {}
@@ -2623,7 +2623,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(module),
+            target=make_target(module),
             fixture=make_fixture(module, prompt="Reply with exactly PONG"),
         )
         captured = {}
@@ -2654,7 +2654,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(module, name="minimax-anth", proxy_model="minimax-anth"),
+            target=make_target(module, name="minimax-anth", proxy_model="minimax-anth"),
             fixture=make_fixture(module, prompt="Reply with exactly PONG"),
         )
 
@@ -2711,16 +2711,37 @@ class RealCliMatrixTests(unittest.TestCase):
                 )
 
         diagnostics = result["diagnostics"]
+        legacy_key = "la" + "ne"
         self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["target"], "minimax-anth")
+        self.assertNotIn(legacy_key, result)
         self.assertEqual(diagnostics["request_id"], "req_case")
         self.assertEqual(diagnostics["trace_request_count"], 1)
         self.assertEqual(diagnostics["trace_response_count"], 1)
+        self.assertEqual(diagnostics["surface_snapshot"]["target"], "minimax-anth")
+        self.assertNotIn(legacy_key, diagnostics["surface_snapshot"])
         self.assertEqual(
             diagnostics["route_summary"][0]["upstream_name"],
             "MINIMAX-ANTHROPIC",
         )
         self.assertEqual(diagnostics["tool_identity"]["client_tool_names"], ["Edit"])
         self.assertNotIn("req_before", diagnostics["request_ids"])
+
+    def test_print_case_list_uses_target_label(self):
+        module = load_module()
+        case = make_case(
+            module,
+            client_name="codex",
+            target=make_target(module, name="minimax-openai", proxy_model="minimax-openai"),
+        )
+        stdout = io.StringIO()
+
+        with mock.patch("sys.stdout", stdout):
+            module.print_case_list([case])
+
+        output = stdout.getvalue()
+        self.assertIn("\ttarget=minimax-openai\t", output)
+        self.assertNotIn("\t" + ("la" + "ne") + "=", output)
 
     def test_run_matrix_case_feeds_claude_rendered_prompt_template_via_stdin(self):
         module = load_module()
@@ -2735,7 +2756,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(module),
+            target=make_target(module),
             fixture=fixture,
         )
         captured = {}
@@ -2826,7 +2847,7 @@ class RealCliMatrixTests(unittest.TestCase):
             case = make_case(
                 module,
                 client_name="claude",
-                lane=make_lane(module),
+                target=make_target(module),
                 fixture=fixture,
             )
             report_dir = temp_root / "reports"
@@ -2865,7 +2886,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(module, name="minimax-anth", proxy_model="minimax-anth"),
+            target=make_target(module, name="minimax-anth", proxy_model="minimax-anth"),
             fixture=make_fixture(module, fixture_id="tool_identity_public_contract"),
         )
         observed = {}
@@ -2902,7 +2923,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="codex",
-            lane=make_lane(module, name="minimax-openai", proxy_model="minimax-openai"),
+            target=make_target(module, name="minimax-openai", proxy_model="minimax-openai"),
             fixture=make_fixture(module, fixture_id="tool_identity_public_contract"),
         )
         observed = {}
@@ -2939,7 +2960,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(
+            target=make_target(
                 module,
                 name="preset-openai-compatible",
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
@@ -2980,7 +3001,7 @@ class RealCliMatrixTests(unittest.TestCase):
         case = make_case(
             module,
             client_name="claude",
-            lane=make_lane(
+            target=make_target(
                 module,
                 name="preset-openai-compatible",
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
@@ -3146,16 +3167,16 @@ class RealCliMatrixTests(unittest.TestCase):
                 "urlopen",
                 return_value=OldProxyHealthResponse(),
             ), mock.patch.object(
-                module, "refresh_lane_model_profiles"
+                module, "refresh_target_model_profiles"
             ), mock.patch.object(
-                module, "probe_lane", return_value=None
+                module, "probe_target", return_value=None
             ), mock.patch.object(
                 module,
                 "run_matrix_case",
                 return_value={
                     "case_id": "unexpected",
                     "client": "codex",
-                    "lane": "minimax-openai",
+                    "target": "minimax-openai",
                     "fixture": "smoke_pong",
                     "status": "passed",
                     "message": "",

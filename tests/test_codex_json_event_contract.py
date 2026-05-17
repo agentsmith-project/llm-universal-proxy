@@ -41,7 +41,7 @@ def make_fixture(module, verifier):
         timeout_secs=90,
         workspace_template=pathlib.Path("/tmp/workspace"),
         supported_clients=("codex",),
-        unsupported_lanes=("qwen-local",),
+        unsupported_targets=("qwen-local",),
     )
 
 
@@ -443,7 +443,7 @@ class CodexJsonEventContractTests(unittest.TestCase):
         self.assertEqual(payload["kind"], "smoke")
         self.assertEqual(payload["workspace_template"], "workspace")
         self.assertEqual(payload["supported_clients"], ["codex"])
-        self.assertEqual(payload["unsupported_lanes"], ["qwen-local"])
+        self.assertEqual(payload["unsupported_targets"], ["qwen-local"])
         self.assertEqual(
             [entry["type"] for entry in payload["verifier"]["verifiers"]],
             ["codex_json_event_contract", "python_source_and_output"],
@@ -460,7 +460,7 @@ class CodexJsonEventContractTests(unittest.TestCase):
     def test_expand_matrix_filters_codex_only_fixture_from_other_clients(self):
         module = load_module()
         fixture = make_fixture(module, codex_observable_edit_verifier())
-        lane = module.Lane(
+        target = module.MatrixTarget(
             name="minimax-anth",
             required=True,
             enabled=True,
@@ -471,7 +471,7 @@ class CodexJsonEventContractTests(unittest.TestCase):
 
         cases = module.expand_matrix(
             clients=["codex", "claude"],
-            lanes=[lane],
+            targets=[target],
             fixtures=[fixture],
             phase="basic",
             skip_slow=False,

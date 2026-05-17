@@ -8,7 +8,7 @@
   "supported_clients": [
     "codex"
   ],
-  "unsupported_lanes": [
+  "unsupported_targets": [
     "qwen-local"
   ],
   "verifier": {
