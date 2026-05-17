@@ -2,11 +2,14 @@
 
 ## Unreleased
 
-## v0.2.28 - 2026-05-01
+## v0.2.28 - 2026-05-17
 
-- Advanced the main-branch release identity to Cargo package version `0.2.28`, the next patch version after the published and occupied `v0.2.27` tag, without moving, deleting, or reusing the existing tag.
-- Refreshed the checked-in container publication manifest and docs around the actual published `v0.2.27` multi-arch image digest while keeping `0.2.28` / `v0.2.28` as the next release identity, not a published container tag yet.
-- Verified the `v0.2.27` release workflow, GHCR `v0.2.27` and `0.2.27` image tags, and tag-triggered CI after publication.
+- Removed the native Gemini wire/client/provider format path. Gemini is now treated only as a Google OpenAI-compatible upstream, reducing product surface area and translation complexity.
+- Removed public compatibility tiers and mode selection in favor of one maximum-safe compatibility target; same-protocol routes preserve raw request/response forwarding when no mutation is required.
+- Added a lightweight in-memory conversation state bridge for mapping stateful OpenAI Responses requests, including `previous_response_id` and conversation state, onto stateless providers with necessary replay.
+- Added provider-native prompt-cache support and observability by mapping controls such as Anthropic `cache_control` and OpenAI `prompt_cache_key`, emitting cache usage telemetry, and redacting debug traces; `llmup` still does not implement its own prompt cache.
+- Hardened compatibility, observability, and release confidence with portability warnings on upstream errors, prompt-cache trace guardrails, debug trace replay metadata, and refreshed Codex/Claude end-to-end smoke evidence.
+- Advanced the main-branch release identity to Cargo package version `0.2.28`, the next patch version after the published, occupied `v0.2.27` tag, without moving, deleting, or reusing the existing tag.
 
 ## v0.2.27 - 2026-05-01
 

@@ -3239,8 +3239,10 @@ fn request_processing_provider_prompt_cache_request_control_serializes_only_supp
 fn request_processing_serializes_local_state_handling_only_when_active() {
     use crate::request_processing::StateBridgeModifier;
 
-    let mut inactive = crate::request_processing::RequestProcessingInfo::default();
-    inactive.state_bridge = StateBridgeModifier::Off;
+    let inactive = crate::request_processing::RequestProcessingInfo {
+        state_bridge: StateBridgeModifier::Off,
+        ..crate::request_processing::RequestProcessingInfo::default()
+    };
     let inactive = serde_json::to_value(inactive).unwrap();
     assert_eq!(inactive["request_body_handling"], "constructed");
     assert_eq!(inactive["provider_prompt_cache_request_control"], "none");
@@ -3261,8 +3263,10 @@ fn request_processing_serializes_local_state_handling_only_when_active() {
         (StateBridgeModifier::CaptureCandidate, "capture_candidate"),
         (StateBridgeModifier::Expanded, "expanded"),
     ] {
-        let mut active = crate::request_processing::RequestProcessingInfo::default();
-        active.state_bridge = state_bridge;
+        let active = crate::request_processing::RequestProcessingInfo {
+            state_bridge,
+            ..crate::request_processing::RequestProcessingInfo::default()
+        };
         let active = serde_json::to_value(active).unwrap();
         assert_eq!(active["local_state_handling"], expected);
         assert!(

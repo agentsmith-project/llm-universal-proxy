@@ -773,27 +773,6 @@ fn collect_api_key_credentials(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_and_strips_x_goog_api_key_as_sensitive_credential() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            HeaderName::from_static("x-goog-api-key"),
-            HeaderValue::from_static("google-secret"),
-        );
-
-        let credential =
-            extract_standard_credential(&headers).expect("x-goog-api-key should parse");
-        assert_eq!(credential.as_deref(), Some("google-secret"));
-
-        strip_client_credential_headers(&mut headers);
-        assert!(!headers.contains_key("x-goog-api-key"));
-    }
-}
-
 pub(super) fn cors_allowed_origins_from_env() -> Result<Vec<HeaderValue>, String> {
     let raw = match std::env::var(CORS_ALLOWED_ORIGINS_ENV) {
         Ok(value) => value,
@@ -840,4 +819,25 @@ fn parse_allowed_origin(origin: &str) -> Result<HeaderValue, String> {
     HeaderValue::from_str(origin).map_err(|error| {
         format!("{CORS_ALLOWED_ORIGINS_ENV} origin `{origin}` is not a valid header value: {error}")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_and_strips_x_goog_api_key_as_sensitive_credential() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-goog-api-key"),
+            HeaderValue::from_static("google-secret"),
+        );
+
+        let credential =
+            extract_standard_credential(&headers).expect("x-goog-api-key should parse");
+        assert_eq!(credential.as_deref(), Some("google-secret"));
+
+        strip_client_credential_headers(&mut headers);
+        assert!(!headers.contains_key("x-goog-api-key"));
+    }
 }

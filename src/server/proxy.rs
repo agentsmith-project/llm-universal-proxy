@@ -2292,8 +2292,7 @@ fn validate_bridge_continuation_items(
 
     if current_items.len() < pending.len() {
         return Err(format!(
-            "conversation_state_bridge replay has pending tool calls {:?}; the continuation submitted {} tool output item(s)",
-            pending, current_output_count
+            "conversation_state_bridge replay has pending tool calls {pending:?}; the continuation submitted {current_output_count} tool output item(s)"
         ));
     }
 
@@ -2327,8 +2326,7 @@ fn validate_bridge_continuation_items(
                 ));
             }
             return Err(format!(
-                "conversation_state_bridge replay received `{output_type}` for call_id `{call_id}`, which does not match pending local tool call(s) {:?}",
-                pending
+                "conversation_state_bridge replay received `{output_type}` for call_id `{call_id}`, which does not match pending local tool call(s) {pending:?}"
             ));
         }
     }

@@ -614,10 +614,7 @@ fn raw_response_with_capture(
     Response::builder()
         .status(state.response.status)
         .header("Content-Type", state.response.content_type)
-        .header(
-            "Content-Length",
-            state.response.body.as_bytes().len().to_string(),
-        )
+        .header("Content-Length", state.response.body.len().to_string())
         .header("request-id", "req_raw_phase_3a")
         .header("x-request-id", "xreq_raw_phase_3a")
         .header("openai-processing-ms", "42")
@@ -793,9 +790,7 @@ fn assert_upstream_hop_by_hop_headers_not_forwarded(headers: &ReqwestHeaderMap) 
         "upstream Connection-nominated hop-by-hop header must not be forwarded"
     );
     assert!(
-        !header_values(headers, "keep-alive")
-            .iter()
-            .any(|value| *value == RAW_UPSTREAM_KEEP_ALIVE_VALUE),
+        !header_values(headers, "keep-alive").contains(&RAW_UPSTREAM_KEEP_ALIVE_VALUE),
         "upstream Keep-Alive hop-by-hop header must not be forwarded"
     );
 }
