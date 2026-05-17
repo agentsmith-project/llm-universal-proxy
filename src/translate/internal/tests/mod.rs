@@ -5965,7 +5965,6 @@ fn translate_request_responses_string_grammar_custom_tool_to_claude_default_warn
         bridge_context["purpose"],
         "openai_responses_custom_tool_bridge"
     );
-    assert!(bridge_context.get("compatibility_mode").is_none());
     assert_eq!(
         body["_llmup_tool_bridge_context"]["entries"]["apply_patch"]["stable_name"],
         "apply_patch"
@@ -6032,7 +6031,6 @@ fn translate_request_responses_string_grammar_custom_tool_to_openai_default_warn
         bridge_context["purpose"],
         "openai_responses_custom_tool_bridge"
     );
-    assert!(bridge_context.get("compatibility_mode").is_none());
     assert_eq!(
         body["_llmup_tool_bridge_context"]["entries"]["apply_patch"]["stable_name"],
         "apply_patch"
@@ -9504,10 +9502,9 @@ fn translate_response_openai_to_responses_fails_closed_for_incomplete_or_invalid
     });
     let cases = [
         (
-            "legacy v1 sidecar",
+            "v1 sidecar",
             json!({
                 "version": 1,
-                "compatibility_mode": "max_compat",
                 "entries": { "code_exec": entry.clone() }
             }),
         ),

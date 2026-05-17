@@ -240,6 +240,7 @@ class DocsHomepageContractTests(unittest.TestCase):
             "raw same-protocol forwarding is a byte-preserving optimization",
             "single maximum safe compatibility strategy",
             "fail-closed behavior is a hard portability boundary",
+            "requests whose semantics cannot be preserved or safely degraded are rejected before upstream",
         )
         for snippet in english_snippets:
             with self.subTest(language="README", snippet=snippet):
@@ -248,7 +249,8 @@ class DocsHomepageContractTests(unittest.TestCase):
         chinese_snippets = (
             "raw same-protocol forwarding 是 byte-preserving optimization",
             "maximum safe compatibility strategy",
-            "fail-closed 是 hard portability boundary",
+            "fail-closed 代表 hard portability boundary",
+            "无法安全保留或降级语义的请求会在上游前被拒绝",
         )
         for snippet in chinese_snippets:
             with self.subTest(language="README_CN", snippet=snippet):

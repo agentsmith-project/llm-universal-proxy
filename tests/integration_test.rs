@@ -1420,7 +1420,7 @@ async fn runtime_namespace_config_can_be_created_from_empty_start_with_null_or_m
 }
 
 #[tokio::test]
-async fn admin_runtime_payload_accepts_legacy_compatibility_mode_but_state_omits_it() {
+async fn admin_runtime_payload_rejects_legacy_compatibility_mode() {
     let _env_guard = ADMIN_TOKEN_ENV_LOCK.lock().await;
     let _admin_token = ScopedEnvVar::remove("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN");
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
@@ -1447,17 +1447,95 @@ async fn admin_runtime_payload_accepts_legacy_compatibility_mode_but_state_omits
         .send()
         .await
         .unwrap();
-    assert_eq!(apply.status(), StatusCode::OK);
+    assert_eq!(apply.status(), StatusCode::BAD_REQUEST);
+    let body: Value = apply.json().await.unwrap();
+    let message = body["error"]["message"]
+        .as_str()
+        .expect("OpenAI-style error message");
+    assert!(
+        message.contains("invalid admin config request")
+            && message.contains("unknown field")
+            && message.contains("compatibility_mode"),
+        "unexpected error message: {message}"
+    );
+}
 
-    let state: Value = client
-        .get(format!("{proxy_base}/admin/namespaces/legacy/state"))
+#[tokio::test]
+async fn admin_runtime_payload_rejects_legacy_compatibility_mode_before_partial_commit() {
+    let _env_guard = ADMIN_TOKEN_ENV_LOCK.lock().await;
+    let _admin_token = ScopedEnvVar::remove("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN");
+    let (mock_base, _mock) = spawn_openai_completion_mock().await;
+    let (proxy_base, _proxy) = start_proxy(Config::default()).await;
+    let client = Client::new();
+
+    let mut initial_config = demo_runtime_config(&mock_base);
+    initial_config.model_aliases.insert(
+        "stable".to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: "gpt-4".to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
+    let create = client
+        .post(format!("{proxy_base}/admin/namespaces/partial/config"))
+        .json(&json!({
+            "if_revision": null,
+            "config": initial_config,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+
+    let original_state: Value = client
+        .get(format!("{proxy_base}/admin/namespaces/partial/state"))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert!(state["config"].get("compatibility_mode").is_none());
+    let original_revision = original_state["revision"].as_str().unwrap().to_string();
+    let original_upstreams = original_state["config"]["upstreams"].clone();
+    let original_model_aliases = original_state["config"]["model_aliases"].clone();
+
+    let mut rejected_config = serde_json::to_value(demo_runtime_config(&mock_base)).unwrap();
+    rejected_config["compatibility_mode"] = json!("strict");
+    rejected_config["upstreams"][0]["name"] = json!("should-not-commit");
+    rejected_config["model_aliases"] = json!({
+        "should-not-commit": {
+            "upstream_name": "should-not-commit",
+            "upstream_model": "future-model"
+        }
+    });
+
+    let rejected = client
+        .post(format!("{proxy_base}/admin/namespaces/partial/config"))
+        .json(&json!({
+            "if_revision": original_revision,
+            "config": rejected_config,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+
+    let after_state: Value = client
+        .get(format!("{proxy_base}/admin/namespaces/partial/state"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after_state["revision"], original_state["revision"]);
+    assert_eq!(after_state["config"]["upstreams"], original_upstreams);
+    assert_eq!(
+        after_state["config"]["model_aliases"],
+        original_model_aliases
+    );
 }
 
 #[tokio::test]

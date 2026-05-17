@@ -10,9 +10,9 @@
 
 ## v0.2.27 - 2026-05-01
 
-- Made `max_compat` repair OpenAI Chat Completions target requests by downgrading `system` and `developer` messages to annotated `user` turns, so narrow OpenAI-compatible chat providers that reject high-priority roles can still serve Codex, Claude Code, Gemini, and Responses clients.
+- Made the single maximum-compatibility translation path repair OpenAI Chat Completions target requests by downgrading `system` and `developer` messages to annotated `user` turns, so narrow OpenAI-compatible chat providers that reject high-priority roles can still serve Codex, Claude Code, Gemini, and Responses clients.
 - Kept native OpenAI Responses-compatible upstreams on their own protocol surface: `instructions`, `system`, and `developer` roles remain intact when the target upstream format is `openai-responses`.
-- Expanded translation regression coverage for Responses-to-Chat compaction/instruction history, same-format OpenAI Chat max-compat handling, Gemini/Anthropic-to-Chat instruction lowering, and balanced-mode fidelity checks.
+- Expanded translation regression coverage for Responses-to-Chat compaction/instruction history, same-format OpenAI Chat maximum-compatibility handling, Gemini/Anthropic-to-Chat instruction lowering, and rejection of removed legacy compatibility input.
 - Advanced the main-branch release identity to Cargo package version `0.2.27`, the next patch version after the unpublished `0.2.26` development identity and the published, occupied `v0.2.25` tag, without moving, deleting, or reusing the existing tag.
 
 ## v0.2.26 - 2026-04-29
@@ -63,7 +63,7 @@
 ## v0.2.22 - 2026-04-27
 
 - Documented provider-neutral preset naming as the portable GA path, keeping named official and compatible providers as operator examples rather than release-blocking dependencies.
-- Clarified Responses reasoning/compaction continuity degradation boundaries for opaque state: visible summaries or transcript context may degrade in compatible modes, while opaque-only continuity still fails closed outside native passthrough.
+- Clarified Responses reasoning/compaction continuity boundaries for opaque state: visible summaries or transcript context may be preserved with warnings under the single maximum-compatibility path, while opaque-only continuity still fails closed outside internal raw forwarding or native provider handling.
 - Recorded the hermetic Codex wrapper interaction gate as the deterministic release check for scripted two-turn wrapper behavior.
 - Aligned GA docs alignment around protected `COMPAT_*` smoke evidence, precise chat-completions/messages route coverage, and Actions artifact retention.
 
@@ -101,19 +101,19 @@
 
 - Hardened translated multimodal media-source boundaries so polluted URI-like references fail closed before upstream routing, including raw and percent-encoded control characters, Unicode separators, zero-width spaces, and invalid `data:` URI fallbacks across Anthropic, OpenAI Chat, OpenAI Responses, and Gemini paths.
 - Centralized canonical inline base64 validation for translated media inputs, requiring non-empty canonical payloads for data URIs, bare base64, Anthropic `source.data`, Gemini `inlineData.data`, OpenAI `input_audio.data`, and tool-result media instead of trimming or forwarding noncanonical payloads.
-- Extended OpenAI Chat <-> Responses media conversion checks so translated `image_url`, `input_image.image_url`, `file_data`, `file_url`, and `input_audio.data` fields share the same sanitizer while preserving same-format passthrough behavior.
+- Extended OpenAI Chat <-> Responses media conversion checks so translated `image_url`, `input_image.image_url`, `file_data`, `file_url`, and `input_audio.data` fields share the same sanitizer while preserving same-format forwarding behavior.
 - Added broad unit and end-to-end regression coverage for polluted multimodal URLs, provider/local file URIs, data URI metadata, empty media payloads, and raw inline base64 across OpenAI, Anthropic, and Gemini translation paths.
 
 ## v0.2.15 - 2026-04-25
 
-- Supported native OpenAI Responses retrieval streaming for `GET /v1/responses/{response_id}?stream=true`, including upstream `Accept: text/event-stream`, guarded same-format SSE passthrough, and fail-closed handling when an upstream returns non-SSE success bodies.
-- Hardened OpenAI Chat `file` and OpenAI Responses `input_file` MIME provenance checks so conflicting `mime_type` / `mimeType`, `file_data` data URI MIME, or filename-derived hints are rejected before upstream routing, including same-format Responses passthrough and OpenAI-to-Gemini translation paths.
-- Expanded MIME provenance regression coverage for camelCase metadata, top-level versus nested file metadata, filename conflicts, and Gemini conversion paths, then re-verified Codex, Claude Code, and Gemini real-client smoke coverage plus a Codex long-horizon 6502 emulator task through MiniMax lanes.
+- Supported native OpenAI Responses retrieval streaming for `GET /v1/responses/{response_id}?stream=true`, including upstream `Accept: text/event-stream`, guarded same-format SSE forwarding, and fail-closed handling when an upstream returns non-SSE success bodies.
+- Hardened OpenAI Chat `file` and OpenAI Responses `input_file` MIME provenance checks so conflicting `mime_type` / `mimeType`, `file_data` data URI MIME, or filename-derived hints are rejected before upstream routing, including same-format Responses forwarding and OpenAI-to-Gemini translation paths.
+- Expanded MIME provenance regression coverage for camelCase metadata, top-level versus nested file metadata, filename conflicts, and Gemini conversion paths, then re-verified Codex, Claude Code, and Gemini real-client smoke coverage plus a Codex long-horizon 6502 emulator task through MiniMax paths.
 - Documented the typed-media MIME provenance safety rule across user, configuration, compatibility, and architecture docs so conflicting `mime_type` / `mimeType`, data URI MIME, or filename hints are clearly described as fail-closed request errors.
 
 ## v0.2.14 - 2026-04-24
 
-- Tightened the `max_compat` public boundary so client-visible tool identity stays stable, while proxy-private `__llmup_custom__*` transport names and `_llmup_tool_bridge_context` state no longer leak across or get trusted at external boundaries.
+- Tightened the maximum-compatibility public boundary so client-visible tool identity stays stable, while proxy-private `__llmup_custom__*` transport names and `_llmup_tool_bridge_context` state no longer leak across or get trusted at external boundaries.
 - Made translated SSE handling frame-aware, failing closed on malformed raw artifact frames and artifact event types while preserving literal boundary text inside successful text, schema, and metadata payloads.
 - Hardened Responses resource and lifecycle success framing: non-204 / 205 empty success bodies now map to `502`, and 204 / 205 validation uses a no-auto-decompression client to reject illegal `Content-Length` / `Transfer-Encoding` no-content framing.
 - Added downstream-disconnect cancellation handling, expanded CLI matrix owned-health diagnostics, and stabilized real Codex `apply_patch` routing on the original public tool name.
@@ -155,7 +155,7 @@
 - Closed the remaining public `proxec` -> `llmup` rename drift across model-catalog list, object, and direct-upstream object responses so public `owned_by`, Google `version`, Google `description`, and embedded metadata all expose one consistent `llmup` namespace.
 - Aligned live `llmup.surface` metadata with the proxy's effective model surface source of truth, so public model payloads and wrapper-generated runtime config now agree on surfaced limits, modalities, search support, and related tool metadata instead of drifting through parallel metadata paths.
 - Restored the public Codex `apply_patch` contract to `freeform` on surfaced metadata and wrapper catalogs, keeping the internal function-wrapper bridge transport private instead of exposing it as the user-visible tool transport.
-- Hardened the OpenAI Responses -> Google custom/grammar tool bridge so max-compat paths preserve stable public tool identity such as `apply_patch` while using the canonical single-string wrapper only as an internal transport detail for Gemini compatibility.
+- Hardened the OpenAI Responses -> Google custom/grammar tool bridge so maximum-compatibility translated paths preserve stable public tool identity such as `apply_patch` while using the canonical single-string wrapper only as an internal transport detail for Gemini compatibility.
 - Preserved Gemini live custom-tool streaming on the native SSE path instead of silently downgrading to unary transport, with regression coverage around `:streamGenerateContent` routing and streamed Responses tool-call behavior.
 
 ## v0.2.9 - 2026-04-21
@@ -166,7 +166,7 @@
 
 ## v0.2.8 - 2026-04-20
 
-- Switched the default compatibility posture to `max_compat`, so translated agent-facing paths now prefer the safer client-usable bridge behavior by default while still keeping `strict` and `balanced` available for tighter boundary control.
+- Historical pre-removal note: the runtime briefly exposed named compatibility postures for translated agent-facing paths; current runtime has removed those behavior choices and rejects the old compatibility input instead of treating it as a migration no-op.
 - Preserved stable public tool identity across translated live paths: client-visible and model-visible surfaces now keep original tool names such as `apply_patch` instead of exposing proxy-private `__llmup_custom__*` transport artifacts, with matching smoke and regression coverage around that contract.
 - Stopped trusting client-supplied `_llmup_tool_bridge_context` payloads at proxy ingress; the bridge context is now enforced as an internal-only request-scoped field so external callers cannot spoof custom/freeform tool decoding state.
 - Synced Codex-facing model surface metadata from the same source-of-truth model surface used by the proxy, so generated catalogs and wrapper defaults stay aligned on text-only modalities, search support, and `apply_patch` tool surfacing instead of drifting through parallel metadata paths.
@@ -178,7 +178,7 @@
 - Routed dashboard-mode runtime logs into an in-memory TUI log buffer and rendered them inside a new `Runtime Logs` panel, so live `warn!` / `info!` / `error!` output no longer overwrites the alternate-screen dashboard while the proxy is serving traffic.
 - Rebalanced the dashboard activity area so recent latency is shown as a compact trend sparkline and recent-request tables stay readable across tighter terminal heights while sharing space cleanly with live runtime logs.
 - Fixed OpenAI Responses sink tool-stream finalization so pending tool calls emit the expected done events promptly on tool-call finishes instead of leaving completion semantics to later terminal cleanup paths.
-- Improved the Codex interactive wrapper flow by generating explicit `apply_patch_tool_type: freeform` metadata in temporary catalogs, disabling `view_image` for text-only lanes, and refreshing the English / Chinese manual-testing docs around those safer defaults.
+- Improved the Codex interactive wrapper flow by generating explicit `apply_patch_tool_type: freeform` metadata in temporary catalogs, disabling `view_image` for text-only defaults, and refreshing the English / Chinese manual-testing docs around those safer defaults.
 
 ## v0.2.6 - 2026-04-19
 
@@ -261,7 +261,7 @@
 - Added named multi-upstream routing, local unique model aliases, and per-upstream fallback credential env support in the YAML schema.
 - Standardized upstream base URLs on versionless roots and moved `/v1` / `/v1beta` path composition into the proxy.
 - Removed the legacy single-upstream configuration path to reduce user-facing configuration ambiguity.
-- Added strict tests for YAML parsing, config-file loading, CLI argument parsing, multi-upstream routing, alias resolution, fallback credentials, and startup failure when no upstreams are configured.
+- Added targeted tests for YAML parsing, config-file loading, CLI argument parsing, multi-upstream routing, alias resolution, fallback credentials, and startup failure when no upstreams are configured.
 
 ## v0.1.2 - 2026-03-18
 

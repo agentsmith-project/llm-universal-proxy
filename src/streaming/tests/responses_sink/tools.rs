@@ -204,10 +204,9 @@ fn openai_chunk_to_responses_sse_fails_closed_for_incomplete_or_invalid_tool_bri
     });
     let contexts = [
         (
-            "legacy v1 sidecar",
+            "v1 sidecar",
             serde_json::json!({
                 "version": 1,
-                "compatibility_mode": "max_compat",
                 "entries": { "code_exec": entry.clone() }
             }),
         ),

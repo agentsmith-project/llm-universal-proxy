@@ -27,7 +27,7 @@ Phase 0 and Phase 1 together define the intended translated-path bridge: preserv
 
 ## Current Baseline
 
-- User-selectable compatibility-policy plumbing has been removed from the runtime. Translated paths use the single maximum safe compatibility strategy, and legacy `compatibility_mode` is accepted only as no-op input parsing; it is not stored, serialized, or exposed.
+- Runtime and config surfaces expose no compatibility switch; translated paths use the single maximum safe compatibility strategy; raw same-protocol forwarding is an internal optimization for eligible zero-mutation routes.
 - `surface_defaults`, alias `surface`, and `effective_model_surface()` exist as the shared model-surface truth chain.
 - model catalog endpoints expose effective `llmup.surface` metadata for wrappers and clients.
 - wrappers consume live/effective surface metadata and fail fast when critical agent-client fields are missing.
@@ -56,15 +56,16 @@ Current contract:
 - structured function-only protocol hops can still decode back to native custom/freeform semantics
 - ambiguous same-name function/custom definitions reject clearly
 
-### Phase 2: Remove User-Selectable Compatibility Policy
+### Phase 2: Single Maximum Compatibility Runtime
 
-Status: delivered; user-selectable compatibility policy plumbing has been removed.
+Status: delivered; the single maximum compatibility runtime is active, and runtime translated paths always use maximum safe compatibility.
 
 Current contract:
 
+- runtime and config surfaces expose no compatibility switch
 - translated paths follow the single maximum safe compatibility strategy
-- legacy `compatibility_mode` input is parsed only as no-op migration compatibility and must not affect runtime policy
-- fail-closed behavior is a hard portability boundary, not a lower compatibility setting
+- raw same-protocol forwarding is an internal optimization for routes that can avoid body mutation and response normalization
+- fail-closed behavior is a hard portability boundary
 - visible tool identity is enforced on live request and response surfaces
 - maximum-safe translation may warn and bridge portable semantics, but it still rejects provider-state reconstruction and unsafe non-portable shapes
 
@@ -109,7 +110,7 @@ v0.2.13 Codex verifier note: the prework-signal checks are real-client matrix/pr
 Delivered coverage:
 
 - translator and proxy tests for visible tool identity preservation
-- legacy no-op compatibility input parsing tests
+- unknown-field admin payload rejection tests for removed runtime compatibility inputs
 - model-surface merge and catalog projection tests
 - wrapper parsing/runtime-config tests for `surface_defaults` and alias `surface`
 - live surface fail-fast tests for critical `llmup.surface.tools` fields

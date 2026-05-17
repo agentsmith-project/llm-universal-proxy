@@ -5,7 +5,7 @@ Last updated: 2026-05-16
 
 ## Summary
 
-`llm-universal-proxy` uses one client-first translation strategy: maximum safe compatibility. The core architecture stays protocol-first, and fail-closed portability boundaries remain hard safety contracts rather than alternate product settings.
+`llm-universal-proxy` uses one client-first translation strategy: maximum safe compatibility. The runtime and config surface expose no compatibility switch; translated paths always use maximum safe compatibility, and fail-closed portability boundaries remain hard safety contracts.
 
 This means:
 
@@ -69,11 +69,11 @@ Client brand names can still exist in wrappers, real-client test matrix labels, 
 
 ## Product Direction
 
-The product promise is bounded: protocol coverage means raw same-protocol forwarding where the proxy can forward bytes without body mutation, and maximum safe translation for mismatched protocol pairs. It is not full-fidelity provider equivalence, and it is not a menu of weaker or stronger product settings.
+The product promise is bounded: protocol coverage means raw same-protocol forwarding is an internal optimization where the proxy can forward bytes without body mutation, and maximum safe translation for mismatched protocol pairs. That singular behavior is the product contract; provider-specific fidelity remains bounded by portability.
 
-- raw same-protocol forwarding optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries
+- raw same-protocol forwarding is an internal optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries
 - provider prompt-cache support is provider-native request-control support: synthesize only explicit provider-native cache request controls as a request-control modifier; this is not `llmup` caching and not a separate product behavior
-- translated paths: preserve the maximum safe portable representation and warn when a safe degradation is visible
+- translated paths always use maximum safe compatibility: preserve the maximum safe portable representation and warn when a safe degradation is visible
 - provider-native state and native extensions: raw/native forwarding only unless a documented, explicit shim exists
 
 Portable core:
@@ -96,9 +96,9 @@ Native extensions:
 
 Current implementation facts:
 
-- The implementation has removed user-selectable compatibility settings.
-- Translated paths should use the maximum safe representation by default and as the only product behavior.
-- Legacy compatibility config input is accepted only as no-op parsing compatibility and is not stored, serialized, or exposed.
+- Runtime and config surface expose no compatibility switch.
+- Translated paths always use maximum safe compatibility.
+- Raw same-protocol forwarding is an internal zero-transform optimization for same-format routes that can avoid body mutation and response normalization.
 - Same-format zero-transform forwarding preserves native fields when the source and upstream use the same wire protocol and the route does not require body mutation.
 - Native Responses zero-transform forwarding preserves `context_management`, `include` values such as `reasoning.encrypted_content`, and input reasoning and compaction items with `encrypted_content` unchanged.
 - Responses lifecycle/resource endpoints require exactly one native OpenAI Responses upstream and the proxy does not reconstruct provider state.
@@ -148,8 +148,8 @@ MIME provenance is part of that boundary. OpenAI Chat `file` and OpenAI Response
 
 The product behavior is intentionally singular:
 
-- raw same-protocol forwarding remains a byte-preserving optimization for routes that can avoid body mutation
-- translated paths use maximum safe compatibility
+- raw same-protocol forwarding is an internal optimization: byte-preserving handling for routes that can avoid body mutation and response normalization
+- translated paths always use maximum safe compatibility
 - provider prompt-cache support is provider-native request-control support, not a `llmup` cache and not a separate product behavior
 - hard portability boundaries fail closed before upstream when the proxy cannot preserve or safely degrade semantics
 

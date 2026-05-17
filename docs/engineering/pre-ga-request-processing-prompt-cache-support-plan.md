@@ -21,8 +21,8 @@ Gemini remains usable only as a provider brand behind an OpenAI-compatible upstr
 
 Make the pre-GA behavior easy to reason about:
 
-- `llmup` has one product strategy: maximum safe compatibility with fail-closed boundaries when semantics cannot be preserved or safely degraded.
-- `llmup` exposes no user-selectable compatibility variants. Maximum safe compatibility is the only implementation goal.
+- `llmup` has one product strategy: maximum safe compatibility. It preserves portable semantics where possible, emits explicit warnings when supported translation omits non-portable detail, and fails closed when semantics cannot be preserved safely.
+- Maximum safe compatibility is the implementation goal for every route.
 - `RequestTransformationNotRequired` and `RequestTransformationRequired` are internal request-processing classifications, not product behavior.
 - Observability records whether a request needs construction, protocol conversion, or enhancement. Same-protocol requests that do not need mutation use raw provider forwarding as an internal request-processing optimization under the same strategy.
 - Provider-native prompt-cache request controls are currently preserved as original payload on supported native paths. Delivered translated slices map OpenAI-family `extra_body.anthropic.cache_control` to Anthropic top-level `cache_control`, and Anthropic-shaped `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` to OpenAI-family target top-level fields. Remaining translated block-level support and future reviewed synthesis are still future work after the target request shape is known.
@@ -31,7 +31,7 @@ Make the pre-GA behavior easy to reason about:
 
 Same-format means the provider-facing wire protocol, not the provider brand. An OpenAI-compatible upstream can use the internal raw same-protocol forwarding path for OpenAI-shaped requests when the route does not require body mutation or response normalization. If a compatible upstream needs provider shims, model body rewrites, or response normalization, the request is constructed or translated under the same maximum safe compatibility strategy.
 
-Raw same-protocol forwarding is an internal request-processing optimization under maximum safe compatibility. It is not a separate product behavior, user-selectable option, or product variant.
+Raw same-protocol forwarding is an internal request-processing optimization under maximum safe compatibility.
 
 This is still a pre-GA plan for the prompt-cache disposition pieces. Future broader translated support and any reviewed synthesis may require test updates, but raw same-protocol forwarding itself must remain an internal request-processing optimization.
 
@@ -60,13 +60,13 @@ Current request-processing facts:
 
 ### External Product Patterns
 
-Comparable gateways split the world in ways that support this plan:
+Comparable gateways expose separate provider-native surfaces, gateway controls, or cache products. These are contrast examples only; `llmup` must not copy them into its request model, route configuration, or user-facing behavior.
 
-- LiteLLM has OpenAI-native integrations and separate passthrough endpoints for newer or less-supported OpenAI endpoints.
+- LiteLLM has OpenAI-native integrations and separate OpenAI forwarding endpoints for newer or less-supported OpenAI endpoints.
 - Cloudflare AI Gateway offers provider-native endpoints where a user replaces the provider base URL, and separately offers exact response caching.
 - OpenRouter distinguishes provider prompt caching from its own response cache, and uses sticky provider routing to preserve provider cache warmth.
 - Helicone distinguishes provider-level prompt caching from Helicone response caching, while its AI Gateway route is a broader OpenAI-compatible translation layer.
-- Portkey exposes strict OpenAI compliance controls because provider-native fields can be lost when normalized into a single schema.
+- Portkey exposes OpenAI compliance controls because provider-native fields can be lost when normalized into a single schema.
 - Vercel AI Gateway namespaces gateway behavior in `providerOptions.gateway`, including `caching: 'auto'`, instead of pretending provider cache controls are the same.
 - Envoy AI Gateway exposes a provider-agnostic `cache_control` field, but scopes it to Anthropic-compatible targets where it can be translated into native Anthropic / Vertex Claude / Bedrock Claude controls.
 
@@ -166,7 +166,7 @@ Disallowed behavior:
 
 There are two different activities:
 
-- Provider prompt-cache optimization: `llmup` may synthesize provider-native request controls that ask the selected upstream to use its own prompt-cache mechanism.
+- Provider prompt-cache request-control support: `llmup` may synthesize provider-native request controls that ask the selected upstream to use its own prompt-cache mechanism, after implementation review.
 - `llmup` caching: `llmup` stores, indexes, evicts, or serves cached data itself.
 
 This plan includes the first activity and excludes the second. A synthesized OpenAI `prompt_cache_key` or Anthropic `cache_control` is still just a request to the provider; it is not a `llmup` cache.
@@ -208,14 +208,14 @@ Do not:
 
 ### Provider-Native Prompt-Cache Request-Control Disposition
 
-Do not add a user/operator YAML mode or route-policy switch for prompt-cache behavior. The handoff target is an internal disposition model:
+Prompt-cache behavior is computed internally from the target request shape and explicit provider-native fields. The handoff target is an internal disposition model:
 
 - `preserved_native`: keep provider-native fields unchanged on same-protocol or OpenAI-family paths where the target can honor them.
 - `explicit_extension_mapped`: map a documented explicit provider-native extension only after the target request shape is known.
 - `dropped`: warn/drop provider-native cache controls when the target cannot honor them.
 - `synthesized_after_review`: reserved for a future synthesis implementation review, not a current config surface.
 
-`explicit support` and any future reviewed synthesis are internal implementation strategies. They are not product variants, route config modes, operator toggles, or user-selectable routing behavior.
+`explicit support` and any future reviewed synthesis are internal implementation details under the same maximum safe compatibility goal.
 
 Future synthesis review may allow synthesis from deterministic inputs only:
 
@@ -636,7 +636,7 @@ Provider official references:
 
 Comparable gateway references:
 
-- LiteLLM OpenAI passthrough: <https://docs.litellm.ai/docs/pass_through/openai_passthrough>
+- LiteLLM OpenAI forwarding endpoint docs: <https://docs.litellm.ai/docs/>
 - LiteLLM prompt caching: <https://docs.litellm.ai/docs/completion/prompt_caching>
 - LiteLLM auto-inject prompt caching checkpoints: <https://docs.litellm.ai/docs/tutorials/prompt_caching>
 - LiteLLM proxy caching: <https://docs.litellm.ai/docs/proxy/caching>
@@ -650,7 +650,7 @@ Comparable gateway references:
 - Portkey Anthropic prompt caching: <https://portkey.ai/docs/integrations/llms/anthropic/prompt-caching>
 - Portkey Bedrock prompt caching: <https://portkey.ai/docs/virtual_key_old/integrations/llms/bedrock/prompt-caching>
 - Portkey Messages API provider-native cache note: <https://portkey.ai/docs/product/ai-gateway/messages-api>
-- Portkey strict OpenAI compliance: <https://portkey.ai/docs/product/ai-gateway/strict-open-ai-compliance>
+- Portkey AI Gateway docs: <https://portkey.ai/docs/product/ai-gateway>
 - Vercel AI Gateway provider options: <https://vercel.com/docs/ai-gateway/provider-options>
 - Vercel AI Gateway OpenAI-compatible advanced prompt caching: <https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-compat/advanced>
 - Envoy AI Gateway prompt caching: <https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/prompt-caching/>

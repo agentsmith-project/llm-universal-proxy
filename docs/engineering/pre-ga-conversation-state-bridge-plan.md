@@ -27,7 +27,7 @@
 - 状态桥只保存会话重放所需的输入/输出事件，不缓存或复用模型响应。
 - 默认行为保持 fail closed；只有显式配置启用状态桥的路由才改变现有边界。
 - 状态桥是最大安全兼容策略下的显式 state expansion。它会使请求需要构造/转换，必须在 trace 和 warnings 中可见；它不是独立产品行为或用户可选策略。
-- 不提供兼容性变体；最大安全兼容性仍是唯一实现目标。
+- 最大安全兼容性仍是唯一实现目标。
 
 一句话边界：这是 `ConversationStateBridge`，不是 cache。
 
@@ -93,7 +93,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 已接受的 pre-GA 方向变化：
 
 - `docs/CONSTITUTION.md` 已记录默认 stateless、provider-owned lifecycle state reconstruction 仍 out of scope，并把 `conversation_state_bridge.mode=memory` 限定为 narrow local replay buffer。
-- 本计划不引入持久化数据库，但已引入显式配置的内存状态。宪章措辞应保持：默认仍是无状态；可配置的内存 `ConversationStateBridge` 是最大安全兼容策略下的内部 state expansion 能力，不是默认产品行为或用户可选策略。
+- 本计划不引入持久化数据库，但已引入显式配置的内存状态。宪章措辞应保持：默认仍是无状态；可配置的内存 `ConversationStateBridge` 是最大安全兼容策略下的内部 state expansion 能力，不是另一套兼容策略。
 
 ## 设计原则
 
@@ -133,7 +133,7 @@ conversation_state_bridge:
 - `max_bytes` 是全局内存上限，不做 per-tenant/per-conversation 细分。
 - `store: false` 优先于 bridge 保存，但这是固定语义，不做成配置项。
 
-`conversation_state_bridge.mode = "memory"` 是现有配置里的 storage/backend selector，也是允许进程内短期保存 prompt/response 事件的数据保留安全门。它不是兼容性产品选项或路由策略。
+`conversation_state_bridge.mode = "memory"` 是现有配置里的 storage/backend selector，也是允许进程内短期保存 prompt/response 事件的数据保留安全门。字段名里的 `mode` 只选择状态桥 backend，不得被复用成兼容能力开关、路由策略或产品分层。
 
 ## 请求处理观测
 
@@ -413,7 +413,7 @@ Current-main delivery status:
 - Delivered: Phase 0/1/2 的配置、内存 store、`resp_llmup_*`、TTL/max_bytes、owner hash、非流式 text-only capture/replay。
 - Delivered slice: Phase 5 中的 `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice。
 - Delivered slice: route/config owner hardening，包括内部 route/config fingerprint、当前 runtime 复校验、drift pre-dispatch 400 fail closed，以及未变配置下的 no-model single-upstream replay。
-- Pending next: remaining prompt-cache translated/block-level review；OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付，未来 reviewed synthesis 不引入 mode/config。
+- Pending next: remaining prompt-cache translated/block-level review；OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付，未来 reviewed synthesis 不新增用户/运营配置面。
 - Later: Phase 3 tool/custom tool replay、Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation。
 
 ### Phase 0：合同冻结与文档更新
@@ -549,7 +549,7 @@ Post-MVP 覆盖：
 
 推荐下一步顺序：
 
-1. Remaining prompt-cache translated/block-level review next：在已交付的状态展开、route/config owner 绑定、OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射，以及 Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射上，继续评审剩余 translated/block-level 支持；未来 reviewed synthesis 不引入 mode/config。
+1. Remaining prompt-cache translated/block-level review next：在已交付的状态展开、route/config owner 绑定、OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射，以及 Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射上，继续评审剩余 translated/block-level 支持；未来 reviewed synthesis 不新增用户/运营配置面。
 2. Tool/custom tool replay later：之后再评估 function_call/custom_tool_call、tool output、reasoning summary replay。
 3. Stream capture later：最后再评估 streaming response capture 和本地 Conversations API bridge。
 

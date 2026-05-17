@@ -16,16 +16,6 @@ pub use self::model_surface::{
     ModelToolSurface,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-enum LegacyCompatibilityMode {
-    #[serde(rename = "strict")]
-    Strict,
-    #[serde(rename = "balanced")]
-    Balanced,
-    #[serde(rename = "max_compat", alias = "max-compat")]
-    MaxCompat,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookConfig {
     pub max_pending_bytes: usize,
@@ -759,7 +749,8 @@ pub struct RuntimeUpstreamConfig {
     pub surface_defaults: Option<ModelSurfacePatch>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeConfigPayload {
     #[serde(default = "default_listen")]
     pub listen: String,
@@ -783,52 +774,6 @@ pub struct RuntimeConfigPayload {
     pub resource_limits: ResourceLimits,
     #[serde(default)]
     pub conversation_state_bridge: ConversationStateBridgeConfig,
-}
-
-impl<'de> Deserialize<'de> for RuntimeConfigPayload {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RuntimeConfigPayloadWire {
-            #[serde(default = "default_listen")]
-            listen: String,
-            #[serde(default = "default_upstream_timeout_secs")]
-            upstream_timeout_secs: u64,
-            #[serde(default)]
-            compatibility_mode: Option<LegacyCompatibilityMode>,
-            #[serde(default, alias = "upstream_proxy")]
-            proxy: Option<ProxyConfig>,
-            #[serde(default)]
-            upstreams: Vec<RuntimeUpstreamConfig>,
-            #[serde(default)]
-            model_aliases: BTreeMap<String, ModelAlias>,
-            #[serde(default)]
-            hooks: RuntimeHookConfig,
-            #[serde(default)]
-            debug_trace: DebugTraceConfig,
-            #[serde(default)]
-            resource_limits: ResourceLimits,
-            #[serde(default)]
-            conversation_state_bridge: ConversationStateBridgeConfig,
-        }
-
-        let wire = RuntimeConfigPayloadWire::deserialize(deserializer)?;
-        let _legacy_compatibility_mode = wire.compatibility_mode;
-        Ok(Self {
-            listen: wire.listen,
-            upstream_timeout_secs: wire.upstream_timeout_secs,
-            proxy: wire.proxy,
-            upstreams: wire.upstreams,
-            model_aliases: wire.model_aliases,
-            hooks: wire.hooks,
-            debug_trace: wire.debug_trace,
-            resource_limits: wire.resource_limits,
-            conversation_state_bridge: wire.conversation_state_bridge,
-        })
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -910,8 +855,6 @@ struct FileConfig {
     listen: String,
     #[serde(default = "default_upstream_timeout_secs")]
     upstream_timeout_secs: u64,
-    #[serde(default, rename = "compatibility_mode")]
-    _compatibility_mode: Option<LegacyCompatibilityMode>,
     #[serde(default, alias = "upstream_proxy")]
     proxy: Option<ProxyConfig>,
     #[serde(default)]
@@ -2005,14 +1948,13 @@ upstreams:
     fn admin_and_runtime_config_views_do_not_emit_compatibility_mode() {
         let config = Config::from_yaml_str(
             r#"
-compatibility_mode: strict
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
     format: openai-completion
 "#,
         )
-        .expect("legacy compatibility_mode should parse");
+        .expect("config should parse");
 
         let admin_view = serde_json::to_value(AdminConfigView::from(&config)).unwrap();
         assert!(admin_view.get("compatibility_mode").is_none());
@@ -2030,9 +1972,9 @@ upstreams:
     }
 
     #[test]
-    fn legacy_runtime_payload_compatibility_modes_are_accepted_but_not_serialized() {
+    fn runtime_config_payload_rejects_legacy_compatibility_mode() {
         for mode in ["strict", "balanced", "max_compat", "max-compat"] {
-            let payload: RuntimeConfigPayload = serde_json::from_value(serde_json::json!({
+            let payload = serde_json::json!({
                 "listen": "127.0.0.1:0",
                 "upstream_timeout_secs": 30,
                 "compatibility_mode": mode,
@@ -2043,22 +1985,21 @@ upstreams:
                     "fixed_upstream_format": "openai-completion"
                 }],
                 "model_aliases": {}
-            }))
-            .expect("legacy compatibility_mode should parse");
-
-            let config = Config::try_from(payload).expect("runtime config is valid");
-            let round_trip = serde_json::to_value(RuntimeConfigPayload::from(&config)).unwrap();
+            });
+            let error = serde_json::from_value::<RuntimeConfigPayload>(payload)
+                .expect_err("legacy compatibility_mode must fail JSON parsing");
             assert!(
-                round_trip.get("compatibility_mode").is_none(),
-                "legacy mode {mode} should not be serialized: {round_trip}"
+                error.to_string().contains("unknown field")
+                    && error.to_string().contains("compatibility_mode"),
+                "legacy mode {mode} should be rejected as unknown field: {error}"
             );
         }
     }
 
     #[test]
-    fn config_from_yaml_str_accepts_legacy_compatibility_modes_without_serializing_them() {
+    fn config_from_yaml_str_rejects_legacy_compatibility_mode() {
         for mode in ["strict", "balanced", "max_compat", "max-compat"] {
-            let c = Config::from_yaml_str(&format!(
+            let error = Config::from_yaml_str(&format!(
                 r#"
 compatibility_mode: {mode}
 upstreams:
@@ -2067,12 +2008,10 @@ upstreams:
     format: openai-completion
 "#,
             ))
-            .unwrap();
-
-            let runtime_view = serde_json::to_value(RuntimeConfigPayload::from(&c)).unwrap();
+            .expect_err("legacy compatibility_mode must fail YAML parsing");
             assert!(
-                runtime_view.get("compatibility_mode").is_none(),
-                "legacy mode {mode} should not be serialized: {runtime_view}"
+                error.contains("unknown field") && error.contains("compatibility_mode"),
+                "legacy mode {mode} should be rejected as unknown field: {error}"
             );
         }
     }

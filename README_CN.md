@@ -108,11 +108,11 @@ export LLM_UNIVERSAL_PROXY_KEY="local-proxy-key"
 
 `llmup` 提供稳定的本地协议入口，但不承诺不同厂商能力可以无限等价。
 
-- raw same-protocol forwarding 是 byte-preserving optimization，只用于无需 body mutation 和 response normalization 的 route
+- raw same-protocol forwarding 是 byte-preserving optimization，只作为无需 body mutation 和 response normalization 的 route 的内部 request-processing optimization
 - 跨协议翻译路径使用单一 maximum safe compatibility strategy，遇到不可移植能力会 warning 或 reject
-- fail-closed 是 hard portability boundary，不是低兼容档位
+- fail-closed 代表 hard portability boundary：无法安全保留或降级语义的请求会在上游前被拒绝
 - native extension 和厂商托管的 lifecycle state 需要 native upstream handling，除非有明确 documented shim
-- Responses reasoning/compaction continuity 只有在仍有 visible summary text 或 visible transcript history 时，才可以 warning/drop opaque carrier；opaque-only reasoning 和 opaque-only compaction 都 fail closed；raw/native forwarding 只有在实现为 zero-transformation request-processing optimization 时，才保留 provider-owned state
+- Responses reasoning/compaction continuity 只有在仍有 visible summary text 或 visible transcript history 时，才可以 warning/drop opaque carrier；opaque-only reasoning 和 opaque-only compaction 都 fail closed；raw/native forwarding 只有作为内部 request-processing optimization 时，才保留 provider-owned state
 - quickstart 里的 `surface_defaults` 是保守的 text-only 默认值；只有确认模型 surface 支持时，才打开 search、image 或 parallel-tool 标志
 - 多模态 `surface.modalities.input` 只 gate 媒体类型，不承诺所有 source transport；HTTP(S) 图片/PDF URL 和 `gs://`、`s3://`、`file://` 这类 provider/local URI 是不同边界
 - Gemini 模型通过 Google OpenAI-compatible endpoint 接入时使用 `format: openai-completion`；旧的 native Gemini `generateContent` 路由和 `format: google` / `format: gemini` 已移除

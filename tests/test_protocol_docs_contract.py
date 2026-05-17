@@ -333,10 +333,11 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "one client-first translation strategy: maximum safe compatibility",
             "Single Product Behavior",
             "raw same-protocol forwarding",
+            "raw same-protocol forwarding is an internal optimization",
+            "runtime and config surface expose no compatibility switch",
             "hard portability boundary",
             "provider prompt-cache support is provider-native request-control support",
             "not a separate product behavior",
-            "Legacy compatibility config input is accepted only as no-op parsing compatibility",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
@@ -345,7 +346,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
         text = read_doc("docs/max-compat-design.md")
 
         for snippet in (
-            "Translated paths should use the maximum safe representation",
+            "Translated paths always use maximum safe compatibility",
             "Same-format zero-transform forwarding",
             "Native Responses zero-transform forwarding preserves `context_management`",
             "`include` values such as `reasoning.encrypted_content`",
@@ -454,26 +455,31 @@ class ProtocolDocsContractTests(unittest.TestCase):
 
         self.assertIn("hermetic scripted interactive Codex wrapper gate", text)
 
-    def test_development_plan_records_removed_compatibility_policy_plumbing(self):
+    def test_development_plan_records_single_maximum_compatibility_runtime(self):
         text = read_doc("docs/engineering/max-compat-development-plan.md")
 
         for snippet in (
-            "User-selectable compatibility-policy plumbing has been removed",
+            "single maximum compatibility runtime",
+            "runtime translated paths always use maximum safe compatibility",
             "single maximum safe compatibility strategy",
-            "legacy `"
-            + "compatibility"
-            + "_mode"
-            + "` is accepted only as no-op input parsing",
-            "not stored, serialized, or exposed",
+            "runtime and config surfaces expose no compatibility switch",
+            "raw same-protocol forwarding is an internal optimization",
+            "fail-closed behavior is a hard portability boundary",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
-        self.assertNotIn("Legacy compatibility-policy plumbing exists in the runtime", text)
-        self.assertNotIn(
-            "Status: delivered as internal plumbing; no longer a product-facing "
-            + "tier model.",
-            text,
-        )
+        self.assertNotIn("compatibility-" + "policy plumbing", text)
+        self.assertNotIn("tier model", text)
+
+    def test_active_maximum_compat_docs_do_not_name_removed_runtime_compatibility_field(self):
+        old_field = "compatibility" + "_mode"
+        for relative_path in (
+            "docs/max-compat-design.md",
+            "docs/engineering/max-compat-development-plan.md",
+        ):
+            text = read_doc(relative_path)
+            with self.subTest(relative_path=relative_path):
+                self.assertNotIn(old_field, text)
 
     def test_reasoning_docs_do_not_overstate_opaque_continuity_rules(self):
         for relative_path in (

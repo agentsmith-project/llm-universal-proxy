@@ -3305,7 +3305,7 @@ async fn live_responses_rejects_external_tool_bridge_context_ingress() {
 }
 
 #[tokio::test]
-async fn live_responses_custom_tool_bridge_ignores_legacy_strict_config_and_uses_default_bridge() {
+async fn live_responses_custom_tool_bridge_uses_default_bridge() {
     let response_body = serde_json::json!({
         "id": "chatcmpl_1",
         "object": "chat.completion",
@@ -3318,29 +3318,8 @@ async fn live_responses_custom_tool_bridge_ignores_legacy_strict_config_and_uses
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state = app_state_for_single_upstream(
-        mock_base.clone(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
-    );
-    let legacy_strict_config = crate::config::Config::from_yaml_str(&format!(
-        r#"
-listen: 127.0.0.1:0
-upstream_timeout_secs: 30
-compatibility_mode: strict
-proxy: direct
-upstreams:
-  primary:
-    api_root: {mock_base}
-    format: openai-completion
-"#
-    ))
-    .expect("legacy compatibility_mode should parse");
-    replace_runtime_and_data_auth(
-        &state,
-        legacy_strict_config,
-        data_auth::DataAccess::ClientProviderKey,
-    )
-    .await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
 
     let response = handle_request_core(
         state,
