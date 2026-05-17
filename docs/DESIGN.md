@@ -7,7 +7,7 @@ This document describes the current implementation shape at `HEAD`.
 It is not the product-spec source of truth and it is not a protocol-fidelity contract:
 
 - Product and behavioral requirements live in [PRD.md](./PRD.md) and [CONSTITUTION.md](./CONSTITUTION.md).
-- Field-level portability, downgrade, and reject rules live in [protocol-compatibility-matrix.md](./protocol-compatibility-matrix.md) and the protocol baselines under [protocol-baselines/](./protocol-baselines/README.md).
+- Field-level portability, safe degradation, and reject rules live in [protocol-compatibility-matrix.md](./protocol-compatibility-matrix.md) and the protocol baselines under [protocol-baselines/](./protocol-baselines/README.md).
 
 Earlier versions of this document described a much smaller v0 proxy with a single upstream, a mostly single-file server, and discovery/forwarding as the dominant architectural concern. The codebase has moved well past that shape. Keeping this document as a "current architecture map" is more useful than preserving the older plan as if it were still live.
 
@@ -162,6 +162,7 @@ The implementation is still OpenAI-centric internally, but the important archite
 Current structural guardrails:
 
 - The request-scoped translation context is the runtime boundary from resolved config/model limits into the translator. Translation consumes resolved defaults such as effective `max_output_tokens`; it does not reach back into config on its own.
+- Local transcript replay for llmup-owned `resp_llmup_*` IDs is an internal state expansion helper under the single maximum safe compatibility goal. It is short-term process memory bounded by `ttl_seconds` and `max_bytes`, not a compatibility switch, cache, persistent conversation store, or provider lifecycle reconstruction mechanism.
 - Only complete and trusted structured tool calls are allowed to enter replayable history. Incomplete or truncated calls are marked non-replayable and intentionally degraded on later replay/bridge paths instead of being treated as safe structured replay.
 - When a bridge rewrites tool-call representation, any trusted non-replayable marker must be re-attested against the rewritten value. Literal marker copy is invalid because the signature is bound to the current `name` / raw payload.
 - Visible tool identity is part of the live client contract. Request translation may adapt argument encoding and protocol field shape, but it must not change the model-visible or client-visible stable tool name supplied by the client.

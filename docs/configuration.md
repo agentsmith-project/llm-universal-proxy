@@ -278,25 +278,34 @@ Fail-closed behavior is a hard portability boundary, not a lower compatibility s
 
 ### `conversation_state_bridge`
 
-`conversation_state_bridge` is optional and defaults to off:
+`conversation_state_bridge` controls the retention bounds for llmup's built-in
+local transcript replay. It is part of the single maximum safe compatibility
+behavior, not a user-selectable compatibility mode:
 
 ```yaml
 conversation_state_bridge:
-  mode: off          # off | memory
   ttl_seconds: 3600
   max_bytes: 268435456
 ```
 
-`mode: memory` enables an optional in-process adapter for maximum cross-protocol compatibility on non-streaming OpenAI Responses continuation requests translated to OpenAI Chat Completions or Anthropic Messages upstreams. It saves llmup-owned transcript state behind local `resp_llmup_*` response IDs, then expands later local `previous_response_id` requests back into explicit Responses `input` before the normal translator runs. The replayable transcript surface is text message input, assistant text message output, regular `function_call` / `function_call_output`, and portable `custom_tool_call` / `custom_tool_call_output`.
+The bridge may save short-lived, process-local transcript state behind
+llmup-owned `resp_llmup_*` response IDs when an OpenAI Responses request needs
+cross-protocol request construction for OpenAI Chat Completions or Anthropic
+Messages upstreams. Later non-streaming continuations with a matching local
+`previous_response_id` are expanded back into explicit Responses `input` before
+normal translation. The replayable surface is text message input, assistant text
+message output, regular `function_call` / `function_call_output`, portable
+`custom_tool_call` / `custom_tool_call_output`, and first-response streaming
+completed text capture.
 
 Boundaries:
 
-- default `off` preserves the existing fail-closed behavior for translated `previous_response_id` and `store: true`
 - state is process memory only, bounded by `ttl_seconds` and `max_bytes`; process restart drops all entries
 - `store: false` is honored and does not save replay state
-- unknown, expired, non-local, or owner-mismatched local IDs fail closed
+- unknown, expired, non-local, owner-mismatched, route/config-mismatched, and external provider-owned IDs fail closed
+- streaming first responses can commit completed text for later local replay, but streaming continuation with `previous_response_id` still fails closed
 - native OpenAI Responses forwarding keeps provider IDs and provider-owned state unchanged
-- there is no persistence, streaming capture, conversation API bridge, background lifecycle emulation, reasoning summary replay, compaction replay, provider-owned opaque state replay, or Gemini native state bridge
+- there is no persistence, retrieval, cache, Conversations API bridge, background lifecycle emulation, reasoning summary replay, compaction replay, provider-owned opaque state replay, or Gemini native state bridge
 
 ### `upstreams`
 

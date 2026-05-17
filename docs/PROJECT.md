@@ -200,6 +200,6 @@ When the implementation changes, update the document that matches the change:
 
 - Update `docs/DESIGN.md` when runtime architecture or major execution chain changes.
 - Update `docs/PROJECT.md` when module paths, tests, scripts, or contributor entrypoints change.
-- Update `docs/protocol-compatibility-matrix.md` when protocol portability or downgrade behavior changes.
+- Update `docs/protocol-compatibility-matrix.md` when protocol portability or safe-degradation behavior changes.
 - Update `docs/clients.md`, `README.md`, or `README_CN.md` when user-visible setup or client behavior changes.
 - Update release/container docs when `.github/workflows/release.yml`, release gate names, or artifact names change.

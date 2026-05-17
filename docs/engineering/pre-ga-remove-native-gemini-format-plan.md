@@ -33,7 +33,7 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 | --- | --- | --- |
 | Remove Native Gemini | 已删除的 `UpstreamFormat::Google`、`/google/*` routes、Gemini translators、Gemini streaming，以及 retired/migration docs/tests/scripts | 不新增 prompt-cache/state bridge 逻辑 |
 | Request Processing + Provider-Native Prompt-Cache Request Controls | request processing、raw same-protocol forwarding optimization、OpenAI/Anthropic provider-native cache controls、usage observation | 不修改或新增 Gemini translator/cache 功能；等 Gemini 删除后收敛测试矩阵 |
-| Conversation State Bridge | memory store、Responses `previous_response_id` replay、state capture、state trace | 不实现 Gemini replay；状态展开后再交给 provider-native prompt-cache request-control support |
+| Conversation State Bridge | local transcript replay、Responses `previous_response_id` replay、state capture、state trace | 不实现 Gemini replay；状态展开后再交给 provider-native prompt-cache request-control support |
 
 当前 handoff 顺序：
 

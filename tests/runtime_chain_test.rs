@@ -133,12 +133,16 @@ fn assert_llmup_external_contract(
         llmup["request_body_handling"], request_body_handling,
         "llmup = {llmup:?}"
     );
-    assert_eq!(llmup["state_bridge"], "off", "llmup = {llmup:?}");
     assert_eq!(
         llmup["provider_prompt_cache_request_control"], provider_prompt_cache_request_control,
         "llmup = {llmup:?}"
     );
     let object = llmup.as_object().expect("llmup object");
+    assert!(!object.contains_key("state_bridge"), "llmup = {llmup:?}");
+    assert!(
+        !object.contains_key("local_state_handling"),
+        "llmup = {llmup:?}"
+    );
     assert!(
         !object.contains_key("request_processing"),
         "llmup = {llmup:?}"
@@ -151,7 +155,7 @@ fn assert_llmup_external_contract(
         !object.contains_key("provider_native_prompt_cache"),
         "llmup = {llmup:?}"
     );
-    assert_eq!(object.len(), 3, "llmup = {llmup:?}");
+    assert_eq!(object.len(), 2, "llmup = {llmup:?}");
 }
 
 struct ScheduledChunk {

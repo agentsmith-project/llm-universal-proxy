@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::config::{ModelSurface, ResolvedModel};
 use crate::formats::UpstreamFormat;
 
-use super::data_auth::RequestAuthContext;
+use super::data_auth::{RequestAuthContext, RequestAuthorization};
 
 pub(super) const LOCAL_RESPONSE_ID_PREFIX: &str = "resp_llmup_";
 pub(super) const LOCAL_REPLAY_SCHEMA_VERSION: u64 = 1;
@@ -92,17 +92,26 @@ impl ConversationStateBridgeStore {
         format!("{LOCAL_RESPONSE_ID_PREFIX}{}", Uuid::new_v4().simple())
     }
 
-    pub(super) fn owner_hash(namespace: &str, auth_context: &RequestAuthContext) -> Option<String> {
-        let provider_key = auth_context.client_provider_key()?;
+    pub(super) fn owner_hash(namespace: &str, auth_context: &RequestAuthContext) -> String {
         let mut hasher = Sha256::new();
         hasher.update(namespace.as_bytes());
         hasher.update([0]);
-        hasher.update(format!("{:?}", auth_context.mode()).as_bytes());
+        let (auth_kind, provider_key) = match auth_context.authorization() {
+            RequestAuthorization::ClientProviderKey { provider_key } => {
+                ("client_provider_key", Some(provider_key.as_str()))
+            }
+            RequestAuthorization::ProxyKey => ("proxy_key", None),
+        };
+        hasher.update(data_auth_mode_label(auth_context).as_bytes());
         hasher.update([0]);
-        hasher.update(b"client_provider_key");
+        hasher.update(auth_context.generation().as_bytes());
         hasher.update([0]);
-        hasher.update(provider_key.as_bytes());
-        Some(hex::encode(hasher.finalize()))
+        hasher.update(auth_kind.as_bytes());
+        if let Some(provider_key) = provider_key {
+            hasher.update([0]);
+            hasher.update(provider_key.as_bytes());
+        }
+        hex::encode(hasher.finalize())
     }
 
     pub(super) async fn get(
@@ -171,6 +180,13 @@ impl ConversationStateBridgeStore {
         inner.current_bytes += entry.size_bytes;
         inner.responses.insert(response_id.clone(), entry);
         Ok(response_id)
+    }
+}
+
+fn data_auth_mode_label(auth_context: &RequestAuthContext) -> &'static str {
+    match auth_context.mode() {
+        crate::config::DataAuthMode::ClientProviderKey => "client_provider_key",
+        crate::config::DataAuthMode::ProxyKey => "proxy_key",
     }
 }
 

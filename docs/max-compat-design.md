@@ -73,6 +73,7 @@ The product promise is bounded: protocol coverage means every request is governe
 
 - same-wire native preservation is an internal optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries when no body mutation or response normalization is required
 - provider prompt-cache support is provider-native request-control support: preserve or map only explicit provider-native cache request controls as a request-control modifier; this is not `llmup` caching and not a separate product behavior
+- local transcript replay is a built-in state expansion helper: keep short-term process-memory transcript state only for llmup-owned `resp_llmup_*` IDs when request construction needs it; configure only retention bounds, not a compatibility switch
 - constructed requests use maximum safe compatibility: preserve the maximum safe portable representation and warn when a safe degradation is visible
 - provider-native state and native extensions: preserve only when same-wire internal handling can keep native semantics unchanged unless a documented, explicit shim exists
 
@@ -102,6 +103,7 @@ Current implementation facts:
 - Same-format zero-transform handling preserves native fields when the source and upstream use the same wire protocol and the route does not require body mutation.
 - Native Responses same-wire handling preserves `context_management`, `include` values such as `reasoning.encrypted_content`, and input reasoning and compaction items with `encrypted_content` unchanged.
 - Responses lifecycle/resource endpoints require exactly one native OpenAI Responses upstream and the proxy does not reconstruct provider state.
+- Local transcript replay may expand llmup-owned `resp_llmup_*` IDs for translated OpenAI Responses continuations using short-term in-process memory. It saves only replayable transcript items; `store:false`, expiration, restart, namespace/owner mismatch, route/config drift, external provider-owned IDs, and streaming continuation with `previous_response_id` fail closed. First-response streaming completed text capture is supported.
 
 Request-side reasoning encrypted_content rules:
 
@@ -151,6 +153,7 @@ The product behavior is intentionally singular:
 - same-wire native preservation is an internal optimization for routes that can avoid body mutation and response normalization
 - request construction always uses maximum safe compatibility
 - provider prompt-cache support is provider-native request-control support, not a `llmup` cache and not a separate product behavior
+- local transcript replay is an internal helper under maximum safe compatibility, not a user-facing mode
 - hard portability boundaries fail closed before upstream when the proxy cannot preserve or safely degrade semantics
 
 Hard boundaries:

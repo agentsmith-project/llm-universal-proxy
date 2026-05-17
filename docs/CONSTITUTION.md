@@ -111,14 +111,22 @@ Proxy authentication is in scope:
 
 - LLM inference execution — the proxy does not run models
 - Prompt engineering or content modification
-- Persistent conversation state, except for the optional `conversation_state_bridge.mode=memory` narrow local replay buffer described below
+- Persistent conversation state or provider-owned lifecycle reconstruction, except for the narrow local replay buffer described below
 - Provider-owned lifecycle state reconstruction
 - Rate limiting or quota management (delegated to upstream providers)
 - Training data collection
 
 ### Narrow State Exception
 
-The proxy is stateless by default. `conversation_state_bridge.mode=memory` is the only current exception: it is explicitly configured, memory-only, scoped to llmup-owned local response IDs such as `resp_llmup_*`, and used only as an explicit transcript expansion adapter for narrow OpenAI Responses continuations that require request construction. Unknown IDs, expired entries, process restart, owner mismatch, `store:false`, and external provider IDs fail closed. This is not persistent conversation state, not provider-owned lifecycle reconstruction, not a response cache, and not another compatibility goal.
+The proxy does not reconstruct provider-owned lifecycle state. The only current
+state exception is llmup-owned local transcript replay: a built-in, memory-only
+state expansion helper under maximum safe compatibility for OpenAI Responses
+continuations that require request construction. It is scoped to local response
+IDs such as `resp_llmup_*`, bounded by `ttl_seconds` and `max_bytes`, and never
+imports external provider IDs. Unknown IDs, expired entries, process restart,
+namespace or owner mismatch, route/config drift, `store:false`, and external provider IDs fail closed.
+This is not persistent conversation state, not provider-owned lifecycle reconstruction,
+not a response cache, not a user compatibility mode, and not another compatibility goal.
 
 ## Design Philosophy
 

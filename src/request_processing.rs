@@ -62,9 +62,16 @@ impl Serialize for RequestProcessingInfo {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("RequestProcessingInfo", 3)?;
+        let field_count = if self.state_bridge == StateBridgeModifier::Off {
+            2
+        } else {
+            3
+        };
+        let mut state = serializer.serialize_struct("RequestProcessingInfo", field_count)?;
         state.serialize_field("request_body_handling", self.request_body_handling())?;
-        state.serialize_field("state_bridge", &self.state_bridge)?;
+        if self.state_bridge != StateBridgeModifier::Off {
+            state.serialize_field("local_state_handling", &self.state_bridge)?;
+        }
         state.serialize_field(
             "provider_prompt_cache_request_control",
             &self.provider_native_prompt_cache,

@@ -154,12 +154,16 @@ fn assert_llmup_external_contract(
         llmup["request_body_handling"], request_body_handling,
         "llmup = {llmup:?}"
     );
-    assert_eq!(llmup["state_bridge"], "off", "llmup = {llmup:?}");
     assert_eq!(
         llmup["provider_prompt_cache_request_control"], provider_prompt_cache_request_control,
         "llmup = {llmup:?}"
     );
     let object = llmup.as_object().expect("llmup object");
+    assert!(!object.contains_key("state_bridge"), "llmup = {llmup:?}");
+    assert!(
+        !object.contains_key("local_state_handling"),
+        "llmup = {llmup:?}"
+    );
     assert!(
         !object.contains_key("request_processing"),
         "llmup = {llmup:?}"
@@ -172,7 +176,7 @@ fn assert_llmup_external_contract(
         !object.contains_key("provider_native_prompt_cache"),
         "llmup = {llmup:?}"
     );
-    assert_eq!(object.len(), 3, "llmup = {llmup:?}");
+    assert_eq!(object.len(), 2, "llmup = {llmup:?}");
 }
 
 struct ScopedEnvVar {
@@ -235,7 +239,6 @@ listen: 127.0.0.1:0
 upstream_timeout_secs: 30
 proxy: direct
 conversation_state_bridge:
-  mode: memory
   ttl_seconds: {ttl_seconds}
   max_bytes: {max_bytes}
 upstreams:
@@ -6934,7 +6937,7 @@ async fn conversation_state_bridge_owner_mismatch_fails_closed() {
 }
 
 #[tokio::test]
-async fn conversation_state_bridge_proxy_key_auth_fails_closed_for_capture() {
+async fn conversation_state_bridge_proxy_key_auth_replays_under_proxy_owner() {
     let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
     let mut config =
         bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
@@ -6945,7 +6948,8 @@ async fn conversation_state_bridge_proxy_key_auth_fails_closed_for_capture() {
     let (proxy_base, _proxy) =
         start_proxy_with_data_auth(config, DataAuthConfig::proxy_key("proxy-secret")).await;
 
-    let res = Client::new()
+    let client = Client::new();
+    let first = client
         .post(format!("{proxy_base}/openai/v1/responses"))
         .header("authorization", "Bearer proxy-secret")
         .json(&json!({
@@ -6956,19 +6960,42 @@ async fn conversation_state_bridge_proxy_key_auth_fails_closed_for_capture() {
         .send()
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    let body: Value = res.json().await.unwrap();
-    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
     assert!(
-        message.contains("client-provider-key data auth"),
-        "message = {message}"
+        local_id.starts_with("resp_llmup_"),
+        "bridge should return an llmup-owned response id, body = {first_body:?}"
     );
-    assert_eq!(
-        captured
-            .wait_for_count(1, Duration::from_millis(200))
-            .await
-            .len(),
-        0
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .header("authorization", "Bearer proxy-secret")
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1].body;
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "replay = {replay:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["text"], "First");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][0]["text"], "OK");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["text"], "Second");
+    assert!(
+        !replay.to_string().contains("proxy-secret"),
+        "upstream replay must not leak proxy key: {replay:?}"
     );
 }
 

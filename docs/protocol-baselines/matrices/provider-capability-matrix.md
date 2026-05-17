@@ -20,14 +20,14 @@ Provider columns are vendor contract snapshot/source facts. `Proxy note` is prox
 | Hosted / server tools | Native | No official surface | Native | Treat as vendor-specific |
 | Remote MCP tools | Native | No official surface | Guide/Beta | Provider-native same-wire handling only |
 | Tool parallelism control | Native | Native | Native | Intent only can be preserved |
-| Reasoning request control | Native | Limited | Native | Non-portable request syntax; request-side opaque reasoning carriers follow the single maximum safe compatibility downgrade rules in the reasoning note |
+| Reasoning request control | Native | Limited | Native | Non-portable request syntax; request-side opaque reasoning carriers follow the single maximum safe compatibility portability boundary in the reasoning note |
 | Reasoning output as typed structure | Native | Limited | Native | Summary text is the practical common denominator |
 | Cached prompt reuse | Native | Native | Native | Semantics differ sharply |
 | Rich typed streaming lifecycle | Native | Limited | Native | Event adapters required |
 | Explicit incomplete / failed stream terminal | Native | Limited | Limited | Important for Responses-native clients |
 | Native response-chain handle | Native | No official surface | No official surface | OpenAI-specific state model |
 | Native conversation resource | Native | No official surface | Guide/Beta | Do not emulate across providers |
-| Native compaction surface | Native | No official surface | Guide/Beta | Treat as provider-native state management; request-side compaction input follows the visible summary/history downgrade rules in the state-continuity note |
+| Native compaction surface | Native | No official surface | Guide/Beta | Treat as provider-native state management; request-side compaction input follows the visible summary/history safe-degradation rules in the state-continuity note |
 | Background / async run mode | Native | No official surface | No official surface | Keep provider-native same-wire handling only |
 | Service tier in request surface | Native | Native | Native | Usually native same-wire handling only |
 | Request-side persistence flag | Native (`store`) | Native (`store`) | No official surface | Not portable |

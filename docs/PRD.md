@@ -101,7 +101,7 @@ The proxy MUST translate the following request fields across protocols:
 | Typed media source boundary | Must | Treat `surface.modalities.input` as a media-type gate, not a source transport promise; provider `file_id` and provider-native or local URIs such as `gs://`, `s3://`, and `file://` fail closed unless a documented adapter supports them |
 | Typed media MIME provenance | Must | Reject conflicting MIME hints before routing so surface gates and translators cannot disagree about the actual media kind |
 | Thinking/reasoning config | May | Preserve where upstream supports it |
-| Built-in / non-function tools | Won't | Dropped during cross-protocol translation with compat warning unless a documented bridge can preserve the original visible tool identity |
+| Built-in / non-function tools | Won't | Warned safe degradation during cross-protocol translation unless a documented bridge can preserve the original visible tool identity |
 
 ### 2.5 Response Translation
 
@@ -122,7 +122,7 @@ The proxy MUST translate the following response fields:
 
 The proxy MUST have one compatibility goal: maximum safe compatibility. It MUST preserve portable core semantics and client-visible tool identity, emit compatibility warnings for safe degradations, and fail closed for provider-state reconstruction, unsafe semantic approximation, unsupported media/source transports, and opaque-only continuity carriers.
 
-Same-wire-protocol native-byte/native-field preservation is an internal request-processing optimization for requests that require no body mutation or response normalization; it is not user-selectable and does not change the product goal. Provider prompt-cache support is provider-native request-control preservation or documented explicit mapping plus usage telemetry; it MUST NOT introduce a `llmup` cache store, response cache, semantic cache, cache-aware routing, or provider cache resource lifecycle manager. `conversation_state_bridge.mode=memory` is an explicitly configured transcript expansion adapter for llmup-owned `resp_llmup_*` continuations; it is memory-only and is not persistent conversation state, provider lifecycle reconstruction, a response cache, or another compatibility goal.
+Same-wire-protocol native-byte/native-field preservation is an internal request-processing optimization for requests that require no body mutation or response normalization; it is not user-selectable and does not change the product goal. Provider prompt-cache support is provider-native request-control preservation or documented explicit mapping plus usage telemetry; it MUST NOT introduce a `llmup` cache store, response cache, semantic cache, cache-aware routing, or provider cache resource lifecycle manager. Local transcript replay for llmup-owned `resp_llmup_*` continuations is a built-in, short-term, process-memory state expansion helper under the same maximum safe compatibility goal. It is bounded by `ttl_seconds` and `max_bytes`; `store:false`, expiration, restart, namespace/owner mismatch, route/config drift, and external provider-owned IDs fail closed. It is not persistent conversation state, provider lifecycle reconstruction, a response cache, or another compatibility goal.
 
 Locked tool identity contract:
 
@@ -150,7 +150,7 @@ The proxy MUST support:
 - **Discovery availability split**:
   - fixed-format upstreams are immediately available
   - auto-discovered upstreams are available only when discovery returns at least one supported protocol
-  - empty discovery results MUST be treated as unavailable, not silently downgraded to another protocol
+  - empty discovery results MUST be treated as unavailable, not silently treated as portable to another protocol
 
 ### 2.8 Observability
 
@@ -426,22 +426,26 @@ Current real-client regression coverage is intentionally narrow: smoke cases ass
 
 | Outcome | Meaning | Example |
 |-------|---------|---------|
-| **Exact** | Semantics preserved closely enough for identical downstream behavior | Text content, basic tool calls |
-| **Approximate** | Primary behavior preserved but wire shape differs | Tool choice mapping, cached tokens |
-| **Dropped** | No safe mapping exists; field is omitted | `previous_response_id`, built-in tools |
+| **Preserved** | Portable semantics and client-visible contracts remain intact | Text content, basic tool calls |
+| **Warned safe degradation** | A non-portable detail is omitted only when the remaining visible context is safe to send | Opaque reasoning carrier with visible summary text |
+| **Rejected before upstream** | No safe representation exists, so the proxy returns an error without contacting upstream | External provider-owned `previous_response_id`, unsupported media source |
 
 ### 7.2 Degradation Signaling
 
-When the proxy must drop or approximate fields, it MUST:
+When the proxy safely degrades a field, it MUST:
 1. Emit `x-proxy-compat-warning` response headers
 2. Log the degradation to server logs
 3. NOT silently pretend 1:1 fidelity
+
+When a field cannot be preserved or safely degraded, the request MUST be
+rejected before upstream.
 
 ### 7.3 Known Limitations
 
 | Limitation | Reason |
 |-----------|--------|
-| `previous_response_id` (Responses) | Stateful chaining cannot be reconstructed in stateless formats |
+| External provider-owned `previous_response_id` / `conv_*` IDs | Provider state cannot be imported or reconstructed across owners; same-wire native OpenAI Responses handling may preserve provider-owned IDs unchanged |
+| llmup-owned local `resp_llmup_*` IDs | Short-term local transcript replay is available only for llmup-owned IDs on translated OpenAI Responses continuations; `store:false`, expiration, restart, namespace/owner mismatch, route/config drift, external IDs, and streaming continuation with `previous_response_id` fail closed |
 | Responses lifecycle routing | Retrieve/delete/cancel requests do not carry a routable model, and the proxy does not persist response-to-upstream session state |
 | Built-in tools (web search, etc.) | Not portable across protocol schemas |
 | `truncation` policy | Provider-specific context management |

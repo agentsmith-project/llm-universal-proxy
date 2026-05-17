@@ -130,6 +130,24 @@ fn debug_trace_request_entry(trace: &str) -> Value {
         .expect("trace should contain request entry")
 }
 
+async fn wait_for_debug_trace_request_count(path: &std::path::Path, count: usize) -> Vec<Value> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut entries = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        entries = std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|entry| entry.get("phase").and_then(Value::as_str) == Some("request"))
+            .collect::<Vec<_>>();
+        if entries.len() >= count {
+            return entries;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    entries
+}
+
 fn json_contains_key(value: &Value, key: &str) -> bool {
     match value {
         Value::Object(object) => object
@@ -280,6 +298,19 @@ async fn wait_for_hook_payload(captured: &CapturedHookPayloads) -> Value {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("expected hook payload to arrive")
+}
+
+async fn wait_for_hook_payload_count(captured: &CapturedHookPayloads, count: usize) -> Vec<Value> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut payloads = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        payloads = captured.snapshot().await;
+        if payloads.len() >= count {
+            return payloads;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("expected {count} hook payload(s), got {}", payloads.len())
 }
 
 fn parse_sse_events(body: &[u8]) -> Vec<Value> {
@@ -1684,12 +1715,7 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
         wait_for_hook_payload(&exchange_payloads).await,
         wait_for_hook_payload(&usage_payloads).await,
     ] {
-        assert_llmup_external_observability(
-            &payload,
-            "client_body_preserved",
-            "off",
-            "preserved_native",
-        );
+        assert_llmup_external_observability(&payload, "client_body_preserved", "preserved_native");
     }
 
     let config = state
@@ -1719,6 +1745,99 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
         recent.llmup.provider_native_prompt_cache,
         crate::request_processing::PromptCacheRequestControl::Preserved
     );
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_processing_observability_marks_local_state_capture_and_expansion() {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_local_state",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, _requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let first = handle_request_core(
+        state.clone(),
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/responses".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "input": "First",
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::OpenAiResponses,
+        None,
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body: Value = serde_json::from_str(&response_text(first).await).unwrap();
+    let local_id = first_body["id"]
+        .as_str()
+        .expect("local response id")
+        .to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = handle_request_core(
+        state.clone(),
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/responses".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::OpenAiResponses,
+        None,
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let _ = response_text(second).await;
+
+    let request_entries = wait_for_debug_trace_request_count(&trace_path, 2).await;
+    assert_eq!(
+        request_entries[0]["llmup"]["local_state_handling"],
+        "capture_candidate"
+    );
+    assert!(request_entries[0]["llmup"].get("state_bridge").is_none());
+    assert_eq!(
+        request_entries[1]["llmup"]["local_state_handling"],
+        "expanded"
+    );
+    assert!(request_entries[1]["llmup"].get("state_bridge").is_none());
+
+    let hook_payloads = wait_for_hook_payload_count(&hook_payloads, 2).await;
+    assert_eq!(
+        hook_payloads[0]["llmup"]["local_state_handling"],
+        "capture_candidate"
+    );
+    assert!(hook_payloads[0]["llmup"].get("state_bridge").is_none());
+    assert_eq!(
+        hook_payloads[1]["llmup"]["local_state_handling"],
+        "expanded"
+    );
+    assert!(hook_payloads[1]["llmup"].get("state_bridge").is_none());
 
     upstream_server.abort();
     hook_server.abort();
@@ -1771,12 +1890,7 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_map
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_llmup_external_observability(
-            &payload,
-            "constructed",
-            "off",
-            "explicit_extension_mapped",
-        );
+        assert_llmup_external_observability(&payload, "constructed", "explicit_extension_mapped");
     }
 
     let requests = requests.lock().await;
@@ -1849,12 +1963,7 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mappin
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_llmup_external_observability(
-            &payload,
-            "constructed",
-            "off",
-            "explicit_extension_mapped",
-        );
+        assert_llmup_external_observability(&payload, "constructed", "explicit_extension_mapped");
     }
 
     let requests = requests.lock().await;
@@ -1954,7 +2063,7 @@ async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cach
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_llmup_external_observability(&payload, "constructed", "off", "dropped");
+        assert_llmup_external_observability(&payload, "constructed", "dropped");
     }
 
     let requests = requests.lock().await;
@@ -2380,15 +2489,10 @@ fn request_processing_input<'a>(
 fn assert_llmup_external_observability(
     payload: &Value,
     request_body_handling: &str,
-    state_bridge: &str,
     provider_prompt_cache_request_control: &str,
 ) {
     assert_eq!(
         payload["llmup"]["request_body_handling"], request_body_handling,
-        "payload = {payload:?}"
-    );
-    assert_eq!(
-        payload["llmup"]["state_bridge"], state_bridge,
         "payload = {payload:?}"
     );
     assert_eq!(
@@ -2411,7 +2515,12 @@ fn assert_llmup_external_observability(
         !llmup.contains_key("provider_native_prompt_cache"),
         "payload = {payload:?}"
     );
-    assert_eq!(llmup.len(), 3, "payload = {payload:?}");
+    assert!(!llmup.contains_key("state_bridge"), "payload = {payload:?}");
+    assert!(
+        !llmup.contains_key("local_state_handling"),
+        "payload = {payload:?}"
+    );
+    assert_eq!(llmup.len(), 2, "payload = {payload:?}");
 }
 
 #[test]
@@ -2451,6 +2560,39 @@ fn request_processing_provider_prompt_cache_request_control_serializes_only_supp
     );
     assert!(!serialized.contains(&serde_json::json!("preserved")));
     assert!(!serialized.contains(&serde_json::json!("synthesized")));
+}
+
+#[test]
+fn request_processing_serializes_local_state_handling_only_when_active() {
+    use crate::request_processing::StateBridgeModifier;
+
+    let mut inactive = crate::request_processing::RequestProcessingInfo::default();
+    inactive.state_bridge = StateBridgeModifier::Off;
+    let inactive = serde_json::to_value(inactive).unwrap();
+    assert_eq!(inactive["request_body_handling"], "constructed");
+    assert_eq!(inactive["provider_prompt_cache_request_control"], "none");
+    assert!(
+        inactive.get("state_bridge").is_none(),
+        "inactive llmup = {inactive:?}"
+    );
+    assert!(
+        inactive.get("local_state_handling").is_none(),
+        "inactive llmup = {inactive:?}"
+    );
+
+    for (state_bridge, expected) in [
+        (StateBridgeModifier::CaptureCandidate, "capture_candidate"),
+        (StateBridgeModifier::Expanded, "expanded"),
+    ] {
+        let mut active = crate::request_processing::RequestProcessingInfo::default();
+        active.state_bridge = state_bridge;
+        let active = serde_json::to_value(active).unwrap();
+        assert_eq!(active["local_state_handling"], expected);
+        assert!(
+            active.get("state_bridge").is_none(),
+            "active llmup = {active:?}"
+        );
+    }
 }
 
 #[test]

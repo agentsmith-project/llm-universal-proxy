@@ -30,7 +30,7 @@ historical baseline context.
 | --- | --- |
 | Request policy is vendor-specific | OpenAI `reasoning` and Anthropic `thinking` differ in both syntax and semantics. |
 | Opaque reasoning state is non-portable on request input | Encrypted or otherwise opaque reasoning content has no safe cross-provider request target shape. Maximum-compatible translation may keep visible summary text or visible transcript/history as ordinary context while dropping the opaque carrier; opaque-only reasoning fails closed. |
-| Response carrier recovery is separate | Response-side reasoning encrypted_content can use a dedicated Anthropic carrier recovery path. Do not treat request-side continuity downgrade rules as the whole response translation policy. |
+| Response carrier recovery is separate | Response-side reasoning encrypted_content can use a dedicated Anthropic carrier recovery path. Do not treat request-side continuity safe-degradation rules as the whole response translation policy. |
 | Token counters are similar but not identical | Developers often compare reasoning token counts operationally, but the providers do not guarantee the same accounting model. |
 
 ## Implementation stance

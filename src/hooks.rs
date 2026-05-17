@@ -2580,6 +2580,42 @@ mod tests {
     }
 
     #[test]
+    fn usage_hook_payload_projects_local_state_handling_only_when_active() {
+        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        let payload = usage_hook_payload(
+            &ctx,
+            200,
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &json!({})),
+            None,
+            StreamObservation::non_stream_completed(),
+        );
+        assert!(payload["llmup"].get("state_bridge").is_none());
+        assert!(payload["llmup"].get("local_state_handling").is_none());
+
+        for (state_bridge, expected) in [
+            (
+                crate::request_processing::StateBridgeModifier::CaptureCandidate,
+                "capture_candidate",
+            ),
+            (
+                crate::request_processing::StateBridgeModifier::Expanded,
+                "expanded",
+            ),
+        ] {
+            ctx.llmup.state_bridge = state_bridge;
+            let payload = usage_hook_payload(
+                &ctx,
+                200,
+                NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &json!({})),
+                None,
+                StreamObservation::non_stream_completed(),
+            );
+            assert!(payload["llmup"].get("state_bridge").is_none());
+            assert_eq!(payload["llmup"]["local_state_handling"], expected);
+        }
+    }
+
+    #[test]
     fn provider_cache_usage_hook_payload_omits_cross_protocol_non_stream_client_visible_fields() {
         let body = json!({
             "usage": {

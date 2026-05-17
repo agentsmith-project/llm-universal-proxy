@@ -43,7 +43,7 @@ The summary matrices deliberately split provider-surface coverage from portabili
 | Need | Doc |
 | --- | --- |
 | One-page provider comparison | [`matrices/provider-capability-matrix.md`](matrices/provider-capability-matrix.md) |
-| High-risk field mapping and downgrade rules | [`matrices/field-mapping-matrix.md`](matrices/field-mapping-matrix.md) |
+| High-risk field mapping and safe-degradation rules | [`matrices/field-mapping-matrix.md`](matrices/field-mapping-matrix.md) |
 | Dated refresh decisions and risks | [`audits/2026-05-16-online-recheck.md`](audits/2026-05-16-online-recheck.md) |
 
 ## Working rule for future refreshes

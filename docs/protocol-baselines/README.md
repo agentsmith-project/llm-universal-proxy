@@ -20,7 +20,7 @@
 
 Vendor snapshot/captured date records when the source snapshot or source facts were captured. It does not imply the vendor contract was refreshed on the proxy posture updated date.
 
-Proxy posture updated date records when this repository's compatibility policy, downgrade rules, or implementation notes were last aligned. Proxy policy is not a vendor claim, and snapshot/source facts are not proxy policy.
+Proxy posture updated date records when this repository's compatibility policy, portability boundaries, safe-degradation rules, or implementation notes were last aligned. Proxy policy is not a vendor claim, and snapshot/source facts are not proxy policy.
 
 ## Reading order
 

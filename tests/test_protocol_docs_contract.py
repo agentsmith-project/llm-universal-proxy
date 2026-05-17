@@ -176,18 +176,79 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "product behavior is maximum safe compatibility",
             "Native Preservation Is Internal",
             "not a separate product behavior",
-            "conversation_state_bridge.mode=memory",
-            "explicit transcript expansion adapter",
+            "local transcript replay",
+            "built-in, memory-only",
+            "maximum safe compatibility",
             "memory-only",
             "resp_llmup_*",
+            "ttl_seconds",
+            "max_bytes",
             "process restart",
+            "route/config drift",
             "external provider IDs fail closed",
             "not persistent conversation state",
             "not a response cache",
+            "not a user compatibility mode",
             "not another compatibility goal",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
+
+    def test_state_bridge_docs_do_not_expose_legacy_mode_or_outcome_language(self):
+        paths = (
+            "docs/configuration.md",
+            "docs/PRD.md",
+            "docs/CONSTITUTION.md",
+            "docs/DESIGN.md",
+            "docs/max-compat-design.md",
+            "docs/protocol-compatibility-matrix.md",
+            "docs/protocol-baselines/capabilities/state-continuity.md",
+            "docs/protocol-baselines/matrices/field-mapping-matrix.md",
+            "docs/engineering/pre-ga-conversation-state-bridge-plan.md",
+            "docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md",
+            "docs/engineering/pre-ga-remove-native-gemini-format-plan.md",
+        )
+        forbidden = (
+            "conversation_state_bridge." + "mode" + "=memory",
+            "conversation_state_bridge." + "mode = \"memory\"",
+            "conversation_state_bridge." + "mode = " + "off | " + "memory",
+            "mode: " + "off          # " + "off | " + "memory",
+            "mode: memory",
+            "default `" + "off`",
+            "默认" + "关闭",
+            "StateBridgeModifier, // " + "off | capture_candidate | expanded",
+            "llmup." + "state_bridge",
+            "Exact / " + "Approximate / Dropped",
+            "| **" + "Exact** |",
+            "| **" + "Approximate** |",
+            "| **" + "Dropped** |",
+            "future optional `" + "count_tokens` preflight",
+            "count_tokens " + "preflight",
+            "### Phase 6：" + "可选增强",
+            "admin " + "state browser",
+            "外部 OpenAI " + "state import",
+            "持久化 " + "store",
+            "persistent " + "store",
+        )
+
+        for path in paths:
+            text = read_doc(path)
+            for snippet in forbidden:
+                with self.subTest(path=path, snippet=snippet):
+                    self.assertNotIn(snippet, text)
+
+        config = read_doc("docs/configuration.md")
+        self.assertIn("ttl_seconds: 3600", config)
+        self.assertIn("max_bytes: 268435456", config)
+        self.assertIn("first-response streaming", config)
+        self.assertIn(
+            "streaming continuation with `previous_response_id` still fails closed",
+            config,
+        )
+        self.assertIn(
+            "there is no persistence, retrieval, cache, Conversations API bridge",
+            config,
+        )
 
     def test_public_product_docs_and_python_contracts_reject_old_product_strategy_language(self):
         paths = [
@@ -249,6 +310,27 @@ class ProtocolDocsContractTests(unittest.TestCase):
             for snippet in forbidden:
                 with self.subTest(path=str(relative_path), snippet=snippet):
                     self.assertNotIn(snippet, text)
+
+    def test_active_public_docs_reject_compatibility_rank_language(self):
+        forbidden_patterns = (
+            re.compile(r"\b" + "down" + r"grad(?:e|ed|es|ing)\b", re.IGNORECASE),
+            re.compile(
+                r"\bcompatibility\s+(?:tier|tiers|level|levels|rank|ranks|grade|grades)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bproduct\s+(?:tier|tiers|level|levels)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(r"\b(?:route|operator)\s+mode\b", re.IGNORECASE),
+        )
+
+        for path in active_public_markdown_docs():
+            relative_path = path.relative_to(REPO_ROOT)
+            text = path.read_text(encoding="utf-8")
+            for pattern in forbidden_patterns:
+                with self.subTest(path=str(relative_path), pattern=pattern.pattern):
+                    self.assertIsNone(pattern.search(text))
 
     def test_active_protocol_baseline_docs_reject_old_forwarding_path_language(self):
         paths = (

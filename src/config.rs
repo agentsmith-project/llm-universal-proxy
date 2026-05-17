@@ -153,20 +153,9 @@ impl ResourceLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConversationStateBridgeMode {
-    #[default]
-    #[serde(rename = "off")]
-    Off,
-    #[serde(rename = "memory")]
-    Memory,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationStateBridgeConfig {
-    #[serde(default)]
-    pub mode: ConversationStateBridgeMode,
     #[serde(default = "default_conversation_state_bridge_ttl_seconds")]
     pub ttl_seconds: u64,
     #[serde(default = "default_conversation_state_bridge_max_bytes")]
@@ -176,7 +165,6 @@ pub struct ConversationStateBridgeConfig {
 impl Default for ConversationStateBridgeConfig {
     fn default() -> Self {
         Self {
-            mode: ConversationStateBridgeMode::Off,
             ttl_seconds: default_conversation_state_bridge_ttl_seconds(),
             max_bytes: default_conversation_state_bridge_max_bytes(),
         }
@@ -184,10 +172,6 @@ impl Default for ConversationStateBridgeConfig {
 }
 
 impl ConversationStateBridgeConfig {
-    pub fn is_memory_enabled(&self) -> bool {
-        self.mode == ConversationStateBridgeMode::Memory
-    }
-
     fn validate(&self) -> Result<(), String> {
         if self.ttl_seconds == 0 {
             return Err(
@@ -1945,6 +1929,48 @@ upstreams:
     }
 
     #[test]
+    fn conversation_state_bridge_rejects_removed_mode_in_yaml_and_runtime_payload() {
+        let yaml_error = Config::from_yaml_str(
+            r#"
+conversation_state_bridge:
+  mode: memory
+  ttl_seconds: 60
+  max_bytes: 1048576
+upstreams:
+  demo:
+    api_root: https://api.openai.com/v1
+    format: openai-completion
+"#,
+        )
+        .expect_err("conversation_state_bridge.mode should be an unknown YAML field");
+        assert!(
+            yaml_error.contains("conversation_state_bridge")
+                || yaml_error.contains("unknown field")
+                || yaml_error.contains("mode"),
+            "error should name the rejected field: {yaml_error}"
+        );
+
+        let runtime_error = serde_json::from_value::<RuntimeConfigPayload>(serde_json::json!({
+            "listen": "127.0.0.1:0",
+            "conversation_state_bridge": {
+                "mode": "memory",
+                "ttl_seconds": 60,
+                "max_bytes": 1048576
+            },
+            "upstreams": [{
+                "name": "demo",
+                "api_root": "https://api.openai.com/v1",
+                "fixed_upstream_format": "openai-completion"
+            }]
+        }))
+        .expect_err("conversation_state_bridge.mode should be an unknown runtime/admin field");
+        assert!(
+            runtime_error.to_string().contains("mode"),
+            "error should name the rejected field: {runtime_error}"
+        );
+    }
+
+    #[test]
     fn admin_and_runtime_config_views_do_not_emit_compatibility_mode() {
         let config = Config::from_yaml_str(
             r#"
@@ -1958,10 +1984,16 @@ upstreams:
 
         let admin_view = serde_json::to_value(AdminConfigView::from(&config)).unwrap();
         assert!(admin_view.get("compatibility_mode").is_none());
+        assert!(admin_view["conversation_state_bridge"]
+            .get("mode")
+            .is_none());
 
         let runtime_payload = RuntimeConfigPayload::from(&config);
         let runtime_view = serde_json::to_value(&runtime_payload).unwrap();
         assert!(runtime_view.get("compatibility_mode").is_none());
+        assert!(runtime_view["conversation_state_bridge"]
+            .get("mode")
+            .is_none());
 
         let snapshot = RuntimeConfigSnapshot {
             revision: "rev-1".to_string(),
@@ -1969,6 +2001,9 @@ upstreams:
         };
         let snapshot_view = serde_json::to_value(snapshot).unwrap();
         assert!(snapshot_view["config"].get("compatibility_mode").is_none());
+        assert!(snapshot_view["config"]["conversation_state_bridge"]
+            .get("mode")
+            .is_none());
     }
 
     #[test]

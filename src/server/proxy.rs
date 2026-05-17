@@ -855,7 +855,7 @@ async fn handle_request_core_with_downstream_cancellation(
             &state.conversation_state_bridge,
             &body,
             &namespace,
-            bridge_owner_hash.as_deref(),
+            &bridge_owner_hash,
         )
         .await
         {
@@ -1019,7 +1019,7 @@ async fn handle_request_core_with_downstream_cancellation(
     let bridge_capture_candidate = match prepare_conversation_state_bridge(
         &namespace_state,
         &namespace,
-        bridge_owner_hash.as_deref(),
+        &bridge_owner_hash,
         client_format,
         upstream_format,
         stream,
@@ -1092,7 +1092,7 @@ async fn handle_request_core_with_downstream_cancellation(
     };
     for warning in &compatibility_warnings {
         warn!(
-            "compatibility downgrade: client_format={} upstream_format={} warning={}",
+            "portability warning: client_format={} upstream_format={} warning={}",
             client_format, upstream_format, warning
         );
     }
@@ -1783,12 +1783,7 @@ fn conversation_state_bridge_can_preload(
     requested_model: &str,
     body: &Value,
 ) -> bool {
-    if client_format != UpstreamFormat::OpenAiResponses
-        || !namespace_state
-            .config
-            .conversation_state_bridge
-            .is_memory_enabled()
-    {
+    if client_format != UpstreamFormat::OpenAiResponses {
         return false;
     }
     let Some(previous_response_id) = body.get("previous_response_id").and_then(Value::as_str)
@@ -1846,7 +1841,7 @@ async fn preload_local_bridge_response(
     store: &ConversationStateBridgeStore,
     body: &Value,
     namespace: &str,
-    owner_hash: Option<&str>,
+    owner_hash: &str,
 ) -> Result<StoredBridgeResponse, String> {
     let response_id = body
         .get("previous_response_id")
@@ -1859,7 +1854,6 @@ async fn preload_local_bridge_response(
             "Responses `previous_response_id` `{response_id}` is not an llmup local conversation_state_bridge id"
         ));
     }
-    let owner_hash = owner_hash.ok_or_else(conversation_state_bridge_owner_isolation_error)?;
     store
         .get(response_id, namespace, owner_hash)
         .await
@@ -1870,7 +1864,7 @@ async fn preload_local_bridge_response(
 async fn prepare_conversation_state_bridge(
     namespace_state: &RuntimeNamespaceState,
     namespace: &str,
-    owner_hash: Option<&str>,
+    owner_hash: &str,
     client_format: UpstreamFormat,
     upstream_format: UpstreamFormat,
     stream: bool,
@@ -1882,10 +1876,6 @@ async fn prepare_conversation_state_bridge(
 ) -> Result<Option<BridgeCaptureCandidate>, String> {
     if client_format != UpstreamFormat::OpenAiResponses
         || upstream_format == UpstreamFormat::OpenAiResponses
-        || !namespace_state
-            .config
-            .conversation_state_bridge
-            .is_memory_enabled()
     {
         return Ok(None);
     }
@@ -1941,8 +1931,6 @@ async fn prepare_conversation_state_bridge(
     if store_false {
         return Ok(None);
     }
-    let owner_hash = owner_hash.ok_or_else(conversation_state_bridge_owner_isolation_error)?;
-
     Ok(Some(BridgeCaptureCandidate {
         namespace: namespace.to_string(),
         owner_hash: owner_hash.to_string(),
@@ -1954,11 +1942,6 @@ async fn prepare_conversation_state_bridge(
         max_bytes: namespace_state.config.conversation_state_bridge.max_bytes,
         local_response_id: stream.then(ConversationStateBridgeStore::mint_response_id),
     }))
-}
-
-fn conversation_state_bridge_owner_isolation_error() -> String {
-    "conversation_state_bridge memory mode requires client-provider-key data auth to isolate local response owners"
-        .to_string()
 }
 
 fn conversation_state_bridge_route_config_changed_error() -> &'static str {
