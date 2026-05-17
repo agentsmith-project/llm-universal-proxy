@@ -130,6 +130,16 @@ fn debug_trace_request_entry(trace: &str) -> Value {
         .expect("trace should contain request entry")
 }
 
+fn json_contains_key(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(object) => object
+            .iter()
+            .any(|(candidate, value)| candidate == key || json_contains_key(value, key)),
+        Value::Array(items) => items.iter().any(|item| json_contains_key(item, key)),
+        _ => false,
+    }
+}
+
 #[derive(Clone, Default)]
 struct CapturedHookPayloads {
     payloads: Arc<Mutex<Vec<Value>>>,
@@ -1788,6 +1798,91 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_map
     );
     assert!(
         requests[0].get("extra_body").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mapping() {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_explicit_openai_cache_mapping",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/anthropic/v1/messages".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "max_tokens": 32,
+            "messages": [{
+                "role": "user",
+                "content": [{ "type": "text", "text": "Hi" }]
+            }],
+            "extra_body": {
+                "openai": {
+                    "prompt_cache_key": "stable-prefix",
+                    "prompt_cache_retention": "24h"
+                }
+            },
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::Anthropic,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response_text(response).await;
+
+    let trace = wait_for_debug_trace_response(&trace_path).await;
+    let request_entry = debug_trace_request_entry(&trace);
+    for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
+        assert_eq!(
+            payload["llmup"]["provider_native_prompt_cache"], "explicit_extension_mapped",
+            "payload = {payload:?}"
+        );
+    }
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["prompt_cache_key"], "stable-prefix");
+    assert_eq!(requests[0]["prompt_cache_retention"], "24h");
+    assert!(
+        requests[0].get("extra_body").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+    assert!(
+        requests[0].get("cache_control").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+    assert!(
+        !json_contains_key(&requests[0], "cache_control"),
         "upstream body = {:?}",
         requests[0]
     );

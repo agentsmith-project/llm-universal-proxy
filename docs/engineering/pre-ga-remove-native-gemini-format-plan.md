@@ -39,8 +39,9 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 
 1. Current slice delivered：已完成 Responses stateful-control detector 的 `background` / `store` enabled-semantics alignment / translation-boundary unification slice。
 2. Route/config owner hardening delivered：状态桥 continuation 已用内部 route/config fingerprint 和 namespace revision 做当前 runtime 复校验，drift 在 upstream dispatch 前 400 fail closed；fingerprint 不是用户配置或产品功能。
-3. Prompt-cache delivered/pending split：OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付；下一步只剩余更窄的 translated/block-level 显式字段后续评审，不新增用户/运营配置面。
-4. 普通 function_call replay 已交付；custom tool replay 和 stream capture later；prompt-cache 后续只处理显式 provider-native request controls 和 usage telemetry。
+3. Prompt-cache delivered split：OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
+4. 当前不把 block-level mapping 放入 handoff；任何超出已交付顶层显式映射的 mapping 都必须单独 scope review，且不新增用户/运营配置面。
+5. 普通 function_call replay 已交付；下一步是 custom tool replay，fine-grained `ProviderCacheUsage` parser/source-field metrics 只是后续非阻塞 telemetry，stream capture later。
 
 如果必须完全并行开发，其他两个 workstream 必须把所有 Gemini 相关改动视为 remove-native-gemini workstream 的独占范围，不再添加新的 Gemini cache/state 测试或 helper。
 

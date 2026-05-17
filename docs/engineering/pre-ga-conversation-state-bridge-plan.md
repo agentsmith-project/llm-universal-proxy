@@ -416,8 +416,9 @@ Current-main delivery status:
 - Delivered slice: Phase 5 中的 `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice。
 - Delivered slice: route/config owner hardening，包括内部 route/config fingerprint、当前 runtime 复校验、drift pre-dispatch 400 fail closed，以及未变配置下的 no-model single-upstream replay。
 - Delivered slice: 普通 Responses `function_call` / `function_call_output` 本地 replay；pending call outputs 必须在 continuation 开头完整匹配，之后允许普通 text message；custom/proxied/namespaced 工具不保存为本地 replay state。
-- Pending next: provider-native prompt-cache disposition + trace/telemetry hardening around delivered top-level explicit mappings；后续只处理显式 provider-native request controls 和 usage telemetry。
-- Later: custom tool replay、Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation。
+- Delivered slice: prompt-cache 顶层显式映射已交付，包括 OpenAI-family -> Anthropic `extra_body.anthropic.cache_control`、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention`；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
+- Handoff guardrail: 当前 handoff 不继续扩展 prompt-cache request-control；下一步是 custom tool replay。
+- Later: fine-grained `ProviderCacheUsage` parser/source-field metrics 只是后续非阻塞 telemetry；Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation 也放在 custom tool replay 之后。
 
 ### Phase 0：合同冻结与文档更新
 
@@ -558,9 +559,9 @@ Post-MVP 覆盖：
 
 推荐下一步顺序：
 
-1. Provider-native prompt-cache disposition + trace/telemetry hardening next：围绕已交付的状态展开、route/config owner 绑定、OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射，以及 Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射加固；block-level explicit extension 支持保留为 future separate scope review。
-2. Custom tool replay later：普通 function_call replay 已交付；之后再评估 custom_tool_call、reasoning summary replay。
-3. Stream capture later：最后再评估 streaming response capture 和本地 Conversations API bridge。
+1. Custom tool replay next：普通 function_call replay 已交付；当前 handoff 不继续扩展 prompt-cache request-control。prompt-cache 顶层显式映射、coarse disposition trace/hook visibility、same-protocol wrong-target fail-closed 已交付。
+2. Fine-grained `ProviderCacheUsage` parser/source-field metrics later：仅作为后续非阻塞 telemetry，不阻塞 custom tool replay，也不新增 prompt-cache request-control 扩展。
+3. Stream capture later：最后再评估 streaming response capture、本地 Conversations API bridge 和 reasoning summary replay。
 
 主要代码区域：
 
