@@ -37,7 +37,7 @@ retired historical Google Gemini baseline; it is not an active proxy capability.
 
 ## Implementation stance
 
-1. Preserve cache knobs byte-for-byte through raw same-protocol forwarding.
+1. Preserve cache knobs through same-wire native preservation only when no body mutation or response normalization is required and the same protocol can preserve native semantics.
 2. During translation, treat provider prompt-cache support as explicit target-provider request-control mapping, not as `llmup` caching. OpenAI cache keys and Anthropic breakpoints have different billing and lifetime effects.
 3. Normalize cache usage for reporting, but keep provider-native fields available when the client understands them.
 4. Document all cache downgrades explicitly, especially when dropping Anthropic `cache_control`.

@@ -60,7 +60,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
 
         self.assertNotIn("same-protocol paths stay native", text)
         for snippet in (
-            "Same-wire-protocol byte-preserving forwarding is an internal request-processing optimization",
+            "Same-wire-protocol native-byte/native-field preservation is an internal request-processing optimization",
             "maximum safe compatibility",
             "provider-native request-control preservation or documented explicit mapping plus usage telemetry",
             "MUST NOT introduce a `llmup` cache store",
@@ -77,10 +77,10 @@ class ProtocolDocsContractTests(unittest.TestCase):
         for snippet in (
             "unified routing, capability, and hard-boundary checks",
             "no body mutation or response normalization is required",
-            "single maximum safe compatibility strategy",
+            "construct the upstream request to preserve the maximum safe portable representation",
             "Apply hard portability boundaries before upstream",
             "internal request-processing optimization",
-            "not a product lane, operator mode, route policy, or success metric",
+            "not user configurable and is not a product metric",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, pipeline)
@@ -169,12 +169,12 @@ class ProtocolDocsContractTests(unittest.TestCase):
             cache_baseline,
         )
 
-    def test_constitution_records_single_strategy_and_narrow_state_exception(self):
+    def test_constitution_records_single_goal_and_narrow_state_exception(self):
         text = read_doc("docs/CONSTITUTION.md")
 
         for snippet in (
-            "single maximum safe compatibility",
-            "Raw Forwarding Is A Zero-Transformation Optimization",
+            "product behavior is maximum safe compatibility",
+            "Native Preservation Is Internal",
             "not a separate product behavior",
             "conversation_state_bridge.mode=memory",
             "explicit transcript expansion adapter",
@@ -184,6 +184,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "external provider IDs fail closed",
             "not persistent conversation state",
             "not a response cache",
+            "not another compatibility goal",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
@@ -206,6 +207,9 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "compatibility " + "tier",
             "compatibility " + "level",
             "product " + "tier",
+            "route " + "mode",
+            "operator " + "mode",
+            "product " + "lane",
             "primary " + "lane",
             "intended " + "lane",
             "proxy " + "lanes",
@@ -245,6 +249,38 @@ class ProtocolDocsContractTests(unittest.TestCase):
             for snippet in forbidden:
                 with self.subTest(path=str(relative_path), snippet=snippet):
                     self.assertNotIn(snippet, text)
+
+    def test_active_protocol_baseline_docs_reject_old_forwarding_path_language(self):
+        paths = (
+            "docs/protocol-baselines/capabilities/reasoning.md",
+            "docs/protocol-baselines/capabilities/state-continuity.md",
+            "docs/protocol-baselines/capabilities/cache.md",
+            "docs/protocol-baselines/capabilities/tools.md",
+            "docs/protocol-baselines/matrices/field-mapping-matrix.md",
+            "docs/protocol-baselines/matrices/provider-capability-matrix.md",
+            "docs/admin-dynamic-config.md",
+        )
+        forbidden = (
+            "raw/native " + "forwarding",
+            "raw same-protocol " + "forwarding",
+            "raw " + "forwarding",
+            "byte-preserving " + "forwarding",
+            "passthrough " + "only",
+            "passthrough " + "path",
+            "passthrough " + "lane",
+            "route " + "mode",
+            "operator " + "mode",
+            "product " + "lane",
+            "compatibility " + "level",
+            "compatibility " + "tier",
+            "forwarding " + "only",
+        )
+
+        for path in paths:
+            text = read_doc(path).casefold()
+            for snippet in forbidden:
+                with self.subTest(path=path, snippet=snippet):
+                    self.assertNotIn(snippet.casefold(), text)
 
     def test_active_docs_do_not_promise_native_gemini_wire_format(self):
         active_docs = (
@@ -395,29 +431,33 @@ class ProtocolDocsContractTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertNotIn(snippet, audit)
 
-    def test_tools_baseline_preserves_hosted_tools_only_on_native_or_shimmed_passthrough(self):
+    def test_tools_baseline_preserves_hosted_tools_only_on_native_same_wire_or_shimmed_handling(self):
         text = read_doc("docs/protocol-baselines/capabilities/tools.md")
         row = table_row(text, "Hosted / server tools")
 
         self.assertNotIn("Preserve same-protocol hosted tools only", row)
         for snippet in (
-            "raw/native forwarding",
+            "provider-native same-wire handling",
+            "no body mutation or response normalization is required",
             "explicit compatibility shims",
             "Cross-provider translation should warn/drop or fail closed",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, row)
-        self.assertIn("Gate hosted/server tools behind raw/native forwarding", text)
+        self.assertIn(
+            "Allow hosted/server tools only through provider-native same-wire handling",
+            text,
+        )
 
-    def test_maximum_compatibility_design_uses_single_strategy_and_raw_passthrough_boundary(self):
+    def test_maximum_compatibility_design_uses_single_goal_and_native_preservation_boundary(self):
         text = read_doc("docs/max-compat-design.md")
 
         self.assertNotIn("same-protocol paths: native " + "passthrough", text)
         for snippet in (
-            "one client-first translation strategy: maximum safe compatibility",
+            "one product goal: maximum safe compatibility",
             "Single Product Behavior",
-            "raw same-protocol forwarding",
-            "raw same-protocol forwarding is an internal optimization",
+            "same-wire native preservation",
+            "same-wire native preservation is an internal optimization",
             "runtime and config surface expose no compatibility switch",
             "hard portability boundary",
             "provider prompt-cache support is provider-native request-control support",
@@ -426,13 +466,13 @@ class ProtocolDocsContractTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
 
-    def test_maximum_compatibility_records_request_translation_and_raw_passthrough_facts(self):
+    def test_maximum_compatibility_records_request_construction_and_native_preservation_facts(self):
         text = read_doc("docs/max-compat-design.md")
 
         for snippet in (
-            "Translated paths always use maximum safe compatibility",
-            "Same-format zero-transform forwarding",
-            "Native Responses zero-transform forwarding preserves `context_management`",
+            "Request construction always uses maximum safe compatibility",
+            "Same-format zero-transform handling",
+            "Native Responses same-wire handling preserves `context_management`",
             "`include` values such as `reasoning.encrypted_content`",
             "input reasoning and compaction items with `encrypted_content`",
             "exactly one native OpenAI Responses upstream",
@@ -455,7 +495,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "opaque-only reasoning",
             "opaque-only compaction",
             "one summarized compaction item does not permit another opaque-only compaction item",
-            "native Responses forwarding",
+            "Native Responses same-wire handling",
             "response-side reasoning encrypted_content",
             "Anthropic carrier recovery path",
         ):
@@ -547,7 +587,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "runtime translated paths always use maximum safe compatibility",
             "single maximum safe compatibility strategy",
             "runtime and config surfaces expose no compatibility switch",
-            "raw same-protocol forwarding is an internal optimization",
+            "raw same-protocol " + "forwarding is an internal optimization",
             "fail-closed behavior is a hard portability boundary",
         ):
             with self.subTest(snippet=snippet):

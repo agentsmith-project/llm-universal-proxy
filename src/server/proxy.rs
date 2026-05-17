@@ -1723,7 +1723,7 @@ fn reject_local_bridge_id_on_native_responses_passthrough(
     }
 
     Some(
-        "Responses `previous_response_id` is a local conversation_state_bridge id and cannot be used on native OpenAI Responses passthrough; use a local replay translated route",
+        "Responses `previous_response_id` is a local conversation_state_bridge id and cannot be used for provider-native same-wire handling; use a route that can perform local replay/request construction",
     )
 }
 

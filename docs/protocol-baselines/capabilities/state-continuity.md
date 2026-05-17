@@ -16,8 +16,8 @@ State continuity is where protocol expectations diverge the most. "Conversation"
 | --- | --- | --- | --- | --- |
 | Native follow-up handle | `previous_response_id` and conversation-oriented resources | None; caller replays `messages` | No stable GA response handle in Messages create; replay is the default | Never assume a cross-provider follow-up ID exists. The optional local memory bridge only replays llmup-owned `resp_llmup_*` IDs. |
 | Server-side conversation resource | Yes, now first-class in OpenAI API navigation | No | Beta/adjacent context-management surfaces exist, but not as an OpenAI-style response chain | Proxy should not invent resource-backed state unless it owns that state. |
-| Compaction / context editing | Official `/responses/compact` plus compaction items | No native Chat equivalent | Compaction and context editing are documented as beta context-management features | Compaction resources and `context_management` are provider-native state control. Raw/native forwarding should preserve them when zero-transformation handling is available; cross-provider reconstruction fails closed. Request-side compaction input items may degrade under the single maximum safe compatibility strategy only when each degraded item has explicit visible summary text, or when non-compaction visible transcript/history remains. |
-| Long-running execution | `background` mode on Responses | No equivalent | Tool loops continue by replaying assistant output; beta containers/context management expand this story | Async continuation semantics should stay raw/native only. |
+| Compaction / context editing | Official `/responses/compact` plus compaction items | No native Chat equivalent | Compaction and context editing are documented as beta context-management features | Compaction resources and `context_management` are provider-native state control. Native same-wire handling should preserve them only when no body mutation or response normalization is required and the same protocol can preserve native semantics; cross-provider reconstruction fails closed. Request-side compaction input items may degrade under the single maximum safe compatibility strategy only when each degraded item has explicit visible summary text, or when non-compaction visible transcript/history remains. |
+| Long-running execution | `background` mode on Responses | No equivalent | Tool loops continue by replaying assistant output; beta containers/context management expand this story | Async continuation semantics should stay provider-native same-wire only. |
 | Tool-loop resume | Resource and event aware | Manual replay through messages | `pause_turn` means "send the assistant output back" | Resume rules must be documented per provider, not generalized. |
 
 Google OpenAI-compatible Gemini follows OpenAI Chat-compatible replay behavior
@@ -35,9 +35,9 @@ historical baseline context.
 ## Implementation stance
 
 1. Prefer explicit transcript replay as the common denominator.
-2. Preserve native state handles only through raw/native forwarding where routing is unambiguous.
-3. Keep `context_management`, compact resources, and provider-native state-control surfaces raw/native only; cross-provider state reconstruction fails closed.
+2. Preserve native state handles only through native same-wire handling when no body mutation or response normalization is required and the same protocol can preserve native semantics.
+3. Keep `context_management`, compact resources, and provider-native state-control surfaces provider-native; preserve them only through provider-native same-wire handling, and fail closed for cross-provider state reconstruction.
 4. For request-side compaction input items, maximum-compatible translation may warn/drop `encrypted_content` or another opaque carrier only when the specific compaction item has explicit visible summary text, or when the request includes non-compaction visible transcript/history. Opaque-only compaction input fails closed.
-5. Native Responses forwarding should preserve compaction items unchanged when raw/native forwarding is available.
+5. Native Responses same-wire handling should preserve compaction items unchanged when no body mutation or response normalization is required.
 6. One summarized compaction item does not permit another opaque-only compaction item in the same request to be silently dropped.
 7. The local memory bridge is not a provider resource API: it does not import external `resp_*` IDs, persist across restarts, capture streams, or replay tools/reasoning/compaction/background work.

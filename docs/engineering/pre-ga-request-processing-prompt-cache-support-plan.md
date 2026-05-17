@@ -1,6 +1,6 @@
 # Pre-GA Request Processing and Provider Prompt-Cache Support Plan
 
-- Status: current-main status update; internal raw same-protocol forwarding is present; coarse-grained provider-native prompt-cache request-control disposition is visible in traces/hooks as `preserved` / `explicit_extension_mapped` / `dropped`; OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` mapping and Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` mapping are present; same-protocol wrong-target explicit extensions fail closed; fine-grained `ProviderCacheUsage` parsing/source-field metrics remain deferred telemetry
+- Status: current-main status update; internal raw same-protocol forwarding is present; coarse-grained provider-native prompt-cache request-control disposition is visible in traces/hooks as `preserved_native` / `explicit_extension_mapped` / `dropped`; OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` mapping and Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` mapping are present; same-protocol wrong-target explicit extensions fail closed; fine-grained `ProviderCacheUsage` parsing/source-field metrics remain deferred telemetry
 - Date: 2026-05-16
 - Scope: internal request processing classification, internal raw same-protocol provider forwarding optimization, provider-native prompt-cache request-control support, provider-returned cache usage observation, and request-handling simplification under the single maximum safe compatibility strategy
 - Non-scope: any `llmup`-managed cache, gateway response/result cache, semantic cache, cache storage, cache lifecycle management, cache-aware routing, broad fallback DSLs, pricing catalogs, guardrails, prompt management, admin UI expansion
@@ -77,17 +77,13 @@ The common lesson for `llmup`: keep one maximum safe compatibility strategy, and
 
 Current main has an explicit request processing observation:
 
-```rust
-enum RequestProcessing {
-    RequestTransformationNotRequired,
-    RequestTransformationRequired,
-}
+External `llmup` observability projection:
 
-struct RequestProcessingInfo {
-    request_processing: RequestProcessing,
-    zero_transform_forwarding_active: bool,
+```rust
+struct RequestProcessingObservability {
+    request_body_handling: RequestBodyHandling, // client_body_preserved | constructed
     state_bridge: StateBridgeModifier, // off | capture_candidate | expanded
-    provider_native_prompt_cache: PromptCacheRequestControl, // none | preserved | explicit_extension_mapped | dropped
+    provider_prompt_cache_request_control: PromptCacheRequestControl, // none | preserved_native | explicit_extension_mapped | dropped
 }
 ```
 
@@ -103,7 +99,7 @@ Request processing classification:
 - `RequestTransformationNotRequired`: internal classification for a request where client protocol equals upstream wire protocol and no configured route feature requires body mutation, provider-native request-control mapping, or response normalization.
 - `RequestTransformationRequired`: internal classification for a request where protocols differ, or the selected route needs a provider/protocol shim, target-provider request construction, provider-native request-control mapping, model alias body rewrite, provider-specific role repair, translation default injection, format conversion, or error-shape conversion. This still follows the single maximum safe compatibility strategy.
 
-The route decision should be visible in debug traces and metrics as `llmup.request_processing`, with fields such as `llmup.state_bridge` and `llmup.provider_native_prompt_cache`.
+The route decision should be visible in debug traces and metrics through `llmup.request_body_handling`, `llmup.state_bridge`, and `llmup.provider_prompt_cache_request_control`.
 
 ### Internal Raw Same-Protocol Forwarding Contract
 
@@ -145,7 +141,7 @@ Maximum-safe path responsibilities:
 
 ### Provider-Native Prompt-Cache Request Controls
 
-This field keeps provider-native request-control disposition explicit without making it a separate product behavior or `llmup` cache. In the current `preserved` disposition, the client's native cache fields are carried unchanged. Explicit translated mappings work on a constructed target-provider request, so raw provider forwarding is not active on those requests.
+This field keeps provider-native request-control disposition explicit without making it a separate product behavior or `llmup` cache. In the current `preserved_native` disposition, the client's native cache fields are carried unchanged. Explicit translated mappings work on a constructed target-provider request, so raw provider forwarding is not active on those requests.
 
 Allowed behavior:
 
@@ -374,13 +370,13 @@ Anthropic:
 
 Current-main delivery status:
 
-- Delivered: Phase 0/1 request-processing contract and observability, Phase 2/3 raw same-protocol forwarding for eligible non-mutating paths, coarse-grained provider-native prompt-cache request-control disposition plus trace/hook visibility for `preserved` / `explicit_extension_mapped` / `dropped`, and same-protocol wrong-target explicit extension fail-closed.
+- Delivered: Phase 0/1 request-processing contract and observability, Phase 2/3 raw same-protocol forwarding for eligible non-mutating paths, coarse-grained provider-native prompt-cache request-control disposition plus trace/hook visibility for `preserved_native` / `explicit_extension_mapped` / `dropped`, and same-protocol wrong-target explicit extension fail-closed.
 - Delivered telemetry baseline: `NormalizedUsage` provides basic provider-returned usage observation, including known OpenAI cached-token and Anthropic cache read/write counters where already parsed. Fine-grained `ProviderCacheUsage` parser/source-field metrics remain deferred and non-blocking.
 - Delivered slice: Responses stateful-control detector enabled-semantics alignment for `background` / `store`; `background:false|null` and `store:false|null` no longer trigger provider-owned stateful fail-closed, while enabled/present controls still fail closed.
 - Delivered slice: OpenAI-family -> Anthropic explicit extension mapping for `extra_body.anthropic.cache_control` to top-level Anthropic `cache_control`, with fail-closed validation and no `llmup` cache.
 - Delivered slice: Anthropic -> OpenAI-family explicit target-provider extension mapping for `extra_body.openai.prompt_cache_key` and optional `prompt_cache_retention`, with fail-closed validation and no `llmup` cache.
 - Delivered dependency: Conversation State Bridge route/config owner hardening is complete. Continuations re-check the current runtime/internal fingerprint before upstream dispatch and fail closed on drift; this fingerprint is not a product feature or user configuration.
-- Delivered dependency: Conversation State Bridge now supports ordinary Responses `function_call` / `function_call_output` local replay for non-streaming translated continuation. Custom tool replay and stream capture remain deferred.
+- Delivered dependency: Conversation State Bridge now supports ordinary Responses `function_call` / `function_call_output` and portable `custom_tool_call` / `custom_tool_call_output` local replay for non-streaming translated continuation. Stream capture and reasoning summary replay remain deferred.
 - Pending/deferred: no prompt-cache request-control expansion is on the current handoff path. Any future mapping beyond the delivered explicit top-level extensions requires separate scope review. Do not add a policy/config surface for cache-aware routing or automatic provider cache controls.
 - Guardrail: raw same-protocol forwarding remains an internal request-processing fact. It must not be documented or handed off as a product behavior.
 
@@ -526,9 +522,9 @@ Required local tests:
 
 Recommended next order:
 
-1. Custom tool replay later: ordinary function_call replay is delivered; custom tool replay remains the next conversation-state bridge follow-up.
-2. Fine-grained `ProviderCacheUsage` parser/source-field metrics later as a small telemetry slice; this is non-blocking for custom tool replay.
-3. Stream capture later: keep streaming response capture behind custom tool replay.
+1. Fine-grained `ProviderCacheUsage` parser/source-field metrics later as a small telemetry slice. This is read-only telemetry and must not affect routing, fallback, cache lookup, or response reuse.
+2. Stream capture later: evaluate streaming response capture after telemetry stays stable.
+3. Reasoning summary replay later: visible summary replay remains separate from prompt-cache request-control support.
 
 Guardrail: keep prompt-cache support limited to explicit provider-native request controls and read-only usage telemetry.
 

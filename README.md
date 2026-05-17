@@ -108,11 +108,12 @@ Reasoning effort such as `xhigh` is a client/request-side setting, not part of t
 
 `llmup` gives clients a stable local protocol surface, not unlimited provider equivalence.
 
-- eligible same-wire-protocol requests may use internal byte-preserving forwarding only after boundary checks show the route can avoid body mutation and response normalization; it is not a user-selectable route mode
-- translated paths use a single maximum safe compatibility strategy and may warn or reject non-portable provider-native features
+- the product goal is maximum safe compatibility: preserve the richest safe portable representation, warn on visible degradations, and reject unsafe or non-portable semantics before upstream
+- when no cross-protocol request construction is needed, internal handling may keep provider-native bytes and fields unchanged if routing, auth, headers, and observability do not require body mutation or response normalization
+- when request or response construction is needed, `llmup` still maximizes safe preservation and may warn or reject non-portable provider-native features
 - fail-closed behavior is a hard portability boundary: requests whose semantics cannot be preserved or safely degraded are rejected before upstream
 - native extensions and provider-owned lifecycle state require native upstream handling unless a documented shim says otherwise
-- Responses reasoning/compaction continuity may warn and drop an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; provider-owned state is preserved only when same-wire-protocol handling can remain byte-preserving internally
+- Responses reasoning/compaction continuity may warn and drop an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; provider-owned state is preserved only when same-wire-protocol internal handling can keep native semantics unchanged
 - the quickstart includes conservative text-only `surface_defaults`; turn on search, image, or parallel-tool flags only when that model surface really supports them
 - multimodal `surface.modalities.input` gates media types, not every source transport; HTTP(S) image/PDF URLs are distinct from provider or local URIs such as `gs://`, `s3://`, and `file://`
 - Gemini models remain usable through Google's OpenAI-compatible endpoint by configuring that upstream as `format: openai-completion`; native Gemini `generateContent` wire format is not an active proxy surface
@@ -233,7 +234,7 @@ That flow is documented in [docs/admin-dynamic-config.md](./docs/admin-dynamic-c
 - [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md): admin API, live config, CAS updates
 - [docs/ga-readiness-review.md](./docs/ga-readiness-review.md): GA scope, release evidence, and compatibility boundaries
 - [docs/protocol-compatibility-matrix.md](./docs/protocol-compatibility-matrix.md): compatibility boundaries and portability summary
-- [docs/max-compat-design.md](./docs/max-compat-design.md): deeper translated-path compatibility notes
+- [docs/max-compat-design.md](./docs/max-compat-design.md): deeper maximum safe compatibility notes
 - [docs/DESIGN.md](./docs/DESIGN.md): current architecture map
 - [docs/README.md](./docs/README.md): docs index
 

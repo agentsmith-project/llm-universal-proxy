@@ -4,7 +4,7 @@
 # the proxy:
 # - PRESET_OPENAI_ENDPOINT_BASE_URL: OpenAI-compatible API root, including /v1
 # - PRESET_ANTHROPIC_ENDPOINT_BASE_URL: Anthropic-compatible API root
-# - PRESET_ENDPOINT_MODEL: provider model ID used by both preset lanes
+# - PRESET_ENDPOINT_MODEL: provider model ID used by both preset aliases
 # - PRESET_ENDPOINT_API_KEY: provider credential kept on the proxy side
 #
 # Proxy auth is separate from provider auth. In proxy_key mode, clients use

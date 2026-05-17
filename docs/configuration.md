@@ -287,15 +287,16 @@ conversation_state_bridge:
   max_bytes: 268435456
 ```
 
-`mode: memory` enables a narrow local bridge for non-streaming OpenAI Responses requests translated to OpenAI Chat Completions or Anthropic Messages upstreams. It captures text-only request/output transcript items in process memory, returns local `resp_llmup_*` response IDs, and expands later local `previous_response_id` requests back into explicit Responses `input` before the normal translator runs.
+`mode: memory` enables an optional in-process adapter for maximum cross-protocol compatibility on non-streaming OpenAI Responses continuation requests translated to OpenAI Chat Completions or Anthropic Messages upstreams. It saves llmup-owned transcript state behind local `resp_llmup_*` response IDs, then expands later local `previous_response_id` requests back into explicit Responses `input` before the normal translator runs. The replayable transcript surface is text message input, assistant text message output, regular `function_call` / `function_call_output`, and portable `custom_tool_call` / `custom_tool_call_output`.
 
 Boundaries:
 
 - default `off` preserves the existing fail-closed behavior for translated `previous_response_id` and `store: true`
+- state is process memory only, bounded by `ttl_seconds` and `max_bytes`; process restart drops all entries
 - `store: false` is honored and does not save replay state
 - unknown, expired, non-local, or owner-mismatched local IDs fail closed
 - native OpenAI Responses forwarding keeps provider IDs and provider-owned state unchanged
-- there is no persistence, streaming capture, conversation API bridge, background lifecycle emulation, tool/reasoning/compact replay, or Gemini-specific state bridge
+- there is no persistence, streaming capture, conversation API bridge, background lifecycle emulation, reasoning summary replay, compaction replay, provider-owned opaque state replay, or Gemini native state bridge
 
 ### `upstreams`
 

@@ -24,7 +24,7 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 本计划是另外两份计划的范围前置条件，且 current main 已满足这个前置条件：
 
 - [Request processing and provider-native prompt-cache request-control plan](./pre-ga-request-processing-prompt-cache-support-plan.md) 必须按 3 个 active protocol families 设计：OpenAI Chat、OpenAI Responses、Anthropic Messages。
-- [pre-ga-conversation-state-bridge-plan.md](./pre-ga-conversation-state-bridge-plan.md) 的 MVP 只支持 Responses -> OpenAI Chat / Anthropic replay，不实现 Responses -> Gemini `generateContent`。
+- [pre-ga-conversation-state-bridge-plan.md](./pre-ga-conversation-state-bridge-plan.md) 的当前已交付范围只支持 Responses -> OpenAI Chat / Anthropic replay，不实现 Responses -> Gemini `generateContent`。
 - 最大安全兼容策略不能重新引入 hidden Gemini-native scope；`cachedContent`、`thoughtSignature`、`extra_body.google.cached_content` 仍由本删除计划排除。
 
 并行开发时的文件所有权建议：
@@ -41,7 +41,7 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 2. Route/config owner hardening delivered：状态桥 continuation 已用内部 route/config fingerprint 和 namespace revision 做当前 runtime 复校验，drift 在 upstream dispatch 前 400 fail closed；fingerprint 不是用户配置或产品功能。
 3. Prompt-cache delivered split：OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
 4. 当前不把 block-level mapping 放入 handoff；任何超出已交付顶层显式映射的 mapping 都必须单独 scope review，且不新增用户/运营配置面。
-5. 普通 function_call replay 已交付；下一步是 custom tool replay，fine-grained `ProviderCacheUsage` parser/source-field metrics 只是后续非阻塞 telemetry，stream capture later。
+5. 普通 function_call replay 和 portable custom tool replay 已交付；下一步聚焦 fine-grained `ProviderCacheUsage` parser/source-field metrics，且仅作为非阻塞 telemetry；stream capture 和 reasoning summary replay later。
 
 如果必须完全并行开发，其他两个 workstream 必须把所有 Gemini 相关改动视为 remove-native-gemini workstream 的独占范围，不再添加新的 Gemini cache/state 测试或 helper。
 
@@ -149,7 +149,7 @@ upstreams:
 - `docs/engineering/README.md` 链接本计划。
 - 用户文档不再把 Gemini native 作为 GA 支持路径。
 - 保留的 Gemini 提及只用于 OpenAI-compatible migration 或 retired baseline。
-- Prompt-cache/state 两份计划不再包含 `provider_native_prompt_cache.gemini.*`、Gemini resource adapter、Responses -> Gemini replay、Gemini cache/state 测试任务。
+- Prompt-cache/state 两份计划不再包含 `provider_prompt_cache_request_control.gemini.*`、Gemini resource adapter、Responses -> Gemini replay、Gemini cache/state 测试任务。
 
 ### Phase 1：关闭 public surface 和配置入口
 

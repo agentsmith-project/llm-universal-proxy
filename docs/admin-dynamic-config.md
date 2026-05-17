@@ -226,8 +226,9 @@ Responses reasoning/compaction continuity follows the same single maximum safe
 compatibility strategy in dynamically written namespaces: an opaque carrier may
 be warned and dropped only when visible summary text or visible transcript
 history remains; opaque-only reasoning and opaque-only compaction fail closed;
-raw/native forwarding preserves provider-owned state only when the route can
-avoid mutation.
+provider-native same-wire handling preserves provider-owned state only when no
+body mutation or response normalization is required and the same protocol can
+preserve native semantics.
 
 ### Recommended write pattern
 

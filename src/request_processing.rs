@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{ser::SerializeStruct, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::formats::UpstreamFormat;
@@ -22,12 +22,13 @@ pub enum StateBridgeModifier {
 #[serde(rename_all = "snake_case")]
 pub enum PromptCacheRequestControl {
     None,
+    #[serde(rename = "preserved_native")]
     Preserved,
     ExplicitExtensionMapped,
     Dropped,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequestProcessingInfo {
     pub request_processing: RequestProcessing,
     pub zero_transform_forwarding_active: bool,
@@ -43,6 +44,32 @@ impl Default for RequestProcessingInfo {
             state_bridge: StateBridgeModifier::Off,
             provider_native_prompt_cache: PromptCacheRequestControl::None,
         }
+    }
+}
+
+impl RequestProcessingInfo {
+    fn request_body_handling(self) -> &'static str {
+        if self.zero_transform_forwarding_active {
+            "client_body_preserved"
+        } else {
+            "constructed"
+        }
+    }
+}
+
+impl Serialize for RequestProcessingInfo {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("RequestProcessingInfo", 3)?;
+        state.serialize_field("request_body_handling", self.request_body_handling())?;
+        state.serialize_field("state_bridge", &self.state_bridge)?;
+        state.serialize_field(
+            "provider_prompt_cache_request_control",
+            &self.provider_native_prompt_cache,
+        )?;
+        state.end()
     }
 }
 

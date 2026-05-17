@@ -136,11 +136,11 @@ The current flow is:
 4. Check upstream availability and capability.
 5. Run unified routing, capability, and request-side compatibility / portability assessment.
 6. Compute the internal request-processing classification after those boundary checks.
-7. If the client and upstream use the same wire protocol and the selected route does not require body mutation or response normalization, automatically use internal byte-preserving forwarding for the provider request and response bytes.
+7. If the client and upstream use the same wire protocol and the selected route does not require body mutation or response normalization, keep provider-native request and response bytes/fields unchanged internally.
 8. Otherwise, construct or translate the upstream request through the translate facade under maximum safe compatibility.
 9. Apply auth forwarding and configured upstream headers.
 10. Call upstream through the selected upstream state's unary or streaming HTTP client.
-11. Return byte-preserved responses only for the eligible internal forwarding case; otherwise normalize non-stream responses or wrap stream responses in the runtime chain.
+11. Return native-preserved responses only for the eligible internal same-wire case; otherwise normalize non-stream responses or wrap stream responses in the runtime chain.
 
 OpenAI Responses lifecycle resources are a special case. They do not use the generic "translate anything anywhere" path. `src/server/responses_resources.rs` only proxies those resource routes when the namespace can identify a unique native OpenAI Responses upstream. The server does not invent response-session ownership state. Retrieval streaming (`GET /responses/{response_id}?stream=true`) stays same-format and is guarded as SSE rather than being buffered through the JSON lifecycle path.
 
@@ -166,7 +166,7 @@ Current structural guardrails:
 - When a bridge rewrites tool-call representation, any trusted non-replayable marker must be re-attested against the rewritten value. Literal marker copy is invalid because the signature is bound to the current `name` / raw payload.
 - Visible tool identity is part of the live client contract. Request translation may adapt argument encoding and protocol field shape, but it must not change the model-visible or client-visible stable tool name supplied by the client.
 - The reserved prefix `__llmup_custom__*` is internal transport machinery only. Public request translation, response translation, and client-visible output must reject or clear it rather than surface it as a live contract.
-- The target direction for the single maximum safe compatibility strategy is a request-scoped tool bridge context that preserves stable tool names in the live request while still allowing non-stream and streaming response translators to decode bridged tool calls back into native custom/freeform semantics.
+- The target direction for maximum safe compatibility is a request-scoped tool bridge context that preserves stable tool names in the live request while still allowing non-stream and streaming response translators to decode bridged tool calls back into native custom/freeform semantics.
 
 Locked tool identity contract:
 

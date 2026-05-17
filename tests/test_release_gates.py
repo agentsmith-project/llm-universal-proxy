@@ -585,9 +585,9 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
             "not a full live multi-client/provider matrix",
             "release-compatible-provider",
             "portable-core production GA",
-            "single maximum safe compatibility with hard portability boundaries",
-            "Raw/native forwarding is a byte-preserving optimization",
-            "pass through compatibility machinery",
+            "maximum safe compatibility with hard portability boundaries",
+            "may keep provider-native bytes, fields, and lifecycle resources unchanged",
+            "compatibility machinery",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, ga_review)
@@ -631,22 +631,22 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
                 "maximum-compatible",
                 "visible summary",
                 "opaque-only reasoning fails closed",
-                "raw/native forwarding",
+                "provider-native same-wire handling",
             ),
             "state": (
                 "context_management",
                 "request-side compaction input",
                 "maximum-compatible",
                 "opaque-only",
-                "native Responses forwarding",
-                "raw/native forwarding",
+                "Native Responses same-wire handling",
+                "native same-wire handling",
             ),
             "field_mapping": (
                 "Reasoning opaque state",
                 "maximum-compatible",
                 "Compaction",
                 "opaque-only compaction",
-                "raw/native forwarding",
+                "provider-native same-wire handling",
             ),
             "responses": (
                 "context_management",
@@ -659,7 +659,7 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
                 "maximum safe compatibility",
                 "visible summary",
                 "opaque-only",
-                "raw/native forwarding",
+                "provider-native same-wire handling",
             ),
         }
 

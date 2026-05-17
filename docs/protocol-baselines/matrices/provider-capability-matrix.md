@@ -18,7 +18,7 @@ Provider columns are vendor contract snapshot/source facts. `Proxy note` is prox
 | PDF, generic file, and video inputs | Native | Native | Limited | `pdf` is narrow, `file` includes PDF, and video currently stays gate-only |
 | Function calling | Native | Native | Native | Best common tool surface |
 | Hosted / server tools | Native | No official surface | Native | Treat as vendor-specific |
-| Remote MCP tools | Native | No official surface | Guide/Beta | Raw/native forwarding only |
+| Remote MCP tools | Native | No official surface | Guide/Beta | Provider-native same-wire handling only |
 | Tool parallelism control | Native | Native | Native | Intent only can be preserved |
 | Reasoning request control | Native | Limited | Native | Non-portable request syntax; request-side opaque reasoning carriers follow the single maximum safe compatibility downgrade rules in the reasoning note |
 | Reasoning output as typed structure | Native | Limited | Native | Summary text is the practical common denominator |
@@ -28,8 +28,8 @@ Provider columns are vendor contract snapshot/source facts. `Proxy note` is prox
 | Native response-chain handle | Native | No official surface | No official surface | OpenAI-specific state model |
 | Native conversation resource | Native | No official surface | Guide/Beta | Do not emulate across providers |
 | Native compaction surface | Native | No official surface | Guide/Beta | Treat as provider-native state management; request-side compaction input follows the visible summary/history downgrade rules in the state-continuity note |
-| Background / async run mode | Native | No official surface | No official surface | Keep raw/native only |
-| Service tier in request surface | Native | Native | Native | Usually raw/native forwarding only |
+| Background / async run mode | Native | No official surface | No official surface | Keep provider-native same-wire handling only |
+| Service tier in request surface | Native | Native | Native | Usually native same-wire handling only |
 | Request-side persistence flag | Native (`store`) | Native (`store`) | No official surface | Not portable |
 
 Google OpenAI-compatible Gemini follows the OpenAI Chat-compatible column for

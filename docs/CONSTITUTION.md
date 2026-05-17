@@ -8,7 +8,7 @@ LLM Universal Proxy is a **format-agnostic protocol translation middleware** for
 
 **Enable supported LLM API clients to reach configured backends through one stable proxy, with explicit portability boundaries.**
 
-A client using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages should be able to route to configured upstreams through a matching local namespace. The product behavior is single maximum safe compatibility: preserve the richest safe portable representation, warn on visible degradations, and fail closed on unsafe or non-portable semantics instead of hiding the mismatch. Gemini models remain usable through Google OpenAI-compatible upstreams configured with `format: openai-completion`, not through a native Gemini client namespace.
+A client using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages should be able to route to configured upstreams through a matching local namespace. The product behavior is maximum safe compatibility: preserve the richest safe portable representation, warn on visible degradations, and fail closed on unsafe or non-portable semantics instead of hiding the mismatch. Gemini models remain usable through Google OpenAI-compatible upstreams configured with `format: openai-completion`, not through a native Gemini client namespace.
 
 ## Core Principles
 
@@ -37,11 +37,11 @@ When translating between protocols, the proxy must preserve as much semantic fid
 - **Stop reasons / finish reasons** — map between protocol-specific stop reason semantics
 - **Streaming** — translate SSE chunk streams in real time with correct lifecycle events
 
-When exact 1:1 mapping is impossible, the proxy must either degrade visibly under the maximum safe compatibility strategy or fail closed at a hard portability boundary. Safe degradations must be signaled via `x-proxy-compat-warning` headers rather than silently losing information.
+When exact 1:1 mapping is impossible, the proxy must either degrade visibly under maximum safe compatibility or fail closed at a hard portability boundary. Safe degradations must be signaled via `x-proxy-compat-warning` headers rather than silently losing information.
 
-### 3. Raw Forwarding Is A Zero-Transformation Optimization
+### 3. Native Preservation Is Internal
 
-Raw/native forwarding is a byte-preserving request-processing optimization, not a separate product behavior. The intended pre-GA target is to use raw same-protocol forwarding only when the proxy can avoid body mutation and response normalization, apart from explicit proxy behavior such as routing, authentication policy, headers, and observability. When a route needs provider shims, model body rewrites, response normalization, or other compatibility machinery, it must be handled under the single maximum safe compatibility strategy.
+Same-wire native-byte/native-field preservation is a request-processing optimization, not a separate product behavior. The intended pre-GA target is to keep provider-native bytes and fields unchanged only when the proxy can avoid body mutation and response normalization, apart from explicit proxy behavior such as routing, authentication policy, headers, and observability. When a request needs provider shims, model body rewrites, response normalization, or other compatibility machinery, it must be handled under maximum safe compatibility.
 
 ### 4. Protocol-Agnostic Client Interface
 
@@ -70,11 +70,11 @@ The proxy does not favor any particular LLM provider. It works equally well with
 These are non-negotiable properties that all future development must preserve:
 
 1. **Supported protocol routing**: Every supported client protocol must be able to reach every supported upstream protocol within documented portability boundaries.
-2. **Raw forwarding is explicit**: Raw same-protocol forwarding should be used only when the proxy can avoid body mutation and response normalization, while still allowing explicit proxy behavior such as routing, auth policy, headers, and observability. Same-protocol routes that need shims are handled under maximum safe compatibility.
+2. **Native preservation is internal**: Same-wire native bytes and fields should be kept unchanged only when the proxy can avoid body mutation and response normalization, while still allowing explicit proxy behavior such as routing, auth policy, headers, and observability. Same-protocol requests that need shims are handled under maximum safe compatibility.
 3. **Translated responses keep the client protocol shape**: The response must conform to the client's expected protocol shape, and any non-portable degradation must remain visible through warnings or rejection.
 4. **Visible tool identity is preserved**: The proxy must never change the stable tool name supplied by the client on model-visible or client-visible surfaces.
 5. **Streaming is first-class**: Streaming (SSE) support is mandatory for supported protocol pairs within the same portability and reject rules as non-streaming translation.
-6. **Single compatibility strategy**: Adding a new protocol or feature must preserve the single maximum safe compatibility product behavior rather than adding user-facing strategy switches.
+6. **Single product goal**: Adding a new protocol or feature must preserve maximum safe compatibility rather than adding user-facing compatibility switches.
 7. **Degradation is visible**: When the proxy must drop or approximate request/response fields, it must emit compatibility warnings rather than silently failing.
 8. **Typed media fails closed on conflicting identity**: If MIME provenance disagrees across explicit metadata, data URIs, or filename hints, the proxy must reject before contacting the upstream.
 
@@ -118,7 +118,7 @@ Proxy authentication is in scope:
 
 ### Narrow State Exception
 
-The proxy is stateless by default. `conversation_state_bridge.mode=memory` is the only current exception: it is explicitly configured, memory-only, scoped to llmup-owned local response IDs such as `resp_llmup_*`, and used only as an explicit transcript expansion adapter for a narrow OpenAI Responses continuation into translated routes. Unknown IDs, expired entries, process restart, owner mismatch, `store:false`, and external provider IDs fail closed. This is not persistent conversation state, not provider-owned lifecycle reconstruction, not a response cache, and not a separate compatibility strategy.
+The proxy is stateless by default. `conversation_state_bridge.mode=memory` is the only current exception: it is explicitly configured, memory-only, scoped to llmup-owned local response IDs such as `resp_llmup_*`, and used only as an explicit transcript expansion adapter for narrow OpenAI Responses continuations that require request construction. Unknown IDs, expired entries, process restart, owner mismatch, `store:false`, and external provider IDs fail closed. This is not persistent conversation state, not provider-owned lifecycle reconstruction, not a response cache, and not another compatibility goal.
 
 ## Design Philosophy
 

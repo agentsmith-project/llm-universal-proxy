@@ -124,6 +124,36 @@ fn assert_no_secret_leak(text: &str, secret: &str, context: &str) {
     );
 }
 
+fn assert_llmup_external_contract(
+    llmup: &Value,
+    request_body_handling: &str,
+    provider_prompt_cache_request_control: &str,
+) {
+    assert_eq!(
+        llmup["request_body_handling"], request_body_handling,
+        "llmup = {llmup:?}"
+    );
+    assert_eq!(llmup["state_bridge"], "off", "llmup = {llmup:?}");
+    assert_eq!(
+        llmup["provider_prompt_cache_request_control"], provider_prompt_cache_request_control,
+        "llmup = {llmup:?}"
+    );
+    let object = llmup.as_object().expect("llmup object");
+    assert!(
+        !object.contains_key("request_processing"),
+        "llmup = {llmup:?}"
+    );
+    assert!(
+        !object.contains_key("zero_transform_forwarding_active"),
+        "llmup = {llmup:?}"
+    );
+    assert!(
+        !object.contains_key("provider_native_prompt_cache"),
+        "llmup = {llmup:?}"
+    );
+    assert_eq!(object.len(), 3, "llmup = {llmup:?}");
+}
+
 struct ScheduledChunk {
     delay: Duration,
     bytes: Bytes,
@@ -1328,14 +1358,7 @@ async fn exchange_hook_non_stream_transformation_required_redacts_request_body_a
     let exchange_payload = exchange_payloads.last().unwrap();
     assert_eq!(exchange_payload["client_model"], alias_model);
     assert_eq!(exchange_payload["upstream_model"], upstream_model);
-    assert_eq!(
-        exchange_payload["llmup"]["request_processing"],
-        "request_transformation_required"
-    );
-    assert_eq!(
-        exchange_payload["llmup"]["zero_transform_forwarding_active"],
-        false
-    );
+    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "none");
     assert_eq!(
         exchange_payload["response"]["body"]["model"],
         upstream_model
@@ -1407,14 +1430,7 @@ async fn exchange_hook_streaming_redacts_request_body_and_plain_header_metadata(
     let exchange_payload = exchange_payloads.last().unwrap();
     assert_eq!(exchange_payload["client_model"], alias_model);
     assert_eq!(exchange_payload["upstream_model"], upstream_model);
-    assert_eq!(
-        exchange_payload["llmup"]["request_processing"],
-        "request_transformation_required"
-    );
-    assert_eq!(
-        exchange_payload["llmup"]["zero_transform_forwarding_active"],
-        false
-    );
+    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "none");
     let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(
         &payload_text,
@@ -1536,14 +1552,7 @@ async fn sse_event_field_redacts_known_secret_without_breaking_public_hook_or_de
     let exchange_payload = exchange_payloads.last().unwrap();
     assert_eq!(exchange_payload["client_model"], alias_model);
     assert_eq!(exchange_payload["upstream_model"], upstream_model);
-    assert_eq!(
-        exchange_payload["llmup"]["request_processing"],
-        "request_transformation_required"
-    );
-    assert_eq!(
-        exchange_payload["llmup"]["zero_transform_forwarding_active"],
-        false
-    );
+    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "none");
     let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(&payload_text, TEST_PROVIDER_KEY, "SSE exchange hook");
 
@@ -1634,14 +1643,7 @@ async fn sse_id_comment_retry_metadata_redacts_without_dropping_safe_metadata() 
     let exchange_payload = exchange_payloads.last().unwrap();
     assert_eq!(exchange_payload["client_model"], alias_model);
     assert_eq!(exchange_payload["upstream_model"], upstream_model);
-    assert_eq!(
-        exchange_payload["llmup"]["request_processing"],
-        "request_transformation_required"
-    );
-    assert_eq!(
-        exchange_payload["llmup"]["zero_transform_forwarding_active"],
-        false
-    );
+    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "none");
     let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(&payload_text, TEST_PROVIDER_KEY, "SSE metadata hook");
 

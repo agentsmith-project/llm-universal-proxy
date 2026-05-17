@@ -13,13 +13,14 @@ documented secure defaults, bounded resource behavior, release gates, and
 compatibility boundaries.
 
 This is not a provider-certified compatibility claim. The compatibility promise
-is single maximum safe compatibility with hard portability boundaries:
+is maximum safe compatibility with hard portability boundaries:
 supported mappings are documented, high-risk unsupported fields fail before
 upstream calls, and low-risk degradation must be visible rather than silent.
-Raw/native forwarding is a byte-preserving optimization for preserving native
-fields and lifecycle resources when the route can avoid body mutation and
-response normalization; until that zero-transformation forwarding work lands,
-same-protocol traffic may still pass through compatibility machinery.
+When a same-wire request needs no cross-protocol construction, internal handling
+may keep provider-native bytes, fields, and lifecycle resources unchanged if the
+route can avoid body mutation and response normalization; until that
+zero-transformation work lands, same-protocol traffic may still use
+compatibility machinery.
 
 ## Completed Local Baseline
 
@@ -58,24 +59,24 @@ same-protocol traffic may still pass through compatibility machinery.
 
 ### OpenAI Responses
 
-OpenAI Responses lifecycle and state resource endpoints target raw/native forwarding only when zero-transformation handling is implemented and the route can avoid mutation.
+OpenAI Responses lifecycle and state resource endpoints target provider-native same-wire handling only when zero-transformation handling is implemented and the route can avoid mutation.
 Cross-provider reconstruction of provider-managed state,
 conversation continuity, `context_management`, compact resources, or opaque
 lifecycle resources must fail closed unless a future mapping is explicitly
 designed and tested.
 
-Request-side opaque reasoning and compaction input items follow the single
-maximum safe compatibility strategy: opaque carriers such as
+Request-side opaque reasoning and compaction input items follow maximum safe
+compatibility: opaque carriers such as
 `encrypted_content` may be warned and dropped only when visible summary text or
 visible transcript history remains. Opaque-only reasoning or compaction state
-always fails closed, and native Responses forwarding should preserve the native
-item unchanged when raw/native forwarding is available.
+always fails closed, and native Responses same-wire handling should preserve the
+native item unchanged when provider-native same-wire handling is available.
 
 ### Anthropic Messages
 
 Anthropic extended thinking, redacted thinking, and provider-signature behavior
-are native semantics. They should be preserved on raw/native routes that avoid
-mutation and rejected on cross-provider routes when the target cannot
+are native semantics. They should be preserved when same-wire internal handling
+can avoid mutation and rejected on cross-provider routes when the target cannot
 faithfully carry them.
 
 ### Google OpenAI-Compatible Gemini
@@ -138,8 +139,9 @@ and the protected provider-neutral compatible live smoke.
 
 It does not mean every provider-specific feature is equivalent across every
 target. The promise is maximum safe compatibility with hard fail-closed
-boundaries, plus raw/native forwarding as a byte-preserving optimization when a
-route can avoid mutation and normalization.
+boundaries. When no cross-protocol construction is needed, internal handling may
+preserve provider-native bytes and fields unchanged if the route can avoid
+mutation and normalization.
 
 ## Official References
 

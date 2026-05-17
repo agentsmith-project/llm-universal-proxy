@@ -145,6 +145,36 @@ fn is_test_credential_header(name: &str) -> bool {
     .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
+fn assert_llmup_external_contract(
+    llmup: &Value,
+    request_body_handling: &str,
+    provider_prompt_cache_request_control: &str,
+) {
+    assert_eq!(
+        llmup["request_body_handling"], request_body_handling,
+        "llmup = {llmup:?}"
+    );
+    assert_eq!(llmup["state_bridge"], "off", "llmup = {llmup:?}");
+    assert_eq!(
+        llmup["provider_prompt_cache_request_control"], provider_prompt_cache_request_control,
+        "llmup = {llmup:?}"
+    );
+    let object = llmup.as_object().expect("llmup object");
+    assert!(
+        !object.contains_key("request_processing"),
+        "llmup = {llmup:?}"
+    );
+    assert!(
+        !object.contains_key("zero_transform_forwarding_active"),
+        "llmup = {llmup:?}"
+    );
+    assert!(
+        !object.contains_key("provider_native_prompt_cache"),
+        "llmup = {llmup:?}"
+    );
+    assert_eq!(object.len(), 3, "llmup = {llmup:?}");
+}
+
 struct ScopedEnvVar {
     key: &'static str,
     previous: Option<String>,
@@ -6467,11 +6497,11 @@ async fn conversation_state_bridge_rejects_local_id_on_native_responses_passthro
         "message = {message}"
     );
     assert!(
-        message.contains("native OpenAI Responses passthrough"),
+        message.contains("provider-native same-wire handling"),
         "message = {message}"
     );
     assert!(
-        message.contains("local replay translated route"),
+        message.contains("local replay/request construction"),
         "message = {message}"
     );
     assert_eq!(
@@ -8784,11 +8814,7 @@ async fn exchange_hook_non_stream_success_uses_public_redacted_response_body_whe
         .unwrap();
     assert_eq!(exchange["client_model"], alias_model);
     assert_eq!(exchange["upstream_model"], upstream_model);
-    assert_eq!(
-        exchange["llmup"]["request_processing"],
-        "request_transformation_required"
-    );
-    assert_eq!(exchange["llmup"]["zero_transform_forwarding_active"], false);
+    assert_llmup_external_contract(&exchange["llmup"], "constructed", "none");
     let hook_body = &exchange["response"]["body"];
     assert_eq!(hook_body, &public_body);
     assert_eq!(hook_body["model"], upstream_model);
@@ -8858,11 +8884,7 @@ async fn exchange_hook_stream_success_uses_redacted_sse_capture_when_transformat
         .unwrap();
     assert_eq!(exchange["client_model"], alias_model);
     assert_eq!(exchange["upstream_model"], upstream_model);
-    assert_eq!(
-        exchange["llmup"]["request_processing"],
-        "request_transformation_required"
-    );
-    assert_eq!(exchange["llmup"]["zero_transform_forwarding_active"], false);
+    assert_llmup_external_contract(&exchange["llmup"], "constructed", "none");
     let hook_text = serde_json::to_string(exchange).unwrap();
     assert!(!hook_text.contains(provider_secret), "{hook_text}");
     assert!(!hook_text.contains(proxy_secret), "{hook_text}");
@@ -8942,7 +8964,7 @@ async fn hooks_exchange_hook_raw_sse_success_observes_redacted_debug_and_usage_w
         .iter()
         .find(|payload| payload.get("usage").is_some())
         .unwrap();
-    assert_eq!(exchange["llmup"]["zero_transform_forwarding_active"], true);
+    assert_llmup_external_contract(&exchange["llmup"], "client_body_preserved", "none");
     assert_eq!(exchange["stream"], true);
     assert_eq!(exchange["completed"], true);
     assert_eq!(

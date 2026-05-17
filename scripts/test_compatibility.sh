@@ -260,13 +260,13 @@ test_preset_anthropic_compatible() {
     log_header "Preset Anthropic-compatible Upstream — Anthropic Messages Client"
 
     test_json \
-        "Non-stream: Anthropic Messages → preset Anthropic-compatible (passthrough)" \
+        "Non-stream: Anthropic Messages → preset Anthropic-compatible (same protocol)" \
         "$BASE_URL/anthropic/v1/messages" \
         '{"model":"preset-anthropic-compatible","max_tokens":256,"messages":[{"role":"user","content":"Reply with exactly: OK"}],"stream":false}' \
         '"text"'
 
     test_sse \
-        "Stream: Anthropic Messages → preset Anthropic-compatible (passthrough)" \
+        "Stream: Anthropic Messages → preset Anthropic-compatible (same protocol)" \
         "$BASE_URL/anthropic/v1/messages" \
         '{"model":"preset-anthropic-compatible","max_tokens":64,"messages":[{"role":"user","content":"Reply with exactly: OK"}],"stream":true}' \
         "message_start" "message_stop"
@@ -279,13 +279,13 @@ test_preset_openai_compatible() {
     log_header "Preset OpenAI-compatible Upstream — OpenAI Chat Completions Client"
 
     test_json \
-        "Non-stream: OpenAI Chat → preset OpenAI-compatible (passthrough)" \
+        "Non-stream: OpenAI Chat → preset OpenAI-compatible (same protocol)" \
         "$BASE_URL/openai/v1/chat/completions" \
         '{"model":"preset-openai-compatible","messages":[{"role":"user","content":"Reply with exactly: OK"}],"stream":false}' \
         '"content"'
 
     test_sse \
-        "Stream: OpenAI Chat → preset OpenAI-compatible (passthrough)" \
+        "Stream: OpenAI Chat → preset OpenAI-compatible (same protocol)" \
         "$BASE_URL/openai/v1/chat/completions" \
         '{"model":"preset-openai-compatible","messages":[{"role":"user","content":"Reply with exactly: OK"}],"stream":true}' \
         "data:" "[DONE]"
@@ -332,13 +332,13 @@ test_local_qwen() {
     log_header "Local qwen3.5 Upstream — OpenAI Chat Completions Client"
 
     test_json \
-        "Non-stream: OpenAI Chat → Local qwen (passthrough)" \
+        "Non-stream: OpenAI Chat → Local qwen (same protocol)" \
         "$BASE_URL/openai/v1/chat/completions" \
         '{"model":"qwen-local","messages":[{"role":"user","content":"Reply with exactly: OK"}],"stream":false}' \
         '"content"'
 
     test_sse \
-        "Stream: OpenAI Chat → Local qwen (passthrough)" \
+        "Stream: OpenAI Chat → Local qwen (same protocol)" \
         "$BASE_URL/openai/v1/chat/completions" \
         '{"model":"qwen-local","messages":[{"role":"user","content":"Reply with exactly: OK"}],"stream":true}' \
         "data:" "[DONE]"

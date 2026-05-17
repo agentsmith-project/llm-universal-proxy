@@ -1,6 +1,6 @@
 # Pre-GA Conversation State Bridge 工作计划
 
-- 状态：current-main status update；text-only memory MVP、普通 `function_call` / `function_call_output`、`custom_tool_call` / `custom_tool_call_output` 的非流式本地 replay 和 route/config owner hardening 已实现；stream capture、reasoning summary replay、细粒度 trace metadata 仍待完成
+- 状态：current-main status update；text-only memory bridge、普通 `function_call` / `function_call_output`、portable `custom_tool_call` / `custom_tool_call_output` 的非流式本地 replay 和 route/config owner hardening 已实现；fine-grained `ProviderCacheUsage` telemetry 是下一步；stream capture、reasoning summary replay、细粒度 trace metadata 仍待后续
 - 日期：2026-05-16
 - 范围：为 `llmup` 增加显式配置的纯内存会话状态桥，用于把使用状态型接口的客户端转换到无状态 provider 协议
 - 非范围：LLM 响应缓存、语义缓存、跨进程持久化数据库、provider 私有 opaque state 反解、默认无配置保存用户数据、后台任务队列产品化、提示词管理产品
@@ -9,7 +9,7 @@
 
 本计划以 [pre-ga-remove-native-gemini-format-plan.md](./pre-ga-remove-native-gemini-format-plan.md) 为 native Gemini 的范围裁剪依据。当前 main 已移除 active native Gemini runtime support；状态桥不为 Gemini `generateContent`、`thoughtSignature`、`cachedContent` 或 `/google/v1beta/*` 增加新能力。
 
-删除 native Gemini 后，状态桥的 active MVP 已实现目标只包括：
+删除 native Gemini 后，状态桥的 active 已实现目标只包括：
 
 - OpenAI Responses stateful client -> OpenAI Chat upstream。
 - OpenAI Responses stateful client -> Anthropic Messages upstream。
@@ -31,13 +31,13 @@
 
 一句话边界：这是 `ConversationStateBridge`，不是 cache。
 
-## MVP 范围
+## 当前已交付范围
 
-为了保持实现简单快速，MVP 当前只做一个能力：
+为了保持实现简单快速，当前状态桥只覆盖一个入口：
 
 - `POST /openai/v1/responses` translated route 上的 `previous_response_id` continuation。
 
-当前已实现的 MVP 是非流式 continuation：
+当前已交付的是非流式 continuation：
 
 - 第一轮保存 visible user input 和 completed assistant text。
 - 第二轮用本地 `resp_llmup_*` 展开历史，发送到 OpenAI Chat 或 Anthropic upstream。
@@ -53,7 +53,7 @@
 - `context_management` / compact 本地实现。
 - 复杂内存配额、LRU、admin state browser、跨进程恢复。
 
-也就是说，MVP 是一个短期内存 replay buffer：收到第一轮 translated Responses 请求后保存可重放 transcript；第二轮带本地 `resp_llmup_*` 时展开历史并继续调用目标 provider。`llmup` 重启、TTL 到期、ID 未命中时，直接 fail closed。
+也就是说，当前状态桥是一个短期内存 replay buffer：收到第一轮 translated Responses 请求后保存可重放 transcript；第二轮带本地 `resp_llmup_*` 时展开历史并继续调用目标 provider。`llmup` 重启、TTL 到期、ID 未命中时，直接 fail closed。
 
 ## 背景与现状
 
@@ -266,7 +266,7 @@ struct BridgeResponse {
 
 ### `conversation`
 
-MVP 不支持本地 `conversation` bridge。
+当前范围不支持本地 `conversation` bridge。
 
 行为：
 
@@ -327,7 +327,7 @@ MVP 不支持本地 `conversation` bridge。
    - commit 因 `max_bytes` 失败时，当前响应仍可返回，但不承诺后续 continuation；trace/warning 记录 `state_bridge_memory_limit`。
 3. 上游失败或转换失败不写入状态。
 
-### 流式（未实现，Post-MVP）
+### 流式（后续非阻塞）
 
 1. 在 response.created 阶段预分配本地 response ID。
 2. streaming sink 收集可重放 output items。
@@ -335,19 +335,20 @@ MVP 不支持本地 `conversation` bridge。
 4. 客户端断连、上游错误、stream parse fatal 时不提交 completed 状态；可选记录 aborted metadata，但不能用于 replay。
 5. 流式事件中客户端可见 ID 必须与最终 store ID 一致。
 
-## 分阶段覆盖范围
+## 覆盖范围
 
-MVP 支持：
+当前已交付：
 
 - OpenAI Responses client -> OpenAI Chat upstream。
 - OpenAI Responses client -> Anthropic Messages upstream。
 - text message replay。
 - assistant text replay。
+- 普通 function call / function call output replay。
+- portable custom tool call / custom tool call output replay。
 
-Post-MVP 支持：
+后续非阻塞：
 
-- function call / function call output replay。
-- custom tool call 在现有最大兼容翻译能力范围内 replay。
+- streaming response capture。
 - visible reasoning summary replay。
 
 初始不支持：
@@ -534,7 +535,7 @@ Current-main delivery status:
 
 ## 测试矩阵
 
-MVP 必须覆盖：
+当前 gate 必须覆盖：
 
 | 区域 | 覆盖要求 |
 | --- | --- |
@@ -547,13 +548,13 @@ MVP 必须覆盖：
 | store:false | 首轮仍调用上游但不保存；后续使用对应历史 replay 时因无本地状态 fail closed；不泄露内容 |
 | detector enabled-semantics | `background:false|null` / `store:false|null` 不触发 provider-owned stateful fail-closed；enabled/present controls 仍 fail closed |
 | Native forwarding | OpenAI Responses native routes 不被本地 bridge 改写 |
+| 工具调用 | 普通 function_call/function_call_output 和 portable custom_tool_call/custom_tool_call_output replay 已交付；非 portable custom/proxied/namespaced provider/internal 工具语义仍不 replay |
 | Prompt cache 顺序 | state 展开先于 provider-native prompt-cache request-control support |
 
-Post-MVP 覆盖：
+后续覆盖：
 
 | 区域 | 覆盖要求 |
 | --- | --- |
-| 工具调用 | 普通 function_call/function_call_output 和 portable custom_tool_call/custom_tool_call_output replay 已交付；非 portable custom/proxied/namespaced provider/internal 工具语义仍不 replay |
 | 流式 | completed 后可 replay，abort/error 不可 replay |
 | Reasoning summary | 只 replay visible summary；opaque-only carrier fail closed |
 

@@ -1684,26 +1684,12 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
         wait_for_hook_payload(&exchange_payloads).await,
         wait_for_hook_payload(&usage_payloads).await,
     ] {
-        assert_eq!(
-            payload["llmup"]["request_processing"], "request_transformation_not_required",
-            "payload = {payload:?}"
+        assert_llmup_external_observability(
+            &payload,
+            "client_body_preserved",
+            "off",
+            "preserved_native",
         );
-        assert_eq!(
-            payload["llmup"]["zero_transform_forwarding_active"], true,
-            "payload = {payload:?}"
-        );
-        assert_eq!(
-            payload["llmup"]["state_bridge"], "off",
-            "payload = {payload:?}"
-        );
-        assert_eq!(
-            payload["llmup"]["provider_native_prompt_cache"], "preserved",
-            "payload = {payload:?}"
-        );
-        let llmup = payload["llmup"]
-            .as_object()
-            .expect("llmup observability object");
-        assert_eq!(llmup.len(), 4, "payload = {payload:?}");
     }
 
     let config = state
@@ -1785,9 +1771,11 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_map
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_eq!(
-            payload["llmup"]["provider_native_prompt_cache"], "explicit_extension_mapped",
-            "payload = {payload:?}"
+        assert_llmup_external_observability(
+            &payload,
+            "constructed",
+            "off",
+            "explicit_extension_mapped",
         );
     }
 
@@ -1861,9 +1849,11 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mappin
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_eq!(
-            payload["llmup"]["provider_native_prompt_cache"], "explicit_extension_mapped",
-            "payload = {payload:?}"
+        assert_llmup_external_observability(
+            &payload,
+            "constructed",
+            "off",
+            "explicit_extension_mapped",
         );
     }
 
@@ -1964,10 +1954,7 @@ async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cach
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_eq!(
-            payload["llmup"]["provider_native_prompt_cache"], "dropped",
-            "payload = {payload:?}"
-        );
+        assert_llmup_external_observability(&payload, "constructed", "off", "dropped");
     }
 
     let requests = requests.lock().await;
@@ -2390,8 +2377,46 @@ fn request_processing_input<'a>(
     }
 }
 
+fn assert_llmup_external_observability(
+    payload: &Value,
+    request_body_handling: &str,
+    state_bridge: &str,
+    provider_prompt_cache_request_control: &str,
+) {
+    assert_eq!(
+        payload["llmup"]["request_body_handling"], request_body_handling,
+        "payload = {payload:?}"
+    );
+    assert_eq!(
+        payload["llmup"]["state_bridge"], state_bridge,
+        "payload = {payload:?}"
+    );
+    assert_eq!(
+        payload["llmup"]["provider_prompt_cache_request_control"],
+        provider_prompt_cache_request_control,
+        "payload = {payload:?}"
+    );
+    let llmup = payload["llmup"]
+        .as_object()
+        .expect("llmup observability object");
+    assert!(
+        !llmup.contains_key("request_processing"),
+        "payload = {payload:?}"
+    );
+    assert!(
+        !llmup.contains_key("zero_transform_forwarding_active"),
+        "payload = {payload:?}"
+    );
+    assert!(
+        !llmup.contains_key("provider_native_prompt_cache"),
+        "payload = {payload:?}"
+    );
+    assert_eq!(llmup.len(), 3, "payload = {payload:?}");
+}
+
 #[test]
-fn request_processing_provider_native_prompt_cache_serializes_only_supported_contract_states() {
+fn request_processing_provider_prompt_cache_request_control_serializes_only_supported_contract_states(
+) {
     use crate::request_processing::PromptCacheRequestControl as Control;
 
     let states = [
@@ -2419,11 +2444,12 @@ fn request_processing_provider_native_prompt_cache_serializes_only_supported_con
         serialized,
         vec![
             serde_json::json!("none"),
-            serde_json::json!("preserved"),
+            serde_json::json!("preserved_native"),
             serde_json::json!("explicit_extension_mapped"),
             serde_json::json!("dropped"),
         ]
     );
+    assert!(!serialized.contains(&serde_json::json!("preserved")));
     assert!(!serialized.contains(&serde_json::json!("synthesized")));
 }
 

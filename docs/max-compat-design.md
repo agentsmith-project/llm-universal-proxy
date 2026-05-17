@@ -5,13 +5,13 @@ Last updated: 2026-05-16
 
 ## Summary
 
-`llm-universal-proxy` uses one client-first translation strategy: maximum safe compatibility. The runtime and config surface expose no compatibility switch; translated paths always use maximum safe compatibility, and fail-closed portability boundaries remain hard safety contracts.
+`llm-universal-proxy` has one product goal: maximum safe compatibility. The runtime and config surface expose no compatibility switch; every request is handled under that goal, and fail-closed portability boundaries remain hard safety contracts.
 
 This means:
 
 - do not model client product brands as first-class data-plane identities
 - do model a unified `capability surface` for each local model alias
-- do treat maximum safe compatibility as the only translated-path product behavior
+- do treat maximum safe compatibility as the only product behavior
 - do keep provider-owned state and provider-native lifecycle features native-only
 - do treat transport-only bridge artifacts as internal machinery, not as user-facing contract
 
@@ -21,7 +21,7 @@ Locked contract:
 - `__llmup_custom__*` is an internal transport artifact, not a public contract.
 - `apply_patch` remains a public freeform tool on client-visible surfaces.
 - Real-client public editing contracts preserve each supported client's public tool name, such as Codex `apply_patch` and Claude Code `Edit`.
-- The intended translated-path bridge preserves the stable visible tool name and carries bridge provenance in request-scoped translation context.
+- The intended tool bridge preserves the stable visible tool name and carries bridge provenance in request-scoped translation context.
 
 The current system has the architectural seams for this work:
 
@@ -60,7 +60,7 @@ The correct core abstractions are:
 
 where:
 
-- request handling decision answers "byte-preserving raw forwarding or maximum-safe request construction?"
+- request handling decision answers "can same-wire native bytes/fields be kept internally, or is maximum-safe request construction required?"
 - `capability_surface` answers "what client-visible contract should this local alias advertise and preserve?"
 - provider-native request-control modifiers answer "what explicit target-provider controls may be preserved or explicitly mapped after the target request shape is known?"
 - hard portability boundary answers "what must fail closed because it cannot be represented safely?"
@@ -69,12 +69,12 @@ Client brand names can still exist in wrappers, real-client test matrix labels, 
 
 ## Product Direction
 
-The product promise is bounded: protocol coverage means raw same-protocol forwarding is an internal optimization where the proxy can forward bytes without body mutation, and maximum safe translation for mismatched protocol pairs. That singular behavior is the product contract; provider-specific fidelity remains bounded by portability.
+The product promise is bounded: protocol coverage means every request is governed by maximum safe compatibility. When no cross-protocol construction is needed, the implementation may keep original provider bytes and fields unchanged within proxy routing, auth, header, and observability boundaries. When construction is needed, the proxy preserves the maximum safe portable representation and warns or rejects at hard boundaries. That singular behavior is the product contract; provider-specific fidelity remains bounded by portability.
 
-- raw same-protocol forwarding is an internal optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries
+- same-wire native preservation is an internal optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries when no body mutation or response normalization is required
 - provider prompt-cache support is provider-native request-control support: preserve or map only explicit provider-native cache request controls as a request-control modifier; this is not `llmup` caching and not a separate product behavior
-- translated paths always use maximum safe compatibility: preserve the maximum safe portable representation and warn when a safe degradation is visible
-- provider-native state and native extensions: raw/native forwarding only unless a documented, explicit shim exists
+- constructed requests use maximum safe compatibility: preserve the maximum safe portable representation and warn when a safe degradation is visible
+- provider-native state and native extensions: preserve only when same-wire internal handling can keep native semantics unchanged unless a documented, explicit shim exists
 
 Portable core:
 
@@ -97,10 +97,10 @@ Native extensions:
 Current implementation facts:
 
 - Runtime and config surface expose no compatibility switch.
-- Translated paths always use maximum safe compatibility.
-- Raw same-protocol forwarding is an internal zero-transform optimization for same-format routes that can avoid body mutation and response normalization.
-- Same-format zero-transform forwarding preserves native fields when the source and upstream use the same wire protocol and the route does not require body mutation.
-- Native Responses zero-transform forwarding preserves `context_management`, `include` values such as `reasoning.encrypted_content`, and input reasoning and compaction items with `encrypted_content` unchanged.
+- Request construction always uses maximum safe compatibility.
+- Same-format zero-transform handling is an internal optimization for same-format routes that can avoid body mutation and response normalization.
+- Same-format zero-transform handling preserves native fields when the source and upstream use the same wire protocol and the route does not require body mutation.
+- Native Responses same-wire handling preserves `context_management`, `include` values such as `reasoning.encrypted_content`, and input reasoning and compaction items with `encrypted_content` unchanged.
 - Responses lifecycle/resource endpoints require exactly one native OpenAI Responses upstream and the proxy does not reconstruct provider state.
 
 Request-side reasoning encrypted_content rules:
@@ -114,7 +114,7 @@ Request-side compaction input rules:
 - For request-side compaction input, a compaction item may warn/drop opaque carrier fields only when that compaction item has an explicit visible summary, or when the request contains non-compaction visible portable transcript/history that can carry the context forward.
 - In the same request, one summarized compaction item does not permit another opaque-only compaction item to be silently dropped.
 - Opaque-only compaction always fails closed.
-- The native Responses forwarding behavior preserves compaction items unchanged.
+- Native Responses same-wire handling preserves compaction items unchanged.
 
 Response-side reasoning encrypted_content is a separate translation concern. There is a dedicated Anthropic carrier recovery path for response-side reasoning encrypted_content; the request-side continuity rules above must not be generalized into a blanket rule for all response translation.
 
@@ -148,8 +148,8 @@ MIME provenance is part of that boundary. OpenAI Chat `file` and OpenAI Response
 
 The product behavior is intentionally singular:
 
-- raw same-protocol forwarding is an internal optimization: byte-preserving handling for routes that can avoid body mutation and response normalization
-- translated paths always use maximum safe compatibility
+- same-wire native preservation is an internal optimization for routes that can avoid body mutation and response normalization
+- request construction always uses maximum safe compatibility
 - provider prompt-cache support is provider-native request-control support, not a `llmup` cache and not a separate product behavior
 - hard portability boundaries fail closed before upstream when the proxy cannot preserve or safely degrade semantics
 
@@ -227,7 +227,7 @@ That means:
 
 This creates a hard design consequence:
 
-- encoding Responses custom-tool semantics by renaming the visible tool name is not acceptable on live translated paths for agent clients
+- encoding Responses custom-tool semantics by renaming the visible tool name is not acceptable on live constructed requests for agent clients
 
 ## Legacy Prefix Bridge Failure Mode
 
@@ -287,7 +287,7 @@ The key correction was:
 
 So the live fix could not be "rename and hide later".
 
-The translated-path bridge contract is:
+The request-construction bridge contract is:
 
 - keep the original stable tool name visible to the upstream model
 - move custom text/grammar bridge provenance into request-scoped translation context
@@ -295,7 +295,7 @@ The translated-path bridge contract is:
 
 Current live bridge behavior:
 
-- do not rename `apply_patch` to `__llmup_custom__apply_patch` on live translated request paths
+- do not rename `apply_patch` to `__llmup_custom__apply_patch` on live constructed requests
 - keep the visible upstream tool name as `apply_patch`
 - continue using the canonical object wrapper `{ "input": string }` on function-only protocol hops
 - use request-scoped `ToolBridgeContext` so response and streaming translators know that `apply_patch` on this request is a bridged custom text/grammar tool, not an ordinary function tool
@@ -311,7 +311,7 @@ Current behavior:
 
 ## Request-Scoped Tool Bridge Context
 
-The intended translated-path bridge preserves the stable visible tool name and carries bridge provenance in request-scoped translation context.
+The intended tool bridge preserves the stable visible tool name and carries bridge provenance in request-scoped translation context.
 
 To preserve reversible decoding without exposing reserved prefixes, the live runtime carries a per-request bridge context.
 
