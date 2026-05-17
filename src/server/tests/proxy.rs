@@ -130,6 +130,19 @@ fn debug_trace_request_entry(trace: &str) -> Value {
         .expect("trace should contain request entry")
 }
 
+fn assert_debug_trace_omits_stable_prefix(trace: &str, request_entry: &Value) {
+    let request_entry_text =
+        serde_json::to_string(request_entry).expect("request entry serializes");
+    assert!(
+        !request_entry_text.contains("stable-prefix"),
+        "debug trace request entry must not contain prompt-cache key values: {request_entry_text}"
+    );
+    assert!(
+        !trace.contains("stable-prefix"),
+        "debug trace must not contain prompt-cache key values: {trace}"
+    );
+}
+
 async fn wait_for_debug_trace_request_count(path: &std::path::Path, count: usize) -> Vec<Value> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     let mut entries = Vec::new();
@@ -1721,11 +1734,8 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
     let _ = response_text(response).await;
 
     let trace = wait_for_debug_trace_response(&trace_path).await;
-    let request_entry = trace
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|entry| entry.get("phase").and_then(Value::as_str) == Some("request"))
-        .expect("trace should contain request entry");
+    let request_entry = debug_trace_request_entry(&trace);
+    assert_debug_trace_omits_stable_prefix(&trace, &request_entry);
     for payload in [
         request_entry,
         wait_for_hook_payload(&exchange_payloads).await,
@@ -1810,6 +1820,8 @@ async fn debug_trace_preserved_prompt_cache_does_not_backfill_missing_target_fie
     recorder.record_request_with_upstream(&ctx, &original_body, &upstream_body);
 
     let request_entries = wait_for_debug_trace_request_count(&path, 1).await;
+    let trace = std::fs::read_to_string(&path).expect("debug trace should be readable");
+    assert_debug_trace_omits_stable_prefix(&trace, &request_entries[0]);
     let prompt_cache_detail = &request_entries[0]["request"]["prompt_cache_request_control"];
     assert_eq!(
         prompt_cache_detail["disposition"],
@@ -2084,6 +2096,7 @@ async fn debug_trace_records_prompt_cache_components_for_openai_to_anthropic_mix
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     assert_llmup_external_observability(&request_entry, "constructed", "explicit_extension_mapped");
+    assert_debug_trace_omits_stable_prefix(&trace, &request_entry);
     let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
     assert_eq!(
         prompt_cache_detail,
@@ -2202,6 +2215,7 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mappin
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     assert_llmup_external_observability(&request_entry, "constructed", "explicit_extension_mapped");
+    assert_debug_trace_omits_stable_prefix(&trace, &request_entry);
     let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
     assert_eq!(
         prompt_cache_detail,
@@ -2322,6 +2336,7 @@ async fn debug_trace_records_prompt_cache_components_for_anthropic_to_openai_mix
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     assert_llmup_external_observability(&request_entry, "constructed", "explicit_extension_mapped");
+    assert_debug_trace_omits_stable_prefix(&trace, &request_entry);
     let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
     assert_eq!(
         prompt_cache_detail,
@@ -2552,6 +2567,7 @@ async fn debug_trace_records_prompt_cache_detail_for_dropped_openai_key_to_anthr
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
     assert_llmup_external_observability(&request_entry, "constructed", "dropped");
+    assert_debug_trace_omits_stable_prefix(&trace, &request_entry);
     let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
     assert_eq!(
         prompt_cache_detail,

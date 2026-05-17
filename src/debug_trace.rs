@@ -872,27 +872,36 @@ fn prompt_cache_request_control_detail(
     original_body: &Value,
     upstream_body: &Value,
 ) -> Option<Value> {
+    let disposition = ctx.llmup.provider_native_prompt_cache;
+    if disposition == PromptCacheRequestControl::None {
+        return None;
+    }
     let analysis = analyze_provider_prompt_cache_request_control(
         ctx.client_format,
         ctx.upstream_format,
         original_body,
     );
-    let disposition = analysis.coarse_control();
-    if disposition == PromptCacheRequestControl::None {
-        return None;
-    }
     let primary_component = analysis
         .components()
         .iter()
-        .find(|component| component.disposition() == disposition)
-        .or_else(|| analysis.components().first())?;
-    let mut detail = prompt_cache_detail_value(
-        analysis.target_provider(),
-        disposition,
-        primary_component,
-        upstream_body,
-    )?;
-    if analysis.components().len() > 1 {
+        .find(|component| component.disposition() == disposition);
+    let mut detail = primary_component
+        .and_then(|component| {
+            prompt_cache_detail_value(
+                analysis.target_provider(),
+                disposition,
+                component,
+                upstream_body,
+            )
+        })
+        .unwrap_or_else(|| {
+            prompt_cache_minimal_detail_value(analysis.target_provider(), disposition)
+        });
+    let redacted_analysis_disposition = analysis.coarse_control();
+    let should_include_components = analysis.components().len() > 1
+        || (primary_component.is_none()
+            && redacted_analysis_disposition != PromptCacheRequestControl::None);
+    if should_include_components {
         let components = analysis
             .components()
             .iter()
@@ -903,6 +912,18 @@ fn prompt_cache_request_control_detail(
         }
     }
     Some(detail)
+}
+
+fn prompt_cache_minimal_detail_value(
+    target_provider: &'static str,
+    disposition: PromptCacheRequestControl,
+) -> Value {
+    json!({
+        "target_provider": target_provider,
+        "disposition": disposition,
+        "source_fields": [],
+        "target_fields": [],
+    })
 }
 
 fn prompt_cache_detail_value(
@@ -1630,6 +1651,93 @@ mod tests {
             "bounded debug trace queue should account for every attempted write via persisted entries plus explicit overflow accounting: {contents}"
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn prompt_cache_detail_uses_llmup_disposition_when_redacted_body_hides_components() {
+        let ctx = prompt_cache_debug_trace_context(
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::Anthropic,
+            PromptCacheRequestControl::Dropped,
+        );
+        let body = json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }]
+        });
+
+        let detail = prompt_cache_request_control_detail(&ctx, &body, &body)
+            .expect("coarse llmup prompt-cache state should emit safe minimal detail");
+
+        assert_eq!(
+            detail,
+            json!({
+                "target_provider": "anthropic",
+                "disposition": "dropped",
+                "source_fields": [],
+                "target_fields": []
+            })
+        );
+    }
+
+    #[test]
+    fn prompt_cache_detail_does_not_pair_llmup_disposition_with_mismatched_redacted_component() {
+        let ctx = prompt_cache_debug_trace_context(
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::Anthropic,
+            PromptCacheRequestControl::ExplicitExtensionMapped,
+        );
+        let original_body = json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "prompt_cache_key": "[REDACTED]"
+        });
+        let upstream_body = json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }]
+        });
+
+        let detail = prompt_cache_request_control_detail(&ctx, &original_body, &upstream_body)
+            .expect("coarse llmup prompt-cache state should drive top-level detail");
+
+        assert_eq!(
+            detail,
+            json!({
+                "target_provider": "anthropic",
+                "disposition": "explicit_extension_mapped",
+                "source_fields": [],
+                "target_fields": [],
+                "components": [
+                    {
+                        "disposition": "dropped",
+                        "source_fields": ["prompt_cache_key"],
+                        "target_fields": [],
+                        "omitted_reason": "openai_prompt_cache_key_not_anthropic_cache_control_or_breakpoint"
+                    }
+                ]
+            })
+        );
+    }
+
+    fn prompt_cache_debug_trace_context(
+        client_format: UpstreamFormat,
+        upstream_format: UpstreamFormat,
+        provider_native_prompt_cache: PromptCacheRequestControl,
+    ) -> DebugTraceContext {
+        DebugTraceContext {
+            request_id: "req_prompt_cache".to_string(),
+            timestamp_ms: 1,
+            path: "/openai/v1/chat/completions".to_string(),
+            stream: false,
+            client_model: "client-model".to_string(),
+            upstream_name: "default".to_string(),
+            upstream_model: "upstream-model".to_string(),
+            client_format,
+            upstream_format,
+            llmup: RequestProcessingInfo {
+                provider_native_prompt_cache,
+                ..RequestProcessingInfo::default()
+            },
+        }
     }
 
     #[test]
