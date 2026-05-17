@@ -196,6 +196,8 @@ pub struct StreamState {
     pub openai_seen_reasoning: String,
     pub openai_terminal_error: Option<Value>,
     pub responses_terminal_sent: bool,
+    pub responses_response_id_override: Option<String>,
+    pub responses_terminal_response: Option<Value>,
 }
 
 #[derive(Debug, Default)]
@@ -467,6 +469,14 @@ pub(super) fn mark_stream_fatal_rejection(
 }
 
 impl StreamState {
+    pub(super) fn responses_response_id(&self, fallback: Option<&str>) -> String {
+        self.responses_response_id_override
+            .as_deref()
+            .or(fallback)
+            .map(str::to_string)
+            .unwrap_or_else(|| "resp_0".to_string())
+    }
+
     pub(crate) fn accumulated_bytes(&self) -> usize {
         let mut total = 0usize;
         total = total.saturating_add(optional_string_len(&self.message_id));
@@ -482,6 +492,8 @@ impl StreamState {
         total = total.saturating_add(self.openai_seen_refusal.len());
         total = total.saturating_add(self.openai_seen_reasoning.len());
         total = total.saturating_add(value_len(&self.openai_terminal_error));
+        total = total.saturating_add(optional_string_len(&self.responses_response_id_override));
+        total = total.saturating_add(value_len(&self.responses_terminal_response));
         for item in self.openai_tool_calls.values() {
             total = total.saturating_add(item.accumulated_bytes());
         }

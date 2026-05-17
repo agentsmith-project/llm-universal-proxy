@@ -382,10 +382,7 @@ pub fn translate_sse_event(
         && event.get("_done").and_then(Value::as_bool) == Some(true)
     {
         if !state.responses_terminal_sent {
-            let response_id = state
-                .message_id
-                .clone()
-                .unwrap_or_else(|| "resp_0".to_string());
+            let response_id = state.responses_response_id(state.message_id.as_deref());
             let mut out = Vec::new();
             flush_pending_responses_tool_calls(state, &response_id, true, &mut out);
             out.extend(emit_openai_responses_terminal(state, &response_id, 0, 0));
@@ -508,6 +505,23 @@ fn sanitize_public_stream_error_event(event: &mut Value) {
 
 fn sse_frame_contains_internal_artifact(frame: &[u8]) -> bool {
     contains_internal_artifact_text(String::from_utf8_lossy(frame).as_ref())
+}
+
+fn sse_frame_has_nonempty_non_done_data(frame: &[u8]) -> bool {
+    let event_str = String::from_utf8_lossy(frame);
+    let data_lines = event_str
+        .lines()
+        .filter_map(|raw_line| {
+            raw_line
+                .strip_prefix("data:")
+                .map(|data| data.strip_prefix(' ').unwrap_or(data))
+        })
+        .collect::<Vec<_>>();
+    if data_lines.is_empty() {
+        return false;
+    }
+    let data = data_lines.join("\n");
+    !data.trim().is_empty() && data != "[DONE]"
 }
 
 fn canonical_sse_frame(event_type: Option<&str>, event: &Value) -> Vec<u8> {
@@ -786,10 +800,12 @@ pub(super) fn anthropic_error_event_to_client_sse(
     match client_format {
         UpstreamFormat::OpenAiResponses => {
             state.responses_seq += 1;
-            let response_id = state
+            let fallback = state
                 .message_id
-                .clone()
+                .as_deref()
+                .map(str::to_string)
                 .unwrap_or_else(|| format!("resp_error_{}", uuid::Uuid::new_v4().simple()));
+            let response_id = state.responses_response_id(Some(&fallback));
             let failed = serde_json::json!({
                 "type": "response.failed",
                 "sequence_number": state.responses_seq,
@@ -943,6 +959,7 @@ pub struct TranslateSseStream<S, E> {
     output_queue: Vec<Vec<u8>>,
     output_pos: usize,
     close_after_output: bool,
+    capture_disqualified: bool,
     _error: std::marker::PhantomData<E>,
 }
 
@@ -962,6 +979,7 @@ impl<S, E> TranslateSseStream<S, E> {
             output_queue: Vec::new(),
             output_pos: 0,
             close_after_output: false,
+            capture_disqualified: false,
             _error: std::marker::PhantomData,
         }
     }
@@ -980,7 +998,21 @@ impl<S, E> TranslateSseStream<S, E> {
         self
     }
 
+    pub fn with_responses_response_id_override(mut self, response_id: Option<String>) -> Self {
+        self.state.responses_response_id_override = response_id;
+        self
+    }
+
+    pub fn take_terminal_response(&mut self) -> Option<Value> {
+        if self.capture_disqualified {
+            self.state.responses_terminal_response = None;
+            return None;
+        }
+        self.state.responses_terminal_response.take()
+    }
+
     fn reject_stream_resource_limit(&mut self, limit: StreamResourceLimit) {
+        self.capture_disqualified = true;
         self.output_queue.extend(reject_stream_resource_limit(
             self.client_format,
             &mut self.state,
@@ -1011,6 +1043,7 @@ impl<S, E> TranslateSseStream<S, E> {
     }
 
     fn reject_internal_artifact_frame(&mut self) {
+        self.capture_disqualified = true;
         self.output_queue.extend(reject_public_stream_tool_name(
             self.client_format,
             &mut self.state,
@@ -1034,6 +1067,9 @@ impl<S, E> TranslateSseStream<S, E> {
             }
 
             let Some(event) = event else {
+                if sse_frame_has_nonempty_non_done_data(&frame) {
+                    self.capture_disqualified = true;
+                }
                 if sse_frame_contains_internal_artifact(&frame) {
                     self.reject_internal_artifact_frame();
                     break;
@@ -1049,6 +1085,7 @@ impl<S, E> TranslateSseStream<S, E> {
             );
             self.output_queue.extend(translated);
             if self.state.fatal_rejection.is_some() {
+                self.capture_disqualified = true;
                 self.close_after_output = true;
                 break;
             }
@@ -1138,6 +1175,12 @@ where
                 }
                 Poll::Ready(None) => {
                     this.drain_translated_frames();
+                    if !this.buffer.is_empty() {
+                        if this.buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                            this.capture_disqualified = true;
+                        }
+                        this.buffer.clear();
+                    }
                     if !this.output_queue.is_empty() {
                         continue;
                     }

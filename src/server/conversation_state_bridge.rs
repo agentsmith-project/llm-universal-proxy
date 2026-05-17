@@ -88,6 +88,10 @@ impl ConversationStateBridgeStore {
         Self::default()
     }
 
+    pub(super) fn mint_response_id() -> String {
+        format!("{LOCAL_RESPONSE_ID_PREFIX}{}", Uuid::new_v4().simple())
+    }
+
     pub(super) fn owner_hash(namespace: &str, auth_context: &RequestAuthContext) -> Option<String> {
         let provider_key = auth_context.client_provider_key()?;
         let mut hasher = Sha256::new();
@@ -126,6 +130,17 @@ impl ConversationStateBridgeStore {
 
     pub(super) async fn put(
         &self,
+        entry: StoredBridgeResponse,
+        ttl: Duration,
+        max_bytes: usize,
+    ) -> Result<String, String> {
+        let id = Self::mint_response_id();
+        self.put_with_id(id, entry, ttl, max_bytes).await
+    }
+
+    pub(super) async fn put_with_id(
+        &self,
+        response_id: String,
         mut entry: StoredBridgeResponse,
         ttl: Duration,
         max_bytes: usize,
@@ -142,16 +157,20 @@ impl ConversationStateBridgeStore {
 
         let mut inner = self.inner.lock().await;
         prune_expired(&mut inner, now);
+        if inner.responses.contains_key(&response_id) {
+            return Err(format!(
+                "conversation_state_bridge response id `{response_id}` already exists"
+            ));
+        }
         if inner.current_bytes.saturating_add(entry.size_bytes) > max_bytes {
             return Err(format!(
                 "conversation_state_bridge memory limit would exceed max_bytes {max_bytes}"
             ));
         }
 
-        let id = format!("{LOCAL_RESPONSE_ID_PREFIX}{}", Uuid::new_v4().simple());
         inner.current_bytes += entry.size_bytes;
-        inner.responses.insert(id.clone(), entry);
-        Ok(id)
+        inner.responses.insert(response_id.clone(), entry);
+        Ok(response_id)
     }
 }
 

@@ -765,6 +765,9 @@ pub(super) fn emit_openai_responses_terminal(
     if let Some(ref u) = state.usage {
         resp["usage"] = openai_usage_to_responses_usage_stream(u);
     }
+    if resp.get("status").and_then(Value::as_str) == Some("completed") {
+        state.responses_terminal_response = Some(resp.clone());
+    }
     let event_type = if failed_error.is_some() {
         "response.failed"
     } else if incomplete_reason.is_some() {
@@ -1365,12 +1368,11 @@ pub(super) fn openai_chunk_to_responses_sse(
         .and_then(Value::as_u64)
         .unwrap_or(0);
 
-    let response_id = chunk
+    let upstream_response_id = chunk
         .get("id")
         .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| state.message_id.clone())
-        .unwrap_or_else(|| "resp_0".to_string());
+        .or(state.message_id.as_deref());
+    let response_id = state.responses_response_id(upstream_response_id);
 
     if !state.responses_started {
         state.responses_started = true;

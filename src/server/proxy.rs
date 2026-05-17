@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::{
@@ -11,7 +13,7 @@ use axum::{
     Extension, Json,
 };
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use serde_json::Value;
 use tracing::{debug, error, warn};
 
@@ -184,6 +186,106 @@ struct BridgeCaptureCandidate {
     request_items: Vec<Value>,
     ttl_seconds: u64,
     max_bytes: usize,
+    local_response_id: Option<String>,
+}
+
+type BridgeCommitFuture = Pin<Box<dyn Future<Output = Result<Option<String>, String>> + Send>>;
+
+struct ConversationStateBridgeCaptureStream<S, E> {
+    inner: TranslateSseStream<S, E>,
+    store: Arc<ConversationStateBridgeStore>,
+    candidate: Option<BridgeCaptureCandidate>,
+    commit: Option<BridgeCommitFuture>,
+    pending_after_commit: Option<Bytes>,
+    done: bool,
+}
+
+impl<S, E> ConversationStateBridgeCaptureStream<S, E> {
+    fn new(
+        inner: TranslateSseStream<S, E>,
+        store: Arc<ConversationStateBridgeStore>,
+        candidate: BridgeCaptureCandidate,
+    ) -> Self {
+        Self {
+            inner,
+            store,
+            candidate: Some(candidate),
+            commit: None,
+            pending_after_commit: None,
+            done: false,
+        }
+    }
+}
+
+impl<S, E> Stream for ConversationStateBridgeCaptureStream<S, E>
+where
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
+    E: Into<Box<dyn std::error::Error + Send + Sync>> + Unpin,
+{
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        loop {
+            if let Some(commit) = this.commit.as_mut() {
+                match commit.as_mut().poll(cx) {
+                    Poll::Ready(result) => {
+                        match result {
+                            Ok(Some(local_id)) => {
+                                debug!(
+                                    "conversation_state_bridge captured streaming local response id={local_id}"
+                                );
+                            }
+                            Ok(None) => {}
+                            Err(message) => {
+                                warn!("conversation_state_bridge streaming capture skipped: {message}");
+                            }
+                        }
+                        this.commit = None;
+                        let Some(bytes) = this.pending_after_commit.take() else {
+                            this.done = true;
+                            return Poll::Ready(None);
+                        };
+                        return Poll::Ready(Some(Ok(bytes)));
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+
+            if this.done {
+                return Poll::Ready(None);
+            }
+
+            match Pin::new(&mut this.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    let Some(candidate) = this.candidate.take() else {
+                        return Poll::Ready(Some(Ok(bytes)));
+                    };
+                    let Some(mut response) = this.inner.take_terminal_response() else {
+                        this.candidate = Some(candidate);
+                        return Poll::Ready(Some(Ok(bytes)));
+                    };
+                    let store = this.store.clone();
+                    this.pending_after_commit = Some(bytes);
+                    this.commit = Some(Box::pin(async move {
+                        commit_conversation_state_bridge_capture(&store, candidate, &mut response)
+                            .await
+                    }));
+                }
+                Poll::Ready(Some(Err(error))) => {
+                    this.candidate = None;
+                    this.done = true;
+                    return Poll::Ready(Some(Err(error)));
+                }
+                Poll::Ready(None) => {
+                    this.candidate = None;
+                    this.done = true;
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
 }
 
 pub(super) async fn health() -> impl IntoResponse {
@@ -1365,6 +1467,10 @@ async fn handle_request_core_with_downstream_cancellation(
         let mut body_stream: Pin<
             Box<dyn futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send>,
         > = if needs_stream_translation(upstream_format, client_format) {
+            let stream_capture_candidate = bridge_capture_candidate.clone();
+            let response_id_override = stream_capture_candidate
+                .as_ref()
+                .and_then(|candidate| candidate.local_response_id.clone());
             let translated =
                 TranslateSseStream::new(upstream_stream, upstream_format, client_format)
                     .with_resource_limits(namespace_state.config.resource_limits.clone())
@@ -1372,12 +1478,21 @@ async fn handle_request_core_with_downstream_cancellation(
                         request_scoped_tool_bridge_context
                             .as_ref()
                             .map(TrustedToolBridgeContext::to_value),
-                    );
-            Box::pin(translated.map(|r| r.map_err(std::io::Error::other)))
+                    )
+                    .with_responses_response_id_override(response_id_override);
+            if let Some(candidate) = stream_capture_candidate {
+                Box::pin(ConversationStateBridgeCaptureStream::new(
+                    translated,
+                    state.conversation_state_bridge.clone(),
+                    candidate,
+                ))
+            } else {
+                Box::pin(translated)
+            }
         } else {
             let guarded = GuardedSseStream::new(upstream_stream, client_format)
                 .with_resource_limits(namespace_state.config.resource_limits.clone());
-            Box::pin(guarded.map(|r| r.map_err(std::io::Error::other)))
+            Box::pin(guarded)
         };
         body_stream = Box::pin(RedactingSseStream::new(
             body_stream,
@@ -1775,19 +1890,16 @@ async fn prepare_conversation_state_bridge(
         return Ok(None);
     }
 
-    if stream {
-        if preloaded_response.is_some() {
-            return Err(
-                "conversation_state_bridge currently supports local `previous_response_id` replay only for non-streaming OpenAI Responses translation"
-                    .to_string(),
-            );
-        }
-        return Ok(None);
-    }
-
     let store_false = body.get("store").and_then(Value::as_bool) == Some(false);
     let store_true = body.get("store").and_then(Value::as_bool) == Some(true);
     let has_previous_response_id = body.get("previous_response_id").is_some();
+
+    if stream && preloaded_response.is_some() {
+        return Err(
+            "conversation_state_bridge currently supports local `previous_response_id` replay only for non-streaming OpenAI Responses translation"
+                .to_string(),
+        );
+    }
 
     let request_items = if let Some(previous) = preloaded_response {
         let current_items = responses_bridge_input_items_from_body(body)?;
@@ -1840,6 +1952,7 @@ async fn prepare_conversation_state_bridge(
         request_items,
         ttl_seconds: namespace_state.config.conversation_state_bridge.ttl_seconds,
         max_bytes: namespace_state.config.conversation_state_bridge.max_bytes,
+        local_response_id: stream.then(ConversationStateBridgeStore::mint_response_id),
     }))
 }
 
@@ -2314,7 +2427,7 @@ async fn commit_conversation_state_bridge_capture(
         return Ok(None);
     }
     let output_items = responses_bridge_output_items_from_response(response)?;
-    if output_items.is_empty() {
+    if output_items.is_empty() && candidate.local_response_id.is_none() {
         return Ok(None);
     }
 
@@ -2328,13 +2441,14 @@ async fn commit_conversation_state_bridge_capture(
         candidate.route_config_fingerprint,
         transcript_items,
     );
-    let local_id = store
-        .put(
-            entry,
-            Duration::from_secs(candidate.ttl_seconds),
-            candidate.max_bytes,
-        )
-        .await?;
+    let ttl = Duration::from_secs(candidate.ttl_seconds);
+    let local_id = if let Some(local_response_id) = candidate.local_response_id {
+        store
+            .put_with_id(local_response_id, entry, ttl, candidate.max_bytes)
+            .await?
+    } else {
+        store.put(entry, ttl, candidate.max_bytes).await?
+    };
     if let Some(obj) = response.as_object_mut() {
         obj.insert("id".to_string(), Value::String(local_id.clone()));
     }

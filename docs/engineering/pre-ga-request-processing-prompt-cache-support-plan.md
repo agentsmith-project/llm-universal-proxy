@@ -1,9 +1,9 @@
 # Pre-GA Request Processing and Provider Prompt-Cache Support Plan
 
-- Status: current-main status update; internal raw same-protocol forwarding is present; coarse-grained provider-native prompt-cache request-control disposition is visible in traces/hooks as `preserved_native` / `explicit_extension_mapped` / `dropped`; OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` mapping and Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` mapping are present; same-protocol wrong-target explicit extensions fail closed; usage hooks emit optional same-protocol zero-transform/native-preserved `ProviderCacheUsage` source-field telemetry for known OpenAI Chat, OpenAI Responses, and Anthropic cache usage fields
+- Status: current-main status update; internal raw same-protocol forwarding is present; coarse-grained provider-native prompt-cache request-control disposition is visible in traces/hooks as `preserved_native` / `explicit_extension_mapped` / `dropped`; OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` mapping and Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` mapping are present; same-protocol wrong-target explicit extensions fail closed; usage hooks emit optional same-protocol zero-transform/native-preserved `ProviderCacheUsage` source-field telemetry for known OpenAI Chat, OpenAI Responses, and Anthropic cache usage fields; Conversation State Bridge has delivered first-response streaming completed text capture only, while `stream:true` + `previous_response_id` still fails closed
 - Date: 2026-05-17
 - Scope: internal request processing classification, internal raw same-protocol provider forwarding optimization, provider-native prompt-cache request-control support, provider-returned cache usage observation, and request-handling simplification under the single maximum safe compatibility strategy
-- Non-scope: any `llmup`-managed cache, gateway response/result cache, semantic cache, cache storage, cache lifecycle management, cache-aware routing, broad fallback DSLs, pricing catalogs, guardrails, prompt management, admin UI expansion
+- Non-scope: any `llmup`-managed cache, gateway response/result cache, provider cache resource/lifecycle management, semantic cache, cache storage, persistence, Conversations API emulation, local retrieval, cache-aware routing, broad fallback DSLs, pricing catalogs, guardrails, prompt management, admin UI expansion
 
 ## Plan Coordination
 
@@ -379,7 +379,7 @@ Current-main delivery status:
 - Delivered slice: OpenAI-family -> Anthropic explicit extension mapping for `extra_body.anthropic.cache_control` to top-level Anthropic `cache_control`, with fail-closed validation and no `llmup` cache.
 - Delivered slice: Anthropic -> OpenAI-family explicit target-provider extension mapping for `extra_body.openai.prompt_cache_key` and optional `prompt_cache_retention`, with fail-closed validation and no `llmup` cache.
 - Delivered dependency: Conversation State Bridge route/config owner hardening is complete. Continuations re-check the current runtime/internal fingerprint before upstream dispatch and fail closed on drift; this fingerprint is not a product feature or user configuration.
-- Delivered dependency: Conversation State Bridge now supports ordinary Responses `function_call` / `function_call_output` and portable `custom_tool_call` / `custom_tool_call_output` local replay for non-streaming translated continuation. Stream capture and reasoning summary replay remain deferred.
+- Delivered dependency: Conversation State Bridge now supports ordinary Responses `function_call` / `function_call_output` and portable `custom_tool_call` / `custom_tool_call_output` local replay for non-streaming translated continuation, plus first-response streaming completed text capture. Only the first `stream:true` response can commit local replay state after the completed terminal event; later continuation still uses non-streaming replay, and `stream:true` + `previous_response_id` still fails closed. Reasoning summary replay remains deferred.
 - Pending/deferred: no prompt-cache request-control expansion is on the current handoff path. Any future mapping beyond the delivered explicit top-level extensions requires separate scope review. Do not add a policy/config surface for cache-aware routing or automatic provider cache controls.
 - Guardrail: raw same-protocol forwarding remains an internal request-processing fact. It must not be documented or handed off as a product behavior.
 
@@ -529,10 +529,11 @@ Required local tests:
 
 Recommended next order:
 
-1. Stream capture later: evaluate streaming response capture after telemetry stays stable.
-2. Reasoning summary replay later: visible summary replay remains separate from prompt-cache request-control support.
+1. Reasoning summary replay: visible summary replay remains separate from prompt-cache request-control support.
+2. Shared detector / trace cleanup: keep state/cache detector metadata consistent without adding a product configuration surface.
+3. Streaming extensions later: any streaming continuation capture is a later State Bridge extension, not the current prompt-cache handoff item.
 
-Guardrail: keep prompt-cache support limited to explicit provider-native request controls and read-only usage telemetry.
+Guardrail: keep prompt-cache support limited to explicit provider-native request controls and read-only usage telemetry. Do not add response cache, provider cache management, semantic cache, persistence, Conversations API emulation, or local retrieval.
 
 Primary code areas:
 
@@ -548,8 +549,10 @@ Primary code areas:
 ## Explicitly Out Of Scope
 
 - Gateway response cache.
+- Provider cache resource or lifecycle management.
 - Semantic cache.
 - Any `llmup` cache store, cache lookup, cache eviction, response-reuse cache key, or cache lifecycle manager.
+- Persistence, Conversations API emulation, or local retrieval.
 - Universal cache TTL or cache key schema.
 - Automatic provider cache key, marker, or breakpoint insertion. Only provider-native controls explicitly supplied by the request may be preserved or mapped.
 - Provider-owned state reconstruction for OpenAI Responses or Anthropic thinking/tool state.
