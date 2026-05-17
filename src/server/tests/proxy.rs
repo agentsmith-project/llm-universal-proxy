@@ -1768,6 +1768,72 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn debug_trace_preserved_prompt_cache_does_not_backfill_missing_target_fields() {
+    let path = std::env::temp_dir().join(format!(
+        "llmup-preserved-prompt-cache-trace-{}.jsonl",
+        uuid::Uuid::new_v4()
+    ));
+    let recorder = crate::debug_trace::DebugTraceRecorder::new(&crate::config::DebugTraceConfig {
+        path: Some(path.to_string_lossy().to_string()),
+        max_text_chars: 4096,
+    })
+    .expect("debug trace recorder");
+    let ctx = crate::debug_trace::DebugTraceContext {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        timestamp_ms: 1,
+        path: "/openai/v1/chat/completions".to_string(),
+        stream: false,
+        client_model: "gpt-4o-mini".to_string(),
+        upstream_name: "primary".to_string(),
+        upstream_model: "gpt-4o-mini".to_string(),
+        client_format: crate::formats::UpstreamFormat::OpenAiCompletion,
+        upstream_format: crate::formats::UpstreamFormat::OpenAiResponses,
+        llmup: crate::request_processing::RequestProcessingInfo {
+            request_processing:
+                crate::request_processing::RequestProcessing::RequestTransformationRequired,
+            zero_transform_forwarding_active: false,
+            state_bridge: crate::request_processing::StateBridgeModifier::Off,
+            provider_native_prompt_cache:
+                crate::request_processing::PromptCacheRequestControl::Preserved,
+        },
+    };
+    let original_body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "prompt_cache_key": "stable-prefix"
+    });
+    let upstream_body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "Hi" }] }]
+    });
+
+    recorder.record_request_with_upstream(&ctx, &original_body, &upstream_body);
+
+    let request_entries = wait_for_debug_trace_request_count(&path, 1).await;
+    let prompt_cache_detail = &request_entries[0]["request"]["prompt_cache_request_control"];
+    assert_eq!(
+        prompt_cache_detail["disposition"],
+        serde_json::json!("preserved_native"),
+        "request_entry = {:?}",
+        request_entries[0]
+    );
+    assert_eq!(
+        prompt_cache_detail["source_fields"],
+        serde_json::json!(["prompt_cache_key"]),
+        "request_entry = {:?}",
+        request_entries[0]
+    );
+    assert_eq!(
+        prompt_cache_detail["target_fields"],
+        serde_json::json!([]),
+        "preserved trace detail must reflect the actual upstream body instead of backfilling source fields: {:?}",
+        request_entries[0]
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn request_processing_observability_marks_local_state_capture_and_expansion() {
     let server_response_body = serde_json::json!({
         "id": "chatcmpl_local_state",
@@ -1909,9 +1975,21 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_map
 
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
-    for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_llmup_external_observability(&payload, "constructed", "explicit_extension_mapped");
-    }
+    assert_llmup_external_observability(&request_entry, "constructed", "explicit_extension_mapped");
+    assert_eq!(
+        request_entry["request"]["prompt_cache_request_control"],
+        serde_json::json!({
+            "target_provider": "anthropic",
+            "disposition": "explicit_extension_mapped",
+            "source_fields": ["extra_body.anthropic.cache_control"],
+            "target_fields": ["cache_control"],
+            "ttl_or_retention_source": "extra_body.anthropic.cache_control.ttl"
+        }),
+        "request_entry = {request_entry:?}"
+    );
+    let hook_payload = wait_for_hook_payload(&hook_payloads).await;
+    assert_llmup_external_observability(&hook_payload, "constructed", "explicit_extension_mapped");
+    assert_prompt_cache_request_control_detail_absent_from_hook_payload(&hook_payload);
 
     let requests = requests.lock().await;
     assert_eq!(
@@ -1982,9 +2060,31 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mappin
 
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
-    for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_llmup_external_observability(&payload, "constructed", "explicit_extension_mapped");
-    }
+    assert_llmup_external_observability(&request_entry, "constructed", "explicit_extension_mapped");
+    let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
+    assert_eq!(
+        prompt_cache_detail,
+        &serde_json::json!({
+            "target_provider": "openai_family",
+            "disposition": "explicit_extension_mapped",
+            "source_fields": [
+                "extra_body.openai.prompt_cache_key",
+                "extra_body.openai.prompt_cache_retention"
+            ],
+            "target_fields": ["prompt_cache_key", "prompt_cache_retention"],
+            "ttl_or_retention_source": "extra_body.openai.prompt_cache_retention"
+        }),
+        "request_entry = {request_entry:?}"
+    );
+    assert!(
+        !serde_json::to_string(prompt_cache_detail)
+            .expect("prompt-cache trace detail serializes")
+            .contains("stable-prefix"),
+        "prompt-cache trace detail must not contain key values: {prompt_cache_detail:?}"
+    );
+    let hook_payload = wait_for_hook_payload(&hook_payloads).await;
+    assert_llmup_external_observability(&hook_payload, "constructed", "explicit_extension_mapped");
+    assert_prompt_cache_request_control_detail_absent_from_hook_payload(&hook_payload);
 
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 1);
@@ -2083,9 +2183,26 @@ async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cach
 
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
-    for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
-        assert_llmup_external_observability(&payload, "constructed", "dropped");
-    }
+    assert_llmup_external_observability(&request_entry, "constructed", "dropped");
+    assert_eq!(
+        request_entry["request"]["prompt_cache_request_control"],
+        serde_json::json!({
+            "target_provider": "openai_family",
+            "disposition": "dropped",
+            "source_fields": [
+                "cache_control",
+                "system[].cache_control",
+                "messages[].content[].cache_control",
+                "tools[].cache_control"
+            ],
+            "target_fields": [],
+            "omitted_reason": "anthropic_cache_control_not_openai_prompt_cache_key"
+        }),
+        "request_entry = {request_entry:?}"
+    );
+    let hook_payload = wait_for_hook_payload(&hook_payloads).await;
+    assert_llmup_external_observability(&hook_payload, "constructed", "dropped");
+    assert_prompt_cache_request_control_detail_absent_from_hook_payload(&hook_payload);
 
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 1);
@@ -2096,6 +2213,108 @@ async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cach
     );
     assert!(
         requests[0].get("prompt_cache_retention").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn debug_trace_records_prompt_cache_detail_for_dropped_openai_key_to_anthropic_without_cache_control(
+) {
+    let server_response_body = serde_json::json!({
+        "id": "msg_dropped_openai_prompt_cache_key",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3",
+        "content": [{ "type": "text", "text": "ok" }],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_anthropic_messages_mock(server_response_body).await;
+    let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
+    let state = app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::Anthropic);
+    enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/chat/completions".to_string(),
+        serde_json::json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "prompt_cache_key": "stable-prefix",
+            "prompt_cache_retention": "24h",
+            "stream": false
+        }),
+        "claude-3".to_string(),
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let warnings = response
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("prompt_cache_key")),
+        "warnings = {warnings:?}"
+    );
+    let _ = response_text(response).await;
+
+    let trace = wait_for_debug_trace_response(&trace_path).await;
+    let request_entry = debug_trace_request_entry(&trace);
+    assert_llmup_external_observability(&request_entry, "constructed", "dropped");
+    let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
+    assert_eq!(
+        prompt_cache_detail,
+        &serde_json::json!({
+            "target_provider": "anthropic",
+            "disposition": "dropped",
+            "source_fields": ["prompt_cache_key", "prompt_cache_retention"],
+            "target_fields": [],
+            "ttl_or_retention_source": "prompt_cache_retention",
+            "omitted_reason": "openai_prompt_cache_key_not_anthropic_cache_control_or_breakpoint"
+        }),
+        "request_entry = {request_entry:?}"
+    );
+    assert!(
+        !serde_json::to_string(prompt_cache_detail)
+            .expect("prompt-cache trace detail serializes")
+            .contains("stable-prefix"),
+        "prompt-cache trace detail must not contain key values: {prompt_cache_detail:?}"
+    );
+    let hook_payload = wait_for_hook_payload(&hook_payloads).await;
+    assert_llmup_external_observability(&hook_payload, "constructed", "dropped");
+    assert_prompt_cache_request_control_detail_absent_from_hook_payload(&hook_payload);
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].get("prompt_cache_key").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+    assert!(
+        requests[0].get("prompt_cache_retention").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+    assert!(
+        !json_contains_key(&requests[0], "cache_control"),
         "upstream body = {:?}",
         requests[0]
     );
@@ -2661,6 +2880,30 @@ fn assert_llmup_external_observability(
         "payload = {payload:?}"
     );
     assert_eq!(llmup.len(), 2, "payload = {payload:?}");
+}
+
+fn assert_prompt_cache_request_control_detail_absent_from_hook_payload(hook_payload: &Value) {
+    assert!(
+        !json_contains_key(hook_payload, "prompt_cache_request_control"),
+        "fine-grained prompt-cache trace detail must not enter hook payload: {hook_payload:?}"
+    );
+    assert!(
+        hook_payload.get("prompt_cache_request_control").is_none(),
+        "hook payload top-level object must not contain fine-grained prompt-cache trace detail: {hook_payload:?}"
+    );
+    assert!(
+        hook_payload["llmup"]
+            .get("prompt_cache_request_control")
+            .is_none(),
+        "hook llmup object must keep only coarse provider_prompt_cache_request_control: {hook_payload:?}"
+    );
+    assert!(
+        !json_contains_key(
+            &hook_payload["request"]["body"],
+            "prompt_cache_request_control"
+        ),
+        "hook request body must not contain debug trace prompt-cache detail: {hook_payload:?}"
+    );
 }
 
 #[test]

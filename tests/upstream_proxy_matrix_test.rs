@@ -1379,6 +1379,52 @@ async fn anthropic_same_format_rejects_openai_cache_extension_without_upstream_c
 }
 
 #[tokio::test]
+async fn anthropic_same_format_rejects_openai_retention_cache_extension_without_upstream_call() {
+    let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
+    let config = fixed_format_config(&upstream_base, UpstreamFormat::Anthropic);
+    let (llmup_base, _llmup) = start_proxy(config).await;
+    let client = direct_data_client();
+    let raw_json = r#"{
+  "model": "claude-3-5-sonnet",
+  "max_tokens": 0,
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "ping" }
+      ]
+    }
+  ],
+  "extra_body": {
+    "openai": {
+      "prompt_cache_retention": "24h"
+    }
+  },
+  "temperature": 1e0
+}"#;
+
+    let response = post_raw_json(
+        &client,
+        format!("{llmup_base}/anthropic/v1/messages"),
+        raw_json,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body_text = response.text().await.unwrap();
+    assert!(
+        body_text.contains("extra_body.openai"),
+        "body = {body_text}"
+    );
+    assert!(body_text.contains("target OpenAI"), "body = {body_text}");
+    assert!(
+        captured_upstream.snapshot().is_empty(),
+        "bad prompt-cache extension should fail before upstream call: {:?}",
+        captured_upstream.snapshot()
+    );
+}
+
+#[tokio::test]
 async fn anthropic_same_format_eligible_request_forwards_exact_raw_body_bytes() {
     let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
     let config = fixed_format_config(&upstream_base, UpstreamFormat::Anthropic);

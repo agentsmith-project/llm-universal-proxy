@@ -14,7 +14,12 @@ use tracing::warn;
 
 use crate::config::DebugTraceConfig;
 use crate::formats::UpstreamFormat;
-use crate::request_processing::RequestProcessingInfo;
+use crate::prompt_cache_controls::{
+    anthropic_extra_body_openai_prompt_cache_controls,
+    anthropic_extra_body_openai_prompt_cache_key_present, anthropic_protocol_cache_control_present,
+    openai_extra_body_anthropic_cache_control, openai_family_prompt_cache_top_level_fields_present,
+};
+use crate::request_processing::{PromptCacheRequestControl, RequestProcessingInfo};
 use crate::stream_observation::StreamObservationTransform;
 use crate::streaming::take_one_sse_event;
 
@@ -362,6 +367,10 @@ impl DebugTraceRecorder {
     }
 
     pub fn record_request(&self, ctx: &DebugTraceContext, body: &Value) {
+        let mut request = json!({
+            "new_items": extract_request_delta(ctx.client_format, body, self.max_text_chars)
+        });
+        insert_prompt_cache_request_control(&mut request, ctx, body, body);
         self.write_entry(json!({
             "timestamp_ms": ctx.timestamp_ms,
             "request_id": ctx.request_id,
@@ -374,9 +383,7 @@ impl DebugTraceRecorder {
             "upstream_name": ctx.upstream_name,
             "upstream_model": ctx.upstream_model,
             "llmup": ctx.llmup,
-            "request": {
-                "new_items": extract_request_delta(ctx.client_format, body, self.max_text_chars)
-            }
+            "request": request
         }));
     }
 
@@ -386,6 +393,12 @@ impl DebugTraceRecorder {
         original_body: &Value,
         upstream_body: &Value,
     ) {
+        let mut request = json!({
+            "new_items": extract_request_delta(ctx.client_format, original_body, self.max_text_chars),
+            "client_summary": summarize_request_body(ctx.client_format, original_body, self.max_text_chars),
+            "upstream_summary": summarize_request_body(ctx.upstream_format, upstream_body, self.max_text_chars)
+        });
+        insert_prompt_cache_request_control(&mut request, ctx, original_body, upstream_body);
         self.write_entry(json!({
             "timestamp_ms": ctx.timestamp_ms,
             "request_id": ctx.request_id,
@@ -398,11 +411,7 @@ impl DebugTraceRecorder {
             "upstream_name": ctx.upstream_name,
             "upstream_model": ctx.upstream_model,
             "llmup": ctx.llmup,
-            "request": {
-                "new_items": extract_request_delta(ctx.client_format, original_body, self.max_text_chars),
-                "client_summary": summarize_request_body(ctx.client_format, original_body, self.max_text_chars),
-                "upstream_summary": summarize_request_body(ctx.upstream_format, upstream_body, self.max_text_chars)
-            }
+            "request": request
         }));
     }
 
@@ -732,6 +741,350 @@ fn anthropic_protocol_terminal(
         }
         _ => None,
     }
+}
+
+fn insert_prompt_cache_request_control(
+    request: &mut Value,
+    ctx: &DebugTraceContext,
+    original_body: &Value,
+    upstream_body: &Value,
+) {
+    let Some(detail) = prompt_cache_request_control_detail(ctx, original_body, upstream_body)
+    else {
+        return;
+    };
+    if let Some(object) = request.as_object_mut() {
+        object.insert("prompt_cache_request_control".to_string(), detail);
+    }
+}
+
+fn prompt_cache_request_control_detail(
+    ctx: &DebugTraceContext,
+    original_body: &Value,
+    upstream_body: &Value,
+) -> Option<Value> {
+    match ctx.llmup.provider_native_prompt_cache {
+        PromptCacheRequestControl::None => None,
+        PromptCacheRequestControl::ExplicitExtensionMapped => {
+            prompt_cache_explicit_mapping_detail(ctx, original_body, upstream_body)
+        }
+        PromptCacheRequestControl::Dropped => prompt_cache_dropped_detail(ctx, original_body),
+        PromptCacheRequestControl::Preserved => {
+            prompt_cache_preserved_detail(ctx, original_body, upstream_body)
+        }
+    }
+}
+
+fn prompt_cache_explicit_mapping_detail(
+    ctx: &DebugTraceContext,
+    original_body: &Value,
+    upstream_body: &Value,
+) -> Option<Value> {
+    if openai_family_format(ctx.client_format)
+        && ctx.upstream_format == UpstreamFormat::Anthropic
+        && openai_extra_body_anthropic_cache_control(original_body).is_some()
+    {
+        return prompt_cache_detail_value(
+            ctx,
+            vec!["extra_body.anthropic.cache_control"],
+            anthropic_top_level_cache_control_field(upstream_body),
+            openai_extra_body_anthropic_cache_control_ttl_source(original_body),
+            None,
+        );
+    }
+
+    if ctx.client_format == UpstreamFormat::Anthropic
+        && openai_family_format(ctx.upstream_format)
+        && anthropic_extra_body_openai_prompt_cache_key_present(original_body)
+    {
+        return prompt_cache_detail_value(
+            ctx,
+            anthropic_extra_body_openai_prompt_cache_fields(original_body),
+            openai_family_top_level_prompt_cache_fields(upstream_body),
+            anthropic_extra_body_openai_retention_source(original_body),
+            None,
+        );
+    }
+
+    None
+}
+
+fn prompt_cache_dropped_detail(ctx: &DebugTraceContext, original_body: &Value) -> Option<Value> {
+    if openai_family_format(ctx.client_format)
+        && ctx.upstream_format == UpstreamFormat::Anthropic
+        && openai_family_prompt_cache_top_level_fields_present(original_body)
+    {
+        return prompt_cache_detail_value(
+            ctx,
+            openai_family_top_level_prompt_cache_fields(original_body),
+            Vec::new(),
+            openai_family_prompt_cache_retention_source(original_body),
+            Some("openai_prompt_cache_key_not_anthropic_cache_control_or_breakpoint"),
+        );
+    }
+
+    if ctx.client_format == UpstreamFormat::Anthropic
+        && openai_family_format(ctx.upstream_format)
+        && anthropic_protocol_cache_control_present(original_body)
+    {
+        return prompt_cache_detail_value(
+            ctx,
+            anthropic_protocol_cache_control_fields(original_body),
+            Vec::new(),
+            anthropic_protocol_cache_control_ttl_source(original_body),
+            Some("anthropic_cache_control_not_openai_prompt_cache_key"),
+        );
+    }
+
+    None
+}
+
+fn prompt_cache_preserved_detail(
+    ctx: &DebugTraceContext,
+    original_body: &Value,
+    upstream_body: &Value,
+) -> Option<Value> {
+    if openai_family_format(ctx.client_format)
+        && openai_family_format(ctx.upstream_format)
+        && openai_family_prompt_cache_top_level_fields_present(original_body)
+    {
+        let source_fields = openai_family_top_level_prompt_cache_fields(original_body);
+        return prompt_cache_detail_value(
+            ctx,
+            source_fields,
+            openai_family_top_level_prompt_cache_fields(upstream_body),
+            openai_family_prompt_cache_retention_source(original_body),
+            None,
+        );
+    }
+
+    if ctx.client_format == UpstreamFormat::Anthropic
+        && ctx.upstream_format == UpstreamFormat::Anthropic
+        && anthropic_protocol_cache_control_present(original_body)
+    {
+        let source_fields = anthropic_protocol_cache_control_fields(original_body);
+        return prompt_cache_detail_value(
+            ctx,
+            source_fields,
+            anthropic_protocol_cache_control_fields(upstream_body),
+            anthropic_protocol_cache_control_ttl_source(original_body),
+            None,
+        );
+    }
+
+    None
+}
+
+fn prompt_cache_detail_value(
+    ctx: &DebugTraceContext,
+    source_fields: Vec<&'static str>,
+    target_fields: Vec<&'static str>,
+    ttl_or_retention_source: Option<&'static str>,
+    omitted_reason: Option<&'static str>,
+) -> Option<Value> {
+    if source_fields.is_empty() {
+        return None;
+    }
+
+    let mut detail = json!({
+        "target_provider": prompt_cache_target_provider(ctx.upstream_format),
+        "disposition": ctx.llmup.provider_native_prompt_cache,
+        "source_fields": source_fields,
+        "target_fields": target_fields,
+    });
+    if let Some(object) = detail.as_object_mut() {
+        if let Some(source) = ttl_or_retention_source {
+            object.insert(
+                "ttl_or_retention_source".to_string(),
+                Value::String(source.to_string()),
+            );
+        }
+        if let Some(reason) = omitted_reason {
+            object.insert(
+                "omitted_reason".to_string(),
+                Value::String(reason.to_string()),
+            );
+        }
+    }
+    Some(detail)
+}
+
+fn prompt_cache_target_provider(format: UpstreamFormat) -> &'static str {
+    match format {
+        UpstreamFormat::Anthropic => "anthropic",
+        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => "openai_family",
+    }
+}
+
+fn openai_family_format(format: UpstreamFormat) -> bool {
+    matches!(
+        format,
+        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
+    )
+}
+
+fn openai_family_top_level_prompt_cache_fields(body: &Value) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if body.get("prompt_cache_key").is_some() {
+        fields.push("prompt_cache_key");
+    }
+    if body.get("prompt_cache_retention").is_some() {
+        fields.push("prompt_cache_retention");
+    }
+    fields
+}
+
+fn openai_family_prompt_cache_retention_source(body: &Value) -> Option<&'static str> {
+    body.get("prompt_cache_retention")
+        .is_some()
+        .then_some("prompt_cache_retention")
+}
+
+fn anthropic_top_level_cache_control_field(body: &Value) -> Vec<&'static str> {
+    if body.get("cache_control").is_some() {
+        vec!["cache_control"]
+    } else {
+        Vec::new()
+    }
+}
+
+fn openai_extra_body_anthropic_cache_control_ttl_source(body: &Value) -> Option<&'static str> {
+    openai_extra_body_anthropic_cache_control(body)?
+        .get("ttl")
+        .is_some()
+        .then_some("extra_body.anthropic.cache_control.ttl")
+}
+
+fn anthropic_extra_body_openai_prompt_cache_fields(body: &Value) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if let Some(openai) = anthropic_extra_body_openai_prompt_cache_controls(body) {
+        if openai.get("prompt_cache_key").is_some() {
+            fields.push("extra_body.openai.prompt_cache_key");
+        }
+        if openai.get("prompt_cache_retention").is_some() {
+            fields.push("extra_body.openai.prompt_cache_retention");
+        }
+    }
+    fields
+}
+
+fn anthropic_extra_body_openai_retention_source(body: &Value) -> Option<&'static str> {
+    anthropic_extra_body_openai_prompt_cache_controls(body)?
+        .get("prompt_cache_retention")
+        .is_some()
+        .then_some("extra_body.openai.prompt_cache_retention")
+}
+
+fn anthropic_protocol_cache_control_fields(body: &Value) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if body.get("cache_control").is_some() {
+        fields.push("cache_control");
+    }
+    if body
+        .get("system")
+        .is_some_and(anthropic_system_cache_control_present)
+    {
+        fields.push(anthropic_system_cache_control_field(body.get("system")));
+    }
+    if body
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|messages| messages.iter().any(anthropic_message_cache_control_present))
+    {
+        fields.push("messages[].content[].cache_control");
+    }
+    if body
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| tools.iter().any(anthropic_block_cache_control_present))
+    {
+        fields.push("tools[].cache_control");
+    }
+    fields
+}
+
+fn anthropic_system_cache_control_field(system: Option<&Value>) -> &'static str {
+    match system {
+        Some(Value::Object(_)) => "system.cache_control",
+        _ => "system[].cache_control",
+    }
+}
+
+fn anthropic_system_cache_control_present(system: &Value) -> bool {
+    match system {
+        Value::Array(blocks) => blocks.iter().any(anthropic_block_cache_control_present),
+        Value::Object(_) => anthropic_block_cache_control_present(system),
+        _ => false,
+    }
+}
+
+fn anthropic_message_cache_control_present(message: &Value) -> bool {
+    message
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| blocks.iter().any(anthropic_block_cache_control_present))
+}
+
+fn anthropic_block_cache_control_present(block: &Value) -> bool {
+    block.get("cache_control").is_some()
+}
+
+fn anthropic_protocol_cache_control_ttl_source(body: &Value) -> Option<&'static str> {
+    if body
+        .get("cache_control")
+        .and_then(|cache_control| cache_control.get("ttl"))
+        .is_some()
+    {
+        return Some("cache_control.ttl");
+    }
+    if let Some(source) = anthropic_system_cache_control_ttl_source(body.get("system")) {
+        return Some(source);
+    }
+    if body
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|blocks| {
+                        blocks.iter().any(anthropic_block_cache_control_ttl_present)
+                    })
+            })
+        })
+    {
+        return Some("messages[].content[].cache_control.ttl");
+    }
+    if body
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| tools.iter().any(anthropic_block_cache_control_ttl_present))
+    {
+        return Some("tools[].cache_control.ttl");
+    }
+    None
+}
+
+fn anthropic_system_cache_control_ttl_source(system: Option<&Value>) -> Option<&'static str> {
+    match system {
+        Some(Value::Array(blocks))
+            if blocks.iter().any(anthropic_block_cache_control_ttl_present) =>
+        {
+            Some("system[].cache_control.ttl")
+        }
+        Some(Value::Object(_)) if system.is_some_and(anthropic_block_cache_control_ttl_present) => {
+            Some("system.cache_control.ttl")
+        }
+        _ => None,
+    }
+}
+
+fn anthropic_block_cache_control_ttl_present(block: &Value) -> bool {
+    block
+        .get("cache_control")
+        .and_then(|cache_control| cache_control.get("ttl"))
+        .is_some()
 }
 
 fn extract_request_delta(format: UpstreamFormat, body: &Value, max_text_chars: usize) -> Value {

@@ -177,6 +177,26 @@ class ProtocolDocsContractTests(unittest.TestCase):
             cache_baseline,
         )
 
+    def test_prompt_cache_field_mapping_matrix_documents_guardrails(self):
+        text = read_doc("docs/protocol-baselines/matrices/field-mapping-matrix.md")
+        row = table_row(text, "Prompt-cache control")
+
+        for snippet in (
+            "Same-wire preserve only",
+            "Documented explicit mapping",
+            "Warn and omit non-portable detail",
+            "Fail closed",
+            "not an `llmup` cache",
+            "extra_body.anthropic.cache_control",
+            "extra_body.openai.prompt_cache_key",
+            "prompt_cache_retention",
+            "not synthesized",
+            "wrong-target explicit extensions fail closed",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, row)
+        self.assertNotIn("Same-wire preserve only / Fail closed", row)
+
     def test_constitution_records_single_goal_and_narrow_state_exception(self):
         text = read_doc("docs/CONSTITUTION.md")
 
