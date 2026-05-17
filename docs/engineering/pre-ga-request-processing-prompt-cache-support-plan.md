@@ -406,6 +406,7 @@ Current-main delivery status:
 
 - Delivered: Phase 0/1 request-processing contract and observability, Phase 2/3 raw same-protocol forwarding for eligible non-mutating paths, and Phase 5 provider cache usage observation.
 - Delivered slice: Responses stateful-control detector enabled-semantics alignment for `background` / `store`; `background:false|null` and `store:false|null` no longer trigger provider-owned stateful fail-closed, while enabled/present controls still fail closed.
+- Delivered dependency: Conversation State Bridge route/config owner hardening is complete. Continuations re-check the current runtime/internal fingerprint before upstream dispatch and fail closed on drift; this fingerprint is not a product feature or user configuration.
 - Pending: Phase 4 explicit translated prompt-cache request-control support and future reviewed `auto_safe` synthesis. Do not add a policy/config surface for synthesized request controls.
 - Guardrail: raw same-protocol forwarding remains an internal request-processing fact. It must not be documented or handed off as a product behavior.
 
@@ -567,12 +568,12 @@ Routing-affinity tests are intentionally absent from the required local matrix. 
 
 Recommended next order:
 
-1. Route/config owner hardening next: finish state-bridge route/config ownership checks before adding new prompt-cache synthesis behavior.
-2. Prompt-cache explicit support after that: add explicit translated provider-native request-control support only after owner behavior is stable.
-3. Tool/stream replay later: keep tool/custom tool replay and stream capture behind the state-bridge follow-up work.
-4. Keep `auto_safe` synthesis behind a later policy review with trace-visible deterministic inputs.
+1. Prompt-cache explicit support next: add explicit translated provider-native request-control support on top of the delivered state-bridge owner hardening.
+2. Tool/custom tool replay later: keep function/custom tool replay behind the prompt-cache explicit-support work.
+3. Stream capture later: keep streaming response capture behind tool/custom tool replay.
+4. Keep `auto_safe` synthesis behind a later policy review with trace-visible deterministic inputs and no user/operator mode.
 
-Deferred: review narrow routing-affinity only after state-bridge route consistency and basic provider prompt-cache request controls are complete.
+Deferred: review narrow routing-affinity only after basic provider prompt-cache request controls are complete.
 
 Primary code areas:
 

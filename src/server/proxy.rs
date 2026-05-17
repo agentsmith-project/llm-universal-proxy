@@ -36,7 +36,8 @@ use crate::upstream;
 
 use super::body_limits::{read_limited_json_request, JsonRequestBody};
 use super::conversation_state_bridge::{
-    ConversationStateBridgeStore, StoredBridgeResponse, LOCAL_RESPONSE_ID_PREFIX,
+    BridgeRouteConfigFingerprint, ConversationStateBridgeStore, StoredBridgeResponse,
+    LOCAL_REPLAY_SCHEMA_VERSION, LOCAL_RESPONSE_ID_PREFIX,
 };
 use super::data_auth::{self, RequestAuthContext};
 use super::errors::{
@@ -179,6 +180,7 @@ struct BridgeCaptureCandidate {
     owner_hash: String,
     client_model: String,
     resolved_model: ResolvedModel,
+    route_config_fingerprint: BridgeRouteConfigFingerprint,
     request_items: Vec<Value>,
     ttl_seconds: u64,
     max_bytes: usize,
@@ -758,28 +760,6 @@ async fn handle_request_core_with_downstream_cancellation(
             Ok(entry) => {
                 if requested_model.trim().is_empty() {
                     requested_model = entry.client_model.clone();
-                } else {
-                    match namespace_state.config.resolve_model(&requested_model) {
-                        Ok(explicit) if explicit == entry.resolved_model => {}
-                        Ok(_) => {
-                            tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
-                            return redacted_error_response(
-                                client_format,
-                                StatusCode::BAD_REQUEST,
-                                "Responses `previous_response_id` was created for a different routed model",
-                                &request_redactor,
-                            );
-                        }
-                        Err(message) => {
-                            tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
-                            return redacted_error_response(
-                                client_format,
-                                StatusCode::BAD_REQUEST,
-                                &message,
-                                &request_redactor,
-                            );
-                        }
-                    }
                 }
                 Some(entry)
             }
@@ -797,7 +777,13 @@ async fn handle_request_core_with_downstream_cancellation(
         None
     };
 
-    let resolved_model = if let Some(entry) = preloaded_bridge_response.as_ref() {
+    let reusable_model_less_bridge_route = preloaded_bridge_response.as_ref().filter(|entry| {
+        requested_model.trim().is_empty()
+            && entry.client_model.trim().is_empty()
+            && entry.route_config_fingerprint.schema_version == LOCAL_REPLAY_SCHEMA_VERSION
+            && entry.route_config_fingerprint.namespace_revision == namespace_state.revision
+    });
+    let resolved_model = if let Some(entry) = reusable_model_less_bridge_route {
         entry.resolved_model.clone()
     } else {
         match resolve_request_model_or_error(
@@ -809,15 +795,34 @@ async fn handle_request_core_with_downstream_cancellation(
             Ok(v) => v,
             Err(e) => {
                 tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
+                let message = if preloaded_bridge_response.is_some() {
+                    conversation_state_bridge_route_config_changed_error()
+                } else {
+                    e.as_str()
+                };
                 return redacted_error_response(
                     client_format,
                     StatusCode::BAD_REQUEST,
-                    &e,
+                    message,
                     &request_redactor,
                 );
             }
         }
     };
+    if let Some(entry) = preloaded_bridge_response.as_ref() {
+        if entry.route_config_fingerprint.schema_version != LOCAL_REPLAY_SCHEMA_VERSION
+            || entry.route_config_fingerprint.namespace_revision != namespace_state.revision
+            || entry.resolved_model != resolved_model
+        {
+            tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
+            return redacted_error_response(
+                client_format,
+                StatusCode::BAD_REQUEST,
+                conversation_state_bridge_route_config_changed_error(),
+                &request_redactor,
+            );
+        }
+    }
     let upstream_state = match namespace_state.upstreams.get(&resolved_model.upstream_name) {
         Some(v) => v,
         None => {
@@ -885,6 +890,23 @@ async fn handle_request_core_with_downstream_cancellation(
             &request_redactor,
         );
     }
+    let bridge_route_config_fingerprint = conversation_state_bridge_route_config_fingerprint(
+        &namespace_state,
+        &resolved_model,
+        upstream_format,
+        &request_translation_policy,
+    );
+    if let Some(entry) = preloaded_bridge_response.as_ref() {
+        if entry.route_config_fingerprint != bridge_route_config_fingerprint {
+            tracker.finish_error(StatusCode::BAD_REQUEST.as_u16());
+            return redacted_error_response(
+                client_format,
+                StatusCode::BAD_REQUEST,
+                conversation_state_bridge_route_config_changed_error(),
+                &request_redactor,
+            );
+        }
+    }
     if let Some(obj) = body.as_object_mut() {
         if let Some(forced_stream) = forced_stream {
             obj.insert("stream".to_string(), Value::Bool(forced_stream));
@@ -901,6 +923,7 @@ async fn handle_request_core_with_downstream_cancellation(
         stream,
         &requested_model,
         &resolved_model,
+        bridge_route_config_fingerprint,
         preloaded_bridge_response,
         &mut body,
     )
@@ -1738,6 +1761,7 @@ async fn prepare_conversation_state_bridge(
     stream: bool,
     requested_model: &str,
     resolved_model: &ResolvedModel,
+    route_config_fingerprint: BridgeRouteConfigFingerprint,
     preloaded_response: Option<StoredBridgeResponse>,
     body: &mut Value,
 ) -> Result<Option<BridgeCaptureCandidate>, String> {
@@ -1798,6 +1822,7 @@ async fn prepare_conversation_state_bridge(
         owner_hash: owner_hash.to_string(),
         client_model: requested_model.to_string(),
         resolved_model: resolved_model.clone(),
+        route_config_fingerprint,
         request_items,
         ttl_seconds: namespace_state.config.conversation_state_bridge.ttl_seconds,
         max_bytes: namespace_state.config.conversation_state_bridge.max_bytes,
@@ -1807,6 +1832,24 @@ async fn prepare_conversation_state_bridge(
 fn conversation_state_bridge_owner_isolation_error() -> String {
     "conversation_state_bridge memory mode requires client-provider-key data auth to isolate local response owners"
         .to_string()
+}
+
+fn conversation_state_bridge_route_config_changed_error() -> &'static str {
+    "conversation_state_bridge replay failed closed because route/config owner/config changed for this local previous_response_id"
+}
+
+fn conversation_state_bridge_route_config_fingerprint(
+    namespace_state: &RuntimeNamespaceState,
+    resolved_model: &ResolvedModel,
+    upstream_format: UpstreamFormat,
+    request_translation_policy: &RequestTranslationPolicy,
+) -> BridgeRouteConfigFingerprint {
+    BridgeRouteConfigFingerprint::new(
+        namespace_state.revision.clone(),
+        resolved_model.clone(),
+        upstream_format,
+        request_translation_policy.surface.clone(),
+    )
 }
 
 fn remove_local_bridge_state_controls(body: &mut Value) {
@@ -1934,6 +1977,7 @@ async fn commit_conversation_state_bridge_capture(
         candidate.owner_hash,
         candidate.client_model,
         candidate.resolved_model,
+        candidate.route_config_fingerprint,
         transcript_items,
     );
     let local_id = store

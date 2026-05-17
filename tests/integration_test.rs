@@ -4552,6 +4552,238 @@ async fn conversation_state_bridge_replays_text_history_to_anthropic_upstream() 
 }
 
 #[tokio::test]
+async fn conversation_state_bridge_replays_model_less_single_upstream_history() {
+    let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
+    let config = bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "input": "First",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "bridge should return an llmup-owned response id, body = {first_body:?}"
+    );
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(second.status().is_success(), "status: {}", second.status());
+
+    let requests = captured.wait_for_count(2, Duration::from_secs(1)).await;
+    assert_eq!(requests.len(), 2, "captured = {requests:?}");
+    let replay = &requests[1].body;
+    let messages = replay["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "replay = {replay:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["text"], "First");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][0]["text"], "OK");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["text"], "Second");
+    assert!(replay.get("previous_response_id").is_none());
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_route_config_drift_fails_closed_before_dispatch() {
+    let (initial_base, _initial_mock, initial_captured) =
+        spawn_asserting_anthropic_mock(|_| Ok(())).await;
+    let (updated_base, _updated_mock, updated_captured) =
+        spawn_asserting_anthropic_mock(|_| Ok(())).await;
+    let config =
+        bridge_memory_proxy_config(&initial_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "First",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(
+        local_id.starts_with("resp_llmup_"),
+        "bridge should return an llmup-owned response id, body = {first_body:?}"
+    );
+
+    let state: Value = client
+        .get(format!("{proxy_base}/admin/namespaces/default/state"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let revision = state["revision"].as_str().unwrap().to_string();
+    let updated_config =
+        bridge_memory_proxy_config(&updated_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    let update = client
+        .post(format!("{proxy_base}/admin/namespaces/default/config"))
+        .json(&json!({
+            "if_revision": revision,
+            "config": RuntimeConfigPayload::from(&updated_config),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("conversation_state_bridge"),
+        "message = {message}"
+    );
+    assert!(
+        message.contains("route/config") && message.contains("changed"),
+        "message = {message}"
+    );
+    assert_eq!(
+        initial_captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+    assert_eq!(
+        updated_captured
+            .wait_for_count(1, Duration::from_millis(200))
+            .await
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_model_less_continuation_respects_current_route_config() {
+    let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
+    let mut config =
+        bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    config.model_aliases.insert(
+        "friendly".to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: "GLM-5".to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "friendly",
+            "input": "First",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"));
+
+    let state: Value = client
+        .get(format!("{proxy_base}/admin/namespaces/default/state"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let revision = state["revision"].as_str().unwrap().to_string();
+    let mut updated_config =
+        bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    updated_config.model_aliases.insert(
+        "friendly".to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: "GLM-5-new".to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
+    let update = client
+        .post(format!("{proxy_base}/admin/namespaces/default/config"))
+        .json(&json!({
+            "if_revision": revision,
+            "config": RuntimeConfigPayload::from(&updated_config),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "previous_response_id": local_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("conversation_state_bridge"),
+        "message = {message}"
+    );
+    assert!(
+        message.contains("route/config") && message.contains("changed"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn conversation_state_bridge_store_false_does_not_save_replay_state() {
     let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
     let config = bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);

@@ -38,9 +38,9 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 当前 handoff 顺序：
 
 1. Current slice delivered：已完成 Responses stateful-control detector 的 `background` / `store` enabled-semantics alignment / translation-boundary unification slice。
-2. Route/config owner hardening next：状态桥 continuation 先补齐 route/config owner 边界。
-3. Prompt-cache explicit support after：在 3 协议矩阵上做 explicit provider-native prompt-cache request-control support。
-4. Tool/stream replay later；`auto_safe` synthesis 和 routing-affinity 继续延后评审。
+2. Route/config owner hardening delivered：状态桥 continuation 已用内部 route/config fingerprint 和 namespace revision 做当前 runtime 复校验，drift 在 upstream dispatch 前 400 fail closed；fingerprint 不是用户配置或产品功能。
+3. Prompt-cache explicit support next：在 3 协议矩阵上做 explicit provider-native prompt-cache request-control support。
+4. Tool/custom tool replay 和 stream capture later；`auto_safe` synthesis 和 routing-affinity 继续延后评审。
 
 如果必须完全并行开发，其他两个 workstream 必须把所有 Gemini 相关改动视为 remove-native-gemini workstream 的独占范围，不再添加新的 Gemini cache/state 测试或 helper。
 

@@ -1,6 +1,6 @@
 # Pre-GA Conversation State Bridge 工作计划
 
-- 状态：current-main status update；text-only memory MVP 已实现，route/config owner hardening、tool/custom tool replay、stream capture、细粒度 trace metadata 仍待完成
+- 状态：current-main status update；text-only memory MVP 和 route/config owner hardening 已实现，tool/custom tool replay、stream capture、细粒度 trace metadata 仍待完成
 - 日期：2026-05-16
 - 范围：为 `llmup` 增加显式配置的纯内存会话状态桥，用于把使用状态型接口的客户端转换到无状态 provider 协议
 - 非范围：LLM 响应缓存、语义缓存、跨进程持久化数据库、provider 私有 opaque state 反解、默认无配置保存用户数据、后台任务队列产品化、提示词管理产品
@@ -63,7 +63,7 @@ OpenAI Responses 和 Conversations 是状态型接口。官方文档描述了两
 
 Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript replay。客户端或 SDK 通常需要在每次请求里带上完整历史。
 
-当前 `llmup` 支持 OpenAI Responses 请求转换到 Chat/Anthropic，并已为非流式 text-only `previous_response_id` continuation 增加本地内存展开。Native Gemini 已不是 active runtime surface；Gemini 品牌只能作为 OpenAI-compatible upstream 走 OpenAI Chat wire protocol。外部 provider `resp_*` / `conv_*` 仍不能导入；未知本地 ID、过期 ID、owner mismatch 继续 fail closed。首轮 `store:false` 请求仍会调用上游，但不保存本地状态；之后如果 client 试图用对应历史继续 replay，会因为没有本地状态而 fail closed。
+当前 `llmup` 支持 OpenAI Responses 请求转换到 Chat/Anthropic，并已为非流式 text-only `previous_response_id` continuation 增加本地内存展开和 route/config owner hardening。Native Gemini 已不是 active runtime surface；Gemini 品牌只能作为 OpenAI-compatible upstream 走 OpenAI Chat wire protocol。外部 provider `resp_*` / `conv_*` 仍不能导入；未知本地 ID、过期 ID、owner mismatch、route/config drift 继续 fail closed。首轮 `store:false` 请求仍会调用上游，但不保存本地状态；之后如果 client 试图用对应历史继续 replay，会因为没有本地状态而 fail closed。
 
 ## 当前 Codebase 判断
 
@@ -78,12 +78,13 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 - `store:false` 首轮仍调用上游但不保存本地状态；未知/过期/owner mismatch 本地 ID fail closed。
 - native OpenAI Responses forwarding 保留 provider ID，不导入本地状态。
 - `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice 已完成：`background:false|null` 和 `store:false|null` 不再触发 provider-owned stateful fail-closed，`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。
+- route/config owner hardening 已完成：StoredBridgeResponse 保存内部 route/config fingerprint；continuation 在 upstream dispatch 前按当前 runtime/fingerprint 重新校验，drift 时 400 fail closed；无 `model` 的 single-upstream replay 在配置未变时仍成功。
+- namespace revision 采用保守绑定：配置更新会让旧 local state fail closed。这是安全取舍，不做迁移、持久化或 fallback；fingerprint 只是内部保护，不是产品功能或用户配置。
 - 文档和测试已经锁定“provider-owned state 不重建”的现有行为。
 
 仍未完成：
 
 - remaining detector work：如需继续提 detector，只限共享 helper、细粒度 trace metadata、以及其它 consolidation，不再把 enabled-semantics 小切片列为下一步。
-- route/config owner hardening：当前已有 namespace / client-provider-key owner hash 和基本 routed model 检查，但还没有完整 route config hash / namespace revision / translation surface owner hardening。
 - proxy-key / trusted tenant policy 下的 owner 隔离策略仍未产品化；当前 memory bridge 依赖 client-provider-key owner hash。
 - tool call、custom tool call、tool output、visible reasoning summary replay 尚未实现。
 - streaming response capture 尚未实现；当前 memory bridge 只支持非流式 text-only replay。
@@ -381,13 +382,15 @@ Post-MVP 支持：
 
 - State owner 至少包含 namespace 和认证主体 hash。
 - client-provider-key 模式下，认证主体可以由下游 provider key 的安全 hash 派生。
+- continuation owner 绑定当前 runtime 中的 route/config fingerprint 与 namespace revision；配置 drift 在 upstream dispatch 前 400 fail closed。
+- 无 `model` 的 single-upstream continuation 在 route/config 未变时可继续 replay。
 - store lookup 只有四种结果：命中、未找到、过期、owner mismatch。除命中外都 fail closed。
 - debug trace / hook 不应记录 prompt 内容。
 
 仍需补强：
 
-- proxy-key 模式下不能只靠共享 proxy key 隐式区分用户。初版要么要求 route 明确声明单租户，要么配置一个可信 tenant header/policy 并把它纳入 owner；否则启用内存状态桥的 route 应 fail closed。
-- continuation route owner 必须匹配上一次保存的 upstream name / target format / target model / translation contract surface / namespace revision 或 route config hash。配置变更后默认 fail closed；只有显式 route policy 才允许继续或迁移。后续 routing-affinity、fallback 或负载均衡不能改写 replay chain，除非 route policy 显式允许并记录 trace。
+- proxy-key / trusted tenant policy 仍不产品化，本轮不新增用户配置。
+- route/config fingerprint 不对外暴露为产品功能；配置更新即旧 local state fail closed，不做迁移、持久化或 fallback。
 - debug trace 需要补齐状态 ID、展开条数和 fail reason 等细粒度 metadata。
 
 内存保护：
@@ -409,8 +412,9 @@ Current-main delivery status:
 
 - Delivered: Phase 0/1/2 的配置、内存 store、`resp_llmup_*`、TTL/max_bytes、owner hash、非流式 text-only capture/replay。
 - Delivered slice: Phase 5 中的 `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice。
-- Pending next: route/config owner hardening，然后再做 prompt-cache explicit support 的集成。
-- Later: shared detector helper / 细粒度 trace metadata consolidation，以及 Phase 3 tool/custom tool replay、Phase 4 stream capture、reasoning summary replay。
+- Delivered slice: route/config owner hardening，包括内部 route/config fingerprint、当前 runtime 复校验、drift pre-dispatch 400 fail closed，以及未变配置下的 no-model single-upstream replay。
+- Pending next: prompt-cache explicit support 的集成。
+- Later: Phase 3 tool/custom tool replay、Phase 4 stream capture、reasoning summary replay，以及 shared detector helper / 细粒度 trace metadata consolidation。
 
 ### Phase 0：合同冻结与文档更新
 
@@ -545,9 +549,9 @@ Post-MVP 覆盖：
 
 推荐下一步顺序：
 
-1. Route/config owner hardening next：补齐 route config hash / namespace revision / translation surface owner 检查和 proxy-key/tenant owner policy。
-2. Prompt-cache explicit support after：在状态展开与 owner 绑定稳定后，再接入 explicit provider-native prompt-cache request-control support。
-3. Tool/stream replay later：然后再评估 tool/custom tool replay、stream capture、reasoning summary replay 和本地 Conversations API bridge。
+1. Prompt-cache explicit support next：在已交付的状态展开与 route/config owner 绑定上，接入 explicit provider-native prompt-cache request-control support。
+2. Tool/custom tool replay later：之后再评估 function_call/custom_tool_call、tool output、reasoning summary replay。
+3. Stream capture later：最后再评估 streaming response capture 和本地 Conversations API bridge。
 
 主要代码区域：
 

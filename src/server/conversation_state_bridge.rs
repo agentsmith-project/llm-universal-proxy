@@ -6,11 +6,13 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::config::ResolvedModel;
+use crate::config::{ModelSurface, ResolvedModel};
+use crate::formats::UpstreamFormat;
 
 use super::data_auth::RequestAuthContext;
 
 pub(super) const LOCAL_RESPONSE_ID_PREFIX: &str = "resp_llmup_";
+pub(super) const LOCAL_REPLAY_SCHEMA_VERSION: u64 = 1;
 
 #[derive(Debug, Clone)]
 pub(super) struct StoredBridgeResponse {
@@ -18,9 +20,36 @@ pub(super) struct StoredBridgeResponse {
     pub(super) owner_hash: String,
     pub(super) client_model: String,
     pub(super) resolved_model: ResolvedModel,
+    pub(super) route_config_fingerprint: BridgeRouteConfigFingerprint,
     pub(super) transcript_items: Vec<Value>,
     expires_at: Instant,
     size_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BridgeRouteConfigFingerprint {
+    pub(super) schema_version: u64,
+    pub(super) namespace_revision: String,
+    pub(super) resolved_model: ResolvedModel,
+    pub(super) upstream_format: UpstreamFormat,
+    pub(super) translation_surface: ModelSurface,
+}
+
+impl BridgeRouteConfigFingerprint {
+    pub(super) fn new(
+        namespace_revision: String,
+        resolved_model: ResolvedModel,
+        upstream_format: UpstreamFormat,
+        translation_surface: ModelSurface,
+    ) -> Self {
+        Self {
+            schema_version: LOCAL_REPLAY_SCHEMA_VERSION,
+            namespace_revision,
+            resolved_model,
+            upstream_format,
+            translation_surface,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +161,7 @@ impl StoredBridgeResponse {
         owner_hash: String,
         client_model: String,
         resolved_model: ResolvedModel,
+        route_config_fingerprint: BridgeRouteConfigFingerprint,
         transcript_items: Vec<Value>,
     ) -> Self {
         Self {
@@ -139,6 +169,7 @@ impl StoredBridgeResponse {
             owner_hash,
             client_model,
             resolved_model,
+            route_config_fingerprint,
             transcript_items,
             expires_at: Instant::now(),
             size_bytes: 0,
@@ -162,10 +193,31 @@ fn prune_expired(inner: &mut StoreInner, now: Instant) {
 fn estimate_entry_size(entry: &StoredBridgeResponse) -> Result<usize, String> {
     let transcript = serde_json::to_vec(&entry.transcript_items)
         .map_err(|error| format!("serialize conversation_state_bridge transcript: {error}"))?;
+    let surface = serde_json::to_vec(&entry.route_config_fingerprint.translation_surface).map_err(
+        |error| format!("serialize conversation_state_bridge route/config fingerprint: {error}"),
+    )?;
     Ok(transcript.len()
+        + surface.len()
+        + std::mem::size_of_val(&entry.route_config_fingerprint.schema_version)
         + entry.namespace.len()
         + entry.owner_hash.len()
         + entry.client_model.len()
         + entry.resolved_model.upstream_name.len()
-        + entry.resolved_model.upstream_model.len())
+        + entry.resolved_model.upstream_model.len()
+        + entry.route_config_fingerprint.namespace_revision.len()
+        + entry
+            .route_config_fingerprint
+            .resolved_model
+            .upstream_name
+            .len()
+        + entry
+            .route_config_fingerprint
+            .resolved_model
+            .upstream_model
+            .len()
+        + entry
+            .route_config_fingerprint
+            .upstream_format
+            .to_string()
+            .len())
 }
