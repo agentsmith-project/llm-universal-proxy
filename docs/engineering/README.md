@@ -5,8 +5,8 @@ for maintainers, but are not part of the user-facing product guide.
 
 - [max-compat-development-plan.md](./max-compat-development-plan.md)
   Maximum-compatibility behavior area plan and delivered phase record
-- [Zero-transform forwarding and provider-native prompt-cache request-control plan](./pre-ga-strict-passthrough-prompt-cache-support-plan.md)
-  Pre-GA zero-transform provider forwarding and provider-native prompt-cache request-control support plan
+- [Request processing and provider-native prompt-cache request-control plan](./pre-ga-request-processing-prompt-cache-support-plan.md)
+  Pre-GA request-processing classification, raw same-protocol forwarding optimization, and provider-native prompt-cache request-control support plan
 - [pre-ga-conversation-state-bridge-plan.md](./pre-ga-conversation-state-bridge-plan.md)
   Pre-GA lightweight in-memory conversation state bridge plan
 - [pre-ga-remove-native-gemini-format-plan.md](./pre-ga-remove-native-gemini-format-plan.md)

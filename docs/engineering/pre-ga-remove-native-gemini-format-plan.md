@@ -23,7 +23,7 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 
 本计划是另外两份计划的范围前置条件：
 
-- [Zero-transform forwarding and provider-native prompt-cache request-control plan](./pre-ga-strict-passthrough-prompt-cache-support-plan.md) 必须按 3 个 active protocol families 设计：OpenAI Chat、OpenAI Responses、Anthropic Messages。
+- [Request processing and provider-native prompt-cache request-control plan](./pre-ga-request-processing-prompt-cache-support-plan.md) 必须按 3 个 active protocol families 设计：OpenAI Chat、OpenAI Responses、Anthropic Messages。
 - [pre-ga-conversation-state-bridge-plan.md](./pre-ga-conversation-state-bridge-plan.md) 的 MVP 只支持 Responses -> OpenAI Chat / Anthropic replay，不实现 Responses -> Gemini `generateContent`。
 - 删除 native Gemini 的 PR 应优先合并，或至少作为其他两个分支的共同 rebase base。
 - 最大兼容翻译策略不能重新引入 hidden Gemini-native scope；`cachedContent`、`thoughtSignature`、`extra_body.google.cached_content` 仍由本删除计划排除。
@@ -33,7 +33,7 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 | Workstream | 主要所有权 | 避免踩线 |
 | --- | --- | --- |
 | Remove Native Gemini | `UpstreamFormat::Google`、`/google/*` routes、Gemini translators、Gemini streaming、Gemini tests/docs/examples/scripts | 不新增 prompt-cache/state bridge 逻辑 |
-| Zero-Transform Provider Forwarding + Provider-Native Prompt-Cache Request Controls | request processing、zero-transform forwarding、OpenAI/Anthropic provider-native cache controls、usage observation | 不修改或新增 Gemini translator/cache 功能；等 Gemini 删除后收敛测试矩阵 |
+| Request Processing + Provider-Native Prompt-Cache Request Controls | request processing、raw same-protocol forwarding optimization、OpenAI/Anthropic provider-native cache controls、usage observation | 不修改或新增 Gemini translator/cache 功能；等 Gemini 删除后收敛测试矩阵 |
 | Conversation State Bridge | memory store、Responses `previous_response_id` replay、state capture、state trace | 不实现 Gemini replay；状态展开后再交给 provider-native prompt-cache request-control support |
 
 合并顺序：
@@ -78,9 +78,9 @@ upstreams:
 这条路径的原则：
 
 - 它是 OpenAI-compatible wire protocol，不是 Gemini format。
-- 同协议时可以标记为 OpenAI Chat `RequestTransformationNotRequired`，并在实现完成后使用 zero-transform forwarding 优化；前提是不需要 body mutation。
+- 同协议时可以内部标记为 OpenAI Chat `RequestTransformationNotRequired`，并在实现完成后使用 raw same-protocol forwarding 优化；前提是不需要 body mutation。这个标记不是兼容性模式或用户可选 lane。
 - Gemini 模型名，例如 `gemini-3-flash-preview`，只是 model string，不让 `llmup` 进入 Gemini-native adapter。
-- OpenAI-compatible provider extensions 默认不做特殊支持；如果以后确实需要，必须作为显式 provider extension plan 独立评估。
+- OpenAI-compatible provider extensions 默认不做特殊支持；如果以后确实需要，必须单独做范围评审。
 
 ## 删除什么
 
@@ -303,7 +303,7 @@ git diff --check
 - OpenAI-compatible Gemini upstream 可以保留 OpenAI-shaped request 字段，例如普通 Chat Completions 参数。
 - 不默认支持 Gemini native `cachedContent`，因为它是 provider-side resource handle，会重新引入 Gemini resource lifecycle。
 - 不默认支持 `extra_body.google.cached_content`，即使 Google OpenAI-compatible 文档允许 `extra_body.google` 传递部分 Gemini 字段。这个扩展会重新制造 provider-specific branch，和本次简化目标冲突。
-- 如果后续明确有强经济收益，可以单独设计 “Google OpenAI-compatible provider extension” 小计划，但它必须保持显式配置、不可跨协议泛化、不可影响 zero-transform forwarding。
+- 如果后续明确有强经济收益，需要对 “Google OpenAI-compatible provider extension” 单独做范围评审；它不能作为本计划的预留实现任务，也不能跨协议泛化或影响 raw same-protocol forwarding。
 
 这样做会损失 Gemini explicit cached-content 优化，但换来主转换矩阵和状态/cache 设计的显著简化。对于 pre-GA，建议优先收敛复杂度。
 

@@ -2,7 +2,7 @@
 
 - 状态：handoff-ready development plan
 - 日期：2026-05-16
-- 范围：为 `llmup` 增加可选、纯内存的会话状态桥，用于把使用状态型接口的客户端转换到无状态 provider 协议
+- 范围：为 `llmup` 增加显式配置的纯内存会话状态桥，用于把使用状态型接口的客户端转换到无状态 provider 协议
 - 非范围：LLM 响应缓存、语义缓存、跨进程持久化数据库、provider 私有 opaque state 反解、默认无配置保存用户数据、后台任务队列产品化、提示词管理产品
 
 ## 计划协同
@@ -26,7 +26,8 @@
 - 展开后的上下文继续走现有协议转换器，目标 provider 看到的是完整 transcript，而不是 OpenAI Responses 的状态句柄。
 - 状态桥只保存会话重放所需的输入/输出事件，不缓存或复用模型响应。
 - 默认行为保持 fail closed；只有显式配置启用状态桥的路由才改变现有边界。
-- 状态桥是最大安全兼容策略下的显式 state expansion。它会使请求需要构造/转换，必须在 trace 和 warnings 中可见；它不是独立产品行为或用户可选项。
+- 状态桥是最大安全兼容策略下的显式 state expansion。它会使请求需要构造/转换，必须在 trace 和 warnings 中可见；它不是独立产品行为、兼容性模式或 product lane。
+- 不做兼容性分级，不新增 strict/balanced/max-compatible 等用户选择；最大安全兼容性仍是唯一实现目标。
 
 一句话边界：这是 `ConversationStateBridge`，不是 cache。
 
@@ -87,7 +88,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 需要接受的 pre-GA 方向变化：
 
 - `docs/CONSTITUTION.md` 目前把 persistent conversation state 和 provider-owned lifecycle state reconstruction 写在 out of scope。
-- 本计划不引入持久化数据库，但会引入可选内存状态。需要更新宪章措辞：默认仍是无状态；可配置的内存 `ConversationStateBridge` 是协议转换兼容增强，不是默认产品行为。
+- 本计划不引入持久化数据库，但会引入显式配置的内存状态。需要更新宪章措辞：默认仍是无状态；可配置的内存 `ConversationStateBridge` 是最大安全兼容策略下的内部 state expansion 能力，不是默认产品行为、兼容性模式或 product lane。
 
 ## 设计原则
 
@@ -127,6 +128,8 @@ conversation_state_bridge:
 - `max_bytes` 是全局内存上限，不做 per-tenant/per-conversation 细分。
 - `store: false` 优先于 bridge 保存，但这是固定语义，不做成配置项。
 
+`conversation_state_bridge.mode = "memory"` 是现有配置里的 storage/backend selector，也是允许进程内短期保存 prompt/response 事件的数据保留安全门。它不是 compatibility mode、产品 profile 或 routing lane。
+
 ## 请求处理观测
 
 不新增单独主路径、模式或用户可选项。状态桥启用时，请求处理观测为 `RequestTransformationRequired`，并暴露 `state_bridge` 字段；这表示请求需要显式 state expansion 后再构造/转换，仍属于单一最大安全兼容策略。provider-native prompt-cache 合成仍只是 provider-native request-control support：
@@ -150,7 +153,7 @@ enum StateBridgeModifier {
 
 - client format 是 OpenAI Responses。
 - target upstream format 不是 OpenAI Responses，或者 route 明确要求翻译。
-- `conversation_state_bridge.mode = "memory"`。
+- `conversation_state_bridge.mode = "memory"`，也就是内存状态桥已配置。
 - 请求可以不包含 `previous_response_id`。第一轮也必须经过 bridge preprocessor，用于消费 `store` 并决定 capture/no-save policy。
 
 `BridgeContinuation`：
@@ -158,7 +161,7 @@ enum StateBridgeModifier {
 - client format 是 OpenAI Responses。
 - target upstream format 不是 OpenAI Responses，或者 route 明确要求翻译。
 - 请求包含本地 `resp_llmup_*` 形式的 `previous_response_id`。
-- `conversation_state_bridge.mode = "memory"`。
+- `conversation_state_bridge.mode = "memory"`，也就是内存状态桥已配置。
 - 状态 ID 属于当前 namespace / auth subject。
 
 如果目标是 native OpenAI Responses，则继续原生透传，不走状态桥。
@@ -271,7 +274,7 @@ MVP 不支持本地 `conversation` bridge。
 
 - Bridge preprocessor 必须先消费 `store`，再进入跨协议 stateful-control assessment。
 - `store: false`：不保存 response state；返回的 response ID 不能用于后续 `previous_response_id` replay。
-- `store: true` 或省略：在 bridge mode 且 route 允许时保存。显式 `store: true` 不应继续触发现有 translated route 的 provider-owned state fail-closed 规则，因为它在 bridge mode 下表达的是 `llmup` 本地短期 state。
+- `store: true` 或省略：当内存状态桥已配置且 route 允许时保存。显式 `store: true` 不应继续触发现有 translated route 的 provider-owned state fail-closed 规则，因为它在内存状态桥下表达的是 `llmup` 本地短期 state。
 - 如果未来引入 route-level no-store/ZDR policy，它必须禁用 bridge 保存；初版只需要尊重请求级 `store: false`。
 
 ### `background`
@@ -284,7 +287,7 @@ MVP 不支持本地 `conversation` bridge。
 - 纯内存 store 无法在进程重启后保留任务状态。
 - 需要独立任务队列、polling state、cancel 行为和生命周期语义。
 
-行为：bridge mode 下仍 fail closed，并在错误中说明当前不支持 background lifecycle emulation。
+行为：当内存状态桥已配置时仍 fail closed，并在错误中说明当前不支持 background lifecycle emulation。
 
 ### `prompt`
 
@@ -310,7 +313,7 @@ MVP 不支持本地 `conversation` bridge。
 ### 非流式
 
 1. 上游成功返回后，先完成现有 response translation。
-2. 如果客户端协议是 OpenAI Responses 且 bridge mode 启用：
+2. 如果客户端协议是 OpenAI Responses 且内存状态桥已启用：
    - 预生成一个候选本地 `resp_llmup_*`。
    - 尝试把请求 input items 和转换后的 output items 提交到 store。
    - commit 成功后，把客户端可见 response `id` 替换为候选本地 ID。
@@ -374,9 +377,9 @@ Post-MVP 支持：
 
 - State owner 至少包含 namespace 和认证主体 hash。
 - client-provider-key 模式下，认证主体可以由下游 provider key 的安全 hash 派生。
-- proxy-key 模式下不能只靠共享 proxy key 隐式区分用户。初版要么要求 route 明确声明单租户，要么配置一个可信 tenant header/policy 并把它纳入 owner；否则 bridge mode 应 fail closed。
+- proxy-key 模式下不能只靠共享 proxy key 隐式区分用户。初版要么要求 route 明确声明单租户，要么配置一个可信 tenant header/policy 并把它纳入 owner；否则启用内存状态桥的 route 应 fail closed。
 - store lookup 只有四种结果：命中、未找到、过期、owner mismatch。除命中外都 fail closed。
-- continuation route owner 必须匹配上一次保存的 upstream name / target format / target model / translation contract surface / namespace revision 或 route config hash。配置变更后默认 fail closed；只有显式 route policy 才允许继续或迁移。cache-aware routing、fallback 或负载均衡不能改写 replay chain，除非 route policy 显式允许并记录 trace。
+- continuation route owner 必须匹配上一次保存的 upstream name / target format / target model / translation contract surface / namespace revision 或 route config hash。配置变更后默认 fail closed；只有显式 route policy 才允许继续或迁移。后续 routing-affinity、fallback 或负载均衡不能改写 replay chain，除非 route policy 显式允许并记录 trace。
 - debug trace 只记录状态 ID、展开条数和 fail reason，不记录 prompt 内容。
 
 内存保护：
@@ -575,4 +578,4 @@ Post-MVP 覆盖：
 
 - [docs/protocol-baselines/capabilities/state-continuity.md](../protocol-baselines/capabilities/state-continuity.md)
 - [docs/protocol-compatibility-matrix.md](../protocol-compatibility-matrix.md)
-- [Zero-transform forwarding and provider-native prompt-cache request-control plan](./pre-ga-strict-passthrough-prompt-cache-support-plan.md)
+- [Request processing and provider-native prompt-cache request-control plan](./pre-ga-request-processing-prompt-cache-support-plan.md)

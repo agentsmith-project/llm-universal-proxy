@@ -1,8 +1,8 @@
-# Pre-GA Zero-Transform Provider Forwarding and Provider Prompt-Cache Support Plan
+# Pre-GA Request Processing and Provider Prompt-Cache Support Plan
 
 - Status: handoff-ready development plan
 - Date: 2026-05-16
-- Scope: same-protocol zero-transform forwarding optimization, provider-native prompt-cache request-control support, provider-returned cache usage observation, and request-handling simplification
+- Scope: internal request processing classification, raw same-protocol provider forwarding optimization, provider-native prompt-cache request-control support, provider-returned cache usage observation, and request-handling simplification under the single maximum safe compatibility strategy
 - Non-scope: any `llmup`-managed cache, gateway response cache, semantic cache, cache storage, cache lifecycle management, broad fallback DSLs, pricing catalogs, guardrails, prompt management, admin UI expansion
 
 ## Plan Coordination
@@ -15,32 +15,34 @@ Active pre-GA protocol families for this plan are therefore:
 - OpenAI Responses
 - Anthropic Messages
 
-Gemini remains usable only as a provider brand behind an OpenAI-compatible upstream. That path is handled as OpenAI Chat wire protocol. This plan must not add Gemini `generateContent`, `cachedContent`, `cachedContents/*`, `thoughtSignature`, or `extra_body.google.cached_content` work. Any future Google-specific OpenAI-compatible extension must be a separate explicit plan; it is not part of this pre-GA prompt-cache hardening.
+Gemini remains usable only as a provider brand behind an OpenAI-compatible upstream. That path is handled as OpenAI Chat wire protocol. This plan must not add Gemini `generateContent`, `cachedContent`, `cachedContents/*`, `thoughtSignature`, or `extra_body.google.cached_content` work. Any future Google-specific OpenAI-compatible extension requires separate scope review; it is not part of this pre-GA prompt-cache hardening.
 
 ## Goal
 
 Make the pre-GA behavior easy to reason about:
 
 - `llmup` has one product strategy: maximum safe compatibility with fail-closed boundaries when semantics cannot be preserved or safely degraded.
-- Observability records whether a request needs construction, protocol conversion, or enhancement. Same-protocol requests that do not need mutation can later use a zero-transform forwarding optimization under the same strategy.
+- `llmup` does not provide compatibility grades, levels, lanes, or user-selectable strict/balanced/max-compatible profiles. Maximum safe compatibility is the only implementation goal.
+- `RequestTransformationNotRequired` and `RequestTransformationRequired` are internal request processing classifications, not compatibility modes or product lanes.
+- Observability records whether a request needs construction, protocol conversion, or enhancement. Same-protocol requests that do not need mutation can later use a raw provider forwarding optimization under the same strategy.
 - Provider-native prompt-cache request controls are either preserved as original payload or added later by explicit provider-native request-control support after the target request shape is known.
 - The proxy does not cache responses, prompts, embeddings, tokens, KV state, or provider cache resources.
 - The proxy does not invent a cross-provider cache abstraction.
 
 Same-format means the provider-facing wire protocol, not the provider brand. An OpenAI-compatible upstream can use zero-transform provider forwarding for OpenAI-shaped requests when the route does not require body mutation or response normalization. If a compatible upstream needs provider shims, model body rewrites, or response normalization, the request is constructed or translated under the same maximum safe compatibility strategy.
 
-Zero-transform forwarding is an optimization target under maximum safe compatibility, not a separate product behavior or user-selectable option.
+Zero-transform provider forwarding is a raw same-protocol forwarding optimization and request-processing fact under maximum safe compatibility, not a separate product behavior, compatibility level, lane, or user-selectable option.
 
 This is a pre-GA plan. It may break current tests and route behavior where they encode same-format mutation that would prevent zero-transform forwarding.
 
 ## Design Principles
 
-1. Same-format requests that are eligible for zero-transform forwarding must not be normalized, repaired, reserialized, or translated.
-2. Translation and target-provider request construction must be explicit and maximum-safe. Provider/protocol shims and provider-native request-control synthesis belong outside zero-transform forwarding.
+1. Same-format requests that are eligible for raw provider forwarding must not be normalized, repaired, reserialized, or translated.
+2. Translation and target-provider request construction must be explicit and maximum-safe. Provider/protocol shims and provider-native request-control synthesis require `RequestTransformationRequired`.
 3. Cache is provider-owned. OpenAI `prompt_cache_key` / `prompt_cache_retention` and Anthropic `cache_control` are provider prompt-cache request mechanisms with different semantics, billing, retention, and lifecycle rules.
 4. Preserve prefixes. Cache savings depend on stable prompt prefixes, message order, tool order, schemas, media detail, and provider-specific cache handles.
 5. Keep the mental model small. Request observability should answer one question: "does this request need construction, conversion, or enhancement?"
-6. Stop scope creep early. Do not add `llmup` cache storage, universal cache controls, response caching, semantic caching, fallback routing languages, or synthetic provider state while adding zero-transform forwarding.
+6. Stop scope creep early. Do not add `llmup` cache storage, universal cache controls, response caching, semantic caching, fallback routing languages, or synthetic provider state while adding request-processing and prompt-cache request-control support.
 
 ## Current Findings
 
@@ -91,7 +93,7 @@ struct RequestProcessingInfo {
 }
 ```
 
-This plan owns the request processing classification and provider-native prompt-cache request-control support. [pre-ga-conversation-state-bridge-plan.md](./pre-ga-conversation-state-bridge-plan.md) owns the state-bridge field. This avoids inventing separate product behaviors for combinations such as "state bridge + translation + prompt-cache request controls"; provider prompt-cache synthesis remains provider-native request-control support. When the state bridge is enabled, execution order must be:
+This plan owns the internal request processing classification and provider-native prompt-cache request-control support. [pre-ga-conversation-state-bridge-plan.md](./pre-ga-conversation-state-bridge-plan.md) owns the state-bridge field. This avoids inventing separate product behaviors for combinations such as "state bridge + translation + prompt-cache request controls"; provider prompt-cache synthesis remains provider-native request-control support. When the state bridge is enabled, execution order must be:
 
 1. Conversation state expansion.
 2. Source -> target protocol translation.
@@ -100,8 +102,8 @@ This plan owns the request processing classification and provider-native prompt-
 
 Request processing classification:
 
-- `RequestTransformationNotRequired`: client protocol equals upstream wire protocol and no configured route feature requires body mutation, provider-native request-control synthesis, or response normalization.
-- `RequestTransformationRequired`: protocols differ, or the selected route needs a provider/protocol shim, target-provider request construction, provider-native request-control synthesis, model alias body rewrite, provider-specific role repair, translation default injection, format conversion, or error-shape conversion. This still follows the single maximum safe compatibility strategy.
+- `RequestTransformationNotRequired`: internal classification for a request where client protocol equals upstream wire protocol and no configured route feature requires body mutation, provider-native request-control synthesis, or response normalization.
+- `RequestTransformationRequired`: internal classification for a request where protocols differ, or the selected route needs a provider/protocol shim, target-provider request construction, provider-native request-control synthesis, model alias body rewrite, provider-specific role repair, translation default injection, format conversion, or error-shape conversion. This still follows the single maximum safe compatibility strategy.
 
 The route decision should be visible in debug traces and metrics as `llmup.request_processing`, with fields such as `llmup.state_bridge` and `llmup.provider_native_prompt_cache`.
 
@@ -145,7 +147,7 @@ Maximum-safe path responsibilities:
 
 ### Provider-Native Prompt-Cache Request Controls
 
-This field exists to keep provider-native request-control synthesis explicit without making it a separate product behavior or `llmup` cache. In `preserved` mode, the client's native cache fields are carried unchanged. In `synthesized` mode, the proxy works on a constructed target-provider request, so zero-transform forwarding is not active.
+This field exists to keep provider-native request-control synthesis explicit without making it a separate product behavior, compatibility mode, or `llmup` cache. In the `preserved` disposition, the client's native cache fields are carried unchanged. In the `synthesized` disposition, the proxy works on a constructed target-provider request, so raw provider forwarding is not active.
 
 Allowed behavior:
 
@@ -189,8 +191,8 @@ Do:
 - Preserve provider-native prompt-cache request fields in zero-transform provider forwarding.
 - Preserve known provider cache usage counters in client-visible native responses.
 - Optionally observe provider-returned cache usage counters for metrics and debug traces.
-- Keep translated-mode support narrow: forward or map only explicit provider-native extension fields that are documented and intentionally supported.
-- In translated mode, prefer provider-supported caching controls when the user explicitly asks for them. For Anthropic, use top-level automatic `cache_control` only for full-history conversation routes, and use configured block breakpoints for stable-prefix workloads.
+- Keep translated-path support narrow: forward or map only explicit provider-native extension fields that are documented and intentionally supported.
+- In translated paths, prefer provider-supported caching controls when the user explicitly asks for them. For Anthropic, use top-level automatic `cache_control` only for full-history conversation routes, and use configured block breakpoints for stable-prefix workloads.
 - Add a provider-native prompt-cache request-control support that can synthesize target-provider cache request controls when a route or global policy enables it.
 - Keep synthesized controls visible in debug traces and compatibility warnings so users can see exactly what `llmup` added.
 - Fail closed when a provider cache handle contains non-reconstructable context and the target provider cannot honor it.
@@ -225,7 +227,9 @@ provider_native_prompt_cache:
 Recommended defaults:
 
 - `explicit` for initial pre-GA rollout: preserve native fields and honor explicit provider extensions.
-- `auto_safe` as the cost-optimized profile once contract tests and trace visibility are complete.
+- `auto_safe` as a later policy setting once contract tests and trace visibility are complete.
+
+`explicit` and `auto_safe` are internal provider-native prompt-cache policy values. They are not compatibility modes, product profiles, or routing lanes.
 
 `auto_safe` may synthesize request controls, but only from deterministic inputs:
 
@@ -255,17 +259,17 @@ Known gaps:
 - Anthropic-shaped requests routed to OpenAI have no way to ask `llmup` to synthesize `prompt_cache_key`.
 - There is no shared policy object that explains why a cache control was preserved, dropped, or synthesized.
 - There is no target-provider optimization matrix that says what `llmup` should do for every source/target pair.
-- Cache-aware routing is not yet modeled: a fallback or load-balanced route can scatter equivalent cacheable requests across upstream credentials/projects/regions and lose provider cache warmth.
+- Deferred routing-affinity constraint: fallback or load-balanced routes must not scatter state-bridge continuations, and future provider-cache affinity work must not break explicit provider order or route ownership. This is not part of the active prompt-cache request-control delivery.
 - Zero-transform same-protocol forwarding still needs the raw request/response work described above before native cache controls are truly byte-preserved.
 
-### Translated-Mode Prompt-Cache Rules
+### Translated Prompt-Cache Rules
 
-The provider-native prompt-cache request-control support has two policy modes:
+The provider-native prompt-cache request-control support has two internal policy values:
 
 - `explicit`: the proxy only forwards or maps explicit provider-native extension fields.
 - `auto_safe`: the proxy may synthesize target-provider prompt-cache controls from deterministic route/session/prefix information.
 
-The proxy may help express a provider-native cache request only when the user or route configuration has made cache optimization intent visible, either through an explicit extension or through `provider_native_request_controls.prompt_cache.mode = "auto_safe"`.
+The proxy may help express a provider-native cache request only when the user or route configuration has made cache optimization intent visible, either through an explicit extension or through `provider_native_prompt_cache.mode = "auto_safe"`.
 
 Recommended request extension pattern:
 
@@ -310,7 +314,7 @@ Target-provider matrix:
 | Target provider protocol | Current provider cache mechanism | What `llmup` should do |
 | --- | --- | --- |
 | OpenAI Chat / Responses | Automatic prompt caching; optional `prompt_cache_key` and `prompt_cache_retention` | Preserve explicit OpenAI fields. In `auto_safe`, synthesize `prompt_cache_key` from configured cache group / tenant-route / stable-prefix fingerprint. Do not set `24h` unless explicit or configured. |
-| Anthropic Messages | `cache_control` top-level automatic mode or block-level breakpoints | Preserve explicit Anthropic fields. In `auto_safe`, choose a configured strategy: top-level automatic caching for growing full-history conversations, or block-level breakpoints at configured stable prefix boundaries such as tools/system/docs. |
+| Anthropic Messages | `cache_control` top-level automatic caching or block-level breakpoints | Preserve explicit Anthropic fields. In `auto_safe`, choose a configured strategy: top-level automatic caching for growing full-history conversations, or block-level breakpoints at configured stable prefix boundaries such as tools/system/docs. |
 | Google Gemini through OpenAI-compatible upstream | OpenAI Chat wire protocol plus Google-specific optional extensions | Treat as OpenAI Chat for this plan. Do not support `extra_body.google.cached_content` or native Gemini cache resources in pre-GA. |
 
 OpenAI `prompt_cache_key` synthesis:
@@ -335,7 +339,7 @@ Google Gemini through OpenAI-compatible upstream:
 
 - Treat the upstream as OpenAI Chat wire protocol for active pre-GA work.
 - Do not synthesize, translate, or test `extra_body.google.cached_content` in this plan, even though Google documents the extension for OpenAI-compatible clients. Zero-transform forwarding may carry unknown OpenAI-compatible fields as bytes, but `llmup` should not claim provider-cache support for them.
-- If future demand proves the economics justify it, create a separate Google-specific OpenAI-compatible extension plan with explicit operator consent.
+- If future demand proves the economics justify it, run a separate scope review for a Google-specific OpenAI-compatible extension. Do not treat it as reserved work in this plan.
 
 ### Source To Target Coverage Matrix
 
@@ -361,22 +365,22 @@ Native Gemini rows are intentionally absent. `format: google`, `format: gemini`,
 - Preserve target prompt prefix order: tools, system/developer instructions, static media/document context, then dynamic user content. Avoid reordering tool definitions or schema keys during optimization.
 - Never use natural-language classification to decide that content is stable. Use only configured cache groups, route identity, tenant/session identifiers, and deterministic structural prefix fingerprints.
 - Do not place timestamps, request IDs, random trace IDs, short-lived user text, or provider credentials inside synthesized cache keys.
-- Emit trace fields for every synthesized or dropped cache control: target provider, policy mode, field, key source, TTL/retention source, and reason.
-- Include a kill switch. Operators must be able to set `provider_native_request_controls.prompt_cache.mode = "off"` and get no synthesized provider cache controls.
+- Emit trace fields for every synthesized or dropped cache control: target provider, policy value, field, key source, TTL/retention source, and reason.
+- Include a kill switch. Operators must be able to set `provider_native_prompt_cache.mode = "off"` and get no synthesized provider cache controls.
 
-### Cache-Aware Routing
+### Deferred Routing-Affinity Follow-Up
 
-Cache-aware routing is provider prompt-cache support, not gateway response caching. It should keep equivalent cacheable requests on the same provider/deployment when the router otherwise has multiple equivalent choices.
+Narrow routing affinity is a deferred follow-up for deployments that already have multiple equivalent upstream choices. It may help preserve provider cache warmth, but it is not a hot-cache lane, not a response cache, and not part of the current prompt-cache request-control implementation.
 
-Rules:
+Future-review guardrails:
 
-- Route priority: explicit upstream/model choice > state-bridge continuation owner > native provider state owner > cache-aware sticky routing.
+- Route priority: explicit upstream/model choice > state-bridge continuation owner > native provider state owner > future routing-affinity sticky routing.
 - Sticky key components: tenant/auth boundary, namespace, model alias, upstream provider, credential/project/region, target model, provider prompt-cache key or stable-prefix fingerprint.
 - Never override a hard provider choice or explicit upstream order.
 - If a warm provider is unavailable and failover is allowed, annotate the trace with `cache_warm_provider_unavailable`.
 - Do not let sticky routing create a semantic response cache. The provider still generates every response.
 - For OpenAI, sticky routing complements `prompt_cache_key`; for Anthropic, it matters when multiple workspaces/regions/providers can satisfy the same route.
-- Conversation-state bridge continuations must keep their originally resolved route/upstream unless an explicit route policy says failover is allowed. Cache-aware routing must not scatter a replay chain.
+- Conversation-state bridge continuations must keep their originally resolved route/upstream unless an explicit route policy says failover is allowed. Future routing-affinity work must not scatter a replay chain.
 
 ### Prewarm And Threshold Diagnostics
 
@@ -399,7 +403,7 @@ OpenAI:
 Anthropic:
 
 - Preserve top-level and block-level `cache_control`.
-- Top-level `cache_control` is the preferred low-complexity translated-mode target only for routes that represent growing full-history conversations. For one-shot requests with a stable prefix and dynamic suffix, explicit breakpoints at the last stable block are the safer cost-control default.
+- Top-level `cache_control` is the preferred low-complexity translated-path target only for routes that represent growing full-history conversations. For one-shot requests with a stable prefix and dynamic suffix, explicit breakpoints at the last stable block are the safer cost-control default.
 - Anthropic's OpenAI SDK compatibility surface is not the same as native Messages prompt caching; `llmup` translated support should target Anthropic Messages requests, not assume Anthropic's OpenAI-compatible endpoint can honor every cache control.
 - Preserve `ttl: "1h"` only as user-supplied provider-native input; do not auto-upgrade TTLs because 1-hour writes cost more.
 - Preserve `max_tokens: 0` prewarm requests in Anthropic zero-transform forwarding. Translation behavior must not inject minimum max-token defaults into this path.
@@ -481,7 +485,7 @@ Deliverables:
 - Add `auto_safe` OpenAI `prompt_cache_key` synthesis for translated OpenAI targets when no explicit cache key is present.
 - Continue warning/dropping low-risk non-portable provider cache controls when the target provider cannot honor them.
 - Keep translation marker-free unless explicit extension or `auto_safe` route/global policy is present.
-- Add trace/debug fields that show `provider_native_request_controls.prompt_cache.mode`, target provider, synthesized fields, and key source.
+- Add trace/debug fields that show `provider_native_prompt_cache.mode`, target provider, synthesized fields, and key source.
 
 Acceptance tests:
 
@@ -489,31 +493,31 @@ Acceptance tests:
 - `extra_body.anthropic.cache_control` maps exactly to Anthropic top-level `cache_control`.
 - Invalid or conflicting Anthropic cache-control extension shapes fail closed before upstream.
 - Explicit OpenAI content/tool `cache_control` maps only to eligible Anthropic blocks; direct thinking markers, empty text, sub-content markers, and ambiguous tool-call/tool-result marker shapes are rejected.
-- Anthropic `cache_control` translated to OpenAI still warns/drops in `explicit` mode rather than becoming a synthetic OpenAI cache control.
+- Anthropic `cache_control` translated to OpenAI still warns/drops under the `explicit` policy value rather than becoming a synthetic OpenAI cache control.
 - Anthropic-to-OpenAI in `auto_safe` synthesizes a bounded `prompt_cache_key` with the configured source and never copies raw prompt text into the key.
 - OpenAI-to-Anthropic in `auto_safe` applies the configured Anthropic strategy and does not add block-level markers unless explicitly configured.
 - `prompt_cache_retention: "24h"` and Anthropic `ttl: "1h"` are never synthesized from each other without explicit route config.
 - `extra_body.google.cached_content` fails closed in translated paths when treated as an explicit cache request; it is not mapped to a native Gemini field.
 
-### Phase 5: Cache-Aware Routing Guardrails
+### Deferred Follow-Up: Narrow Routing-Affinity Guardrails
 
-This phase is optional for the first implementation unless the deployment has multiple equivalent upstreams for the same model. It must not block zero-transform provider forwarding or basic provider prompt-cache request support.
+This is not a current delivery phase. Review it later only for deployments that already have multiple equivalent upstreams for the same model. It must not block raw same-protocol forwarding or basic provider prompt-cache request support.
 
-Deliverables:
+Future-review deliverables:
 
-- Add cache-aware sticky routing only for routes that already have multiple equivalent upstream choices, keyed by provider prompt-cache policy, tenant/auth boundary, namespace, model alias, upstream provider, credential/project/region, target model, and provider prompt-cache key or stable-prefix fingerprint.
+- Add narrow sticky routing only for routes that already have multiple equivalent upstream choices, keyed by provider prompt-cache policy, tenant/auth boundary, namespace, model alias, upstream provider, credential/project/region, target model, and provider prompt-cache key or stable-prefix fingerprint.
 - Keep hard provider overrides and explicit upstream order authoritative.
 - Annotate failover from a warm route with `cache_warm_provider_unavailable`.
 - Keep metrics separate from gateway response cache metrics.
 
-Acceptance tests:
+Future-review tests:
 
-- Equivalent cacheable requests route to the same upstream when multiple equivalent upstreams exist and cache-aware routing is enabled.
+- Equivalent cacheable requests route to the same upstream when multiple equivalent upstreams exist and routing affinity is explicitly enabled.
 - Explicit provider order disables sticky rerouting.
 - State-bridge replay chains keep their originally resolved upstream unless explicit failover policy allows otherwise.
 - Failover emits a cache-warmth diagnostic and does not reuse response bodies.
 
-### Phase 6: Provider Cache Usage Observation Only
+### Phase 5: Provider Cache Usage Observation Only
 
 Deliverables:
 
@@ -533,7 +537,7 @@ Acceptance tests:
 - Anthropic read/write counters are observed without changing response body.
 - Unknown usage shapes do not fail requests.
 
-### Phase 7: Remove Same-Format Compatibility Shims
+### Phase 6: Remove Same-Format Compatibility Shims
 
 Deliverables:
 
@@ -558,9 +562,10 @@ Required local tests:
 | Headers | Auth rewrite and hop-by-hop stripping are explicit; provider protocol headers are preserved where safe |
 | Provider prompt-cache support | Native cache request fields and usage fields preserved; explicit translated extensions map only to their target provider; `auto_safe` synthesis is deterministic, trace-visible, and provider-scoped; optional observation does not mutate output and does not cache anything |
 | Provider cache matrix | Every source/target pair in the Source To Target Coverage Matrix has at least one positive test and one non-portable/fail-closed test where applicable |
-| Cache-aware routing | Sticky routing improves provider cache warmth without overriding hard provider order and without serving cached responses |
 | Request processing | Same-format routes that avoid mutation and normalization choose zero-transform provider forwarding; cross-format or shimmed routes choose maximum-safe request construction |
 | Regressions | Maximum-safe cross-format behavior remains in the maximum-safe path |
+
+Routing-affinity tests are intentionally absent from the required local matrix. They belong to the deferred follow-up review above.
 
 ## Handoff Tasks
 
@@ -569,10 +574,11 @@ Recommended first PR stack:
 1. Add `RequestProcessing` and zero-transform provider forwarding golden tests with no behavior change.
 2. Split request execution so zero-transform provider forwarding forwards raw request bytes.
 3. Split non-stream and stream response execution so zero-transform provider forwarding forwards raw upstream bytes.
-4. Add provider-native prompt-cache request-control support policy and explicit translated-mode provider prompt-cache request support for Anthropic and OpenAI targets.
-5. Add cache-aware routing for provider prompt-cache warmth only after state-bridge route consistency is clear; this can be split into a follow-up PR if it adds routing complexity.
-6. Add provider cache usage observation from raw usage while preserving native responses and without introducing any `llmup` cache.
-7. Remove or rewrite old same-format mutation tests and update protocol docs.
+4. Add provider-native prompt-cache request-control support policy and explicit translated-path provider prompt-cache request support for Anthropic and OpenAI targets.
+5. Add provider cache usage observation from raw usage while preserving native responses and without introducing any `llmup` cache.
+6. Remove or rewrite old same-format mutation tests and update protocol docs.
+
+Deferred: review narrow routing-affinity only after state-bridge route consistency and basic provider prompt-cache request controls are complete. It is not part of the first PR stack.
 
 Primary code areas:
 
