@@ -24,6 +24,7 @@ pub enum PromptCacheRequestControl {
     None,
     Preserved,
     ExplicitExtensionMapped,
+    Dropped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -216,11 +217,25 @@ fn classify_provider_native_prompt_cache(
         return PromptCacheRequestControl::ExplicitExtensionMapped;
     }
 
+    if openai_family_format(client_format)
+        && upstream_format == UpstreamFormat::Anthropic
+        && openai_prompt_cache_fields_present(body)
+    {
+        return PromptCacheRequestControl::Dropped;
+    }
+
     if client_format == UpstreamFormat::Anthropic
         && openai_family_format(upstream_format)
         && anthropic_extra_body_openai_prompt_cache_key_present(body)
     {
         return PromptCacheRequestControl::ExplicitExtensionMapped;
+    }
+
+    if client_format == UpstreamFormat::Anthropic
+        && openai_family_format(upstream_format)
+        && anthropic_protocol_uses_cache_control(body)
+    {
+        return PromptCacheRequestControl::Dropped;
     }
 
     if openai_family_format(client_format)

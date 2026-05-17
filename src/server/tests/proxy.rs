@@ -122,6 +122,14 @@ async fn wait_for_debug_trace_response(path: &std::path::Path) -> String {
     contents
 }
 
+fn debug_trace_request_entry(trace: &str) -> Value {
+    trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| entry.get("phase").and_then(Value::as_str) == Some("request"))
+        .expect("trace should contain request entry")
+}
+
 #[derive(Clone, Default)]
 struct CapturedHookPayloads {
     payloads: Arc<Mutex<Vec<Value>>>,
@@ -1722,6 +1730,170 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_mapping() {
+    let server_response_body = serde_json::json!({
+        "id": "msg_explicit_cache_mapping",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3",
+        "content": [{ "type": "text", "text": "ok" }],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_anthropic_messages_mock(server_response_body).await;
+    let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
+    let state = app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::Anthropic);
+    enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/chat/completions".to_string(),
+        serde_json::json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": {
+                "anthropic": {
+                    "cache_control": { "type": "ephemeral", "ttl": "5m" }
+                }
+            },
+            "stream": false
+        }),
+        "claude-3".to_string(),
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response_text(response).await;
+
+    let trace = wait_for_debug_trace_response(&trace_path).await;
+    let request_entry = debug_trace_request_entry(&trace);
+    for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
+        assert_eq!(
+            payload["llmup"]["provider_native_prompt_cache"], "explicit_extension_mapped",
+            "payload = {payload:?}"
+        );
+    }
+
+    let requests = requests.lock().await;
+    assert_eq!(
+        requests[0]["cache_control"],
+        serde_json::json!({ "type": "ephemeral", "ttl": "5m" })
+    );
+    assert!(
+        requests[0].get("extra_body").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cache_control_without_synthesizing_openai_key(
+) {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_dropped_cache_control",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/anthropic/v1/messages".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "max_tokens": 32,
+            "cache_control": { "type": "ephemeral" },
+            "system": [
+                { "type": "text", "text": "System", "cache_control": { "type": "ephemeral" } }
+            ],
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "Hi", "cache_control": { "type": "ephemeral" } }
+                ]
+            }],
+            "tools": [{
+                "name": "lookup",
+                "input_schema": { "type": "object", "properties": {} },
+                "cache_control": { "type": "ephemeral" }
+            }],
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::Anthropic,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let warnings = response
+        .headers()
+        .get_all("x-proxy-compat-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("cache_control")),
+        "warnings = {warnings:?}"
+    );
+    let _ = response_text(response).await;
+
+    let trace = wait_for_debug_trace_response(&trace_path).await;
+    let request_entry = debug_trace_request_entry(&trace);
+    for payload in [request_entry, wait_for_hook_payload(&hook_payloads).await] {
+        assert_eq!(
+            payload["llmup"]["provider_native_prompt_cache"], "dropped",
+            "payload = {payload:?}"
+        );
+    }
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].get("prompt_cache_key").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+    assert!(
+        requests[0].get("prompt_cache_retention").is_none(),
+        "upstream body = {:?}",
+        requests[0]
+    );
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn request_metadata_redacts_proxy_and_provider_keys_in_hook_debug_logs_and_metrics() {
     let provider_secret = PROVIDER_INLINE_REDACTION_SECRET;
     let proxy_secret = PROXY_INLINE_REDACTION_SECRET;
@@ -2131,11 +2303,15 @@ fn request_processing_provider_native_prompt_cache_serializes_only_supported_con
         Control::None,
         Control::Preserved,
         Control::ExplicitExtensionMapped,
+        Control::Dropped,
     ];
 
     for state in states {
         match state {
-            Control::None | Control::Preserved | Control::ExplicitExtensionMapped => {}
+            Control::None
+            | Control::Preserved
+            | Control::ExplicitExtensionMapped
+            | Control::Dropped => {}
         }
     }
 
@@ -2150,6 +2326,7 @@ fn request_processing_provider_native_prompt_cache_serializes_only_supported_con
             serde_json::json!("none"),
             serde_json::json!("preserved"),
             serde_json::json!("explicit_extension_mapped"),
+            serde_json::json!("dropped"),
         ]
     );
     assert!(!serialized.contains(&serde_json::json!("synthesized")));
@@ -2388,7 +2565,7 @@ fn classify_request_processing_preserves_native_prompt_cache_field_only_on_same_
         ));
     assert_eq!(
         openai_cross.provider_native_prompt_cache,
-        crate::request_processing::PromptCacheRequestControl::None
+        crate::request_processing::PromptCacheRequestControl::Dropped
     );
 
     let anthropic_body = serde_json::json!({
@@ -2409,6 +2586,121 @@ fn classify_request_processing_preserves_native_prompt_cache_field_only_on_same_
     assert_eq!(
         anthropic_same.provider_native_prompt_cache,
         crate::request_processing::PromptCacheRequestControl::Preserved
+    );
+}
+
+#[test]
+fn classify_request_processing_marks_anthropic_cache_control_to_openai_as_dropped() {
+    let cases = [
+        (
+            "top_level_only",
+            serde_json::json!({
+                "model": "claude-3-7-sonnet",
+                "cache_control": { "type": "ephemeral" },
+                "messages": [{
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "Hi" }]
+                }]
+            }),
+        ),
+        (
+            "system_only",
+            serde_json::json!({
+                "model": "claude-3-7-sonnet",
+                "system": [{
+                    "type": "text",
+                    "text": "System",
+                    "cache_control": { "type": "ephemeral" }
+                }],
+                "messages": [{
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "Hi" }]
+                }]
+            }),
+        ),
+        (
+            "message_content_only",
+            serde_json::json!({
+                "model": "claude-3-7-sonnet",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "Hi", "cache_control": { "type": "ephemeral" } }
+                    ]
+                }]
+            }),
+        ),
+        (
+            "tools_only",
+            serde_json::json!({
+                "model": "claude-3-7-sonnet",
+                "messages": [{
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "Hi" }]
+                }],
+                "tools": [{
+                    "name": "lookup",
+                    "input_schema": { "type": "object" },
+                    "cache_control": { "type": "ephemeral" }
+                }]
+            }),
+        ),
+    ];
+
+    for (case_name, body) in cases {
+        for upstream_format in [
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiResponses,
+        ] {
+            let info =
+                crate::request_processing::classify_request_processing(request_processing_input(
+                    crate::formats::UpstreamFormat::Anthropic,
+                    upstream_format,
+                    &body,
+                ));
+            assert_eq!(
+                serde_json::to_value(info.provider_native_prompt_cache).unwrap(),
+                serde_json::json!("dropped"),
+                "case_name = {case_name}, upstream_format = {upstream_format}"
+            );
+        }
+    }
+}
+
+#[test]
+fn classify_request_processing_marks_openai_prompt_cache_key_to_anthropic_as_dropped() {
+    let chat_body = serde_json::json!({
+        "model": "claude-3",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "prompt_cache_key": "stable-prefix",
+        "prompt_cache_retention": "24h"
+    });
+    let chat_to_anthropic =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::Anthropic,
+            &chat_body,
+        ));
+    assert_eq!(
+        serde_json::to_value(chat_to_anthropic.provider_native_prompt_cache).unwrap(),
+        serde_json::json!("dropped")
+    );
+
+    let responses_body = serde_json::json!({
+        "model": "claude-3",
+        "input": "Hi",
+        "prompt_cache_key": "stable-prefix",
+        "prompt_cache_retention": "in_memory"
+    });
+    let responses_to_anthropic =
+        crate::request_processing::classify_request_processing(request_processing_input(
+            crate::formats::UpstreamFormat::OpenAiResponses,
+            crate::formats::UpstreamFormat::Anthropic,
+            &responses_body,
+        ));
+    assert_eq!(
+        serde_json::to_value(responses_to_anthropic.provider_native_prompt_cache).unwrap(),
+        serde_json::json!("dropped")
     );
 }
 
@@ -2444,17 +2736,6 @@ fn classify_request_processing_preserves_openai_family_prompt_cache_across_trans
     assert_eq!(
         responses_to_chat.provider_native_prompt_cache,
         crate::request_processing::PromptCacheRequestControl::Preserved
-    );
-
-    let chat_to_anthropic =
-        crate::request_processing::classify_request_processing(request_processing_input(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
-            crate::formats::UpstreamFormat::Anthropic,
-            &chat_body,
-        ));
-    assert_eq!(
-        chat_to_anthropic.provider_native_prompt_cache,
-        crate::request_processing::PromptCacheRequestControl::None
     );
 }
 
