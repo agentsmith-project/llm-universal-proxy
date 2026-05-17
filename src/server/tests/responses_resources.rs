@@ -1365,6 +1365,12 @@ fn resolve_native_responses_stateful_route_or_error_rejects_multi_upstream_auto_
             &responses_resolved_proxy,
         )
         .expect("build responses no-auto-decompression upstream client");
+    let responses_no_auto_decompression_streaming_client =
+        crate::upstream::build_no_auto_decompression_streaming_client(
+            config.upstream_timeout,
+            &responses_resolved_proxy,
+        )
+        .expect("build responses no-auto-decompression streaming upstream client");
     let (auto_client, auto_streaming_client, auto_resolved_proxy) =
         crate::upstream::build_upstream_clients(
             &config,
@@ -1377,6 +1383,12 @@ fn resolve_native_responses_stateful_route_or_error_rejects_multi_upstream_auto_
         &auto_resolved_proxy,
     )
     .expect("build auto no-auto-decompression upstream client");
+    let auto_no_auto_decompression_streaming_client =
+        crate::upstream::build_no_auto_decompression_streaming_client(
+            config.upstream_timeout,
+            &auto_resolved_proxy,
+        )
+        .expect("build auto no-auto-decompression streaming upstream client");
     let upstreams = std::collections::BTreeMap::from([
         (
             "responses".to_string(),
@@ -1390,6 +1402,8 @@ fn resolve_native_responses_stateful_route_or_error_rejects_multi_upstream_auto_
                 client: responses_client,
                 streaming_client: responses_streaming_client,
                 no_auto_decompression_client: responses_no_auto_decompression_client,
+                no_auto_decompression_streaming_client:
+                    responses_no_auto_decompression_streaming_client,
                 resolved_proxy: responses_resolved_proxy,
             },
         ),
@@ -1405,6 +1419,7 @@ fn resolve_native_responses_stateful_route_or_error_rejects_multi_upstream_auto_
                 client: auto_client,
                 streaming_client: auto_streaming_client,
                 no_auto_decompression_client: auto_no_auto_decompression_client,
+                no_auto_decompression_streaming_client: auto_no_auto_decompression_streaming_client,
                 resolved_proxy: auto_resolved_proxy,
             },
         ),
@@ -1498,6 +1513,12 @@ async fn handle_openai_responses_resource_uses_upstream_state_client() {
         &resolved_proxy,
     )
     .expect("build responses no-auto-decompression runtime client");
+    let no_auto_decompression_streaming_client =
+        crate::upstream::build_no_auto_decompression_streaming_client(
+            config.upstream_timeout,
+            &resolved_proxy,
+        )
+        .expect("build responses no-auto-decompression streaming runtime client");
     let namespace_state = RuntimeNamespaceState {
         revision: "test-revision".to_string(),
         config: config.clone(),
@@ -1513,6 +1534,7 @@ async fn handle_openai_responses_resource_uses_upstream_state_client() {
                 client,
                 streaming_client,
                 no_auto_decompression_client,
+                no_auto_decompression_streaming_client,
                 resolved_proxy,
             },
         )]),

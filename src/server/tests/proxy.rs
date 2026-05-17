@@ -2506,7 +2506,7 @@ fn request_translation_policy_requires_body_mutation_only_for_injecting_policy_h
 }
 
 #[tokio::test]
-async fn same_format_openai_streaming_passthrough_rejects_reserved_tool_name() {
+async fn same_format_openai_streaming_transformation_required_rejects_reserved_tool_name() {
     let response_events = vec![serde_json::json!({
         "id": "chatcmpl-reserved",
         "object": "chat.completion.chunk",
@@ -2532,6 +2532,22 @@ async fn same_format_openai_streaming_passthrough_rejects_reserved_tool_name() {
         spawn_openai_completion_stream_mock_with_events(response_events).await;
     let state =
         app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    {
+        let mut runtime = state.runtime.write().await;
+        let namespace = runtime
+            .namespaces
+            .get_mut(DEFAULT_NAMESPACE)
+            .expect("default namespace");
+        namespace.config.model_aliases.insert(
+            "alias-chat".to_string(),
+            crate::config::ModelAlias {
+                upstream_name: "primary".to_string(),
+                upstream_model: "gpt-4o-mini".to_string(),
+                limits: None,
+                surface: None,
+            },
+        );
+    }
 
     let response = handle_request_core(
         state,
@@ -2539,11 +2555,11 @@ async fn same_format_openai_streaming_passthrough_rejects_reserved_tool_name() {
         HeaderMap::new(),
         "/openai/v1/chat/completions".to_string(),
         serde_json::json!({
-            "model": "gpt-4o-mini",
+            "model": "alias-chat",
             "messages": [{ "role": "user", "content": "Hi" }],
             "stream": true
         }),
-        "gpt-4o-mini".to_string(),
+        "alias-chat".to_string(),
         crate::formats::UpstreamFormat::OpenAiCompletion,
         None,
     )
@@ -2560,11 +2576,12 @@ async fn same_format_openai_streaming_passthrough_rejects_reserved_tool_name() {
     );
     assert!(
         !body_text.contains("\"name\":\"__llmup_custom__apply_patch\""),
-        "same-format passthrough leaked reserved tool name: {body_text}"
+        "transformation-required request construction leaked reserved tool name: {body_text}"
     );
 
     let recorded = requests.lock().await;
     assert_eq!(recorded.len(), 1, "requests = {recorded:?}");
+    assert_eq!(recorded[0]["model"], "gpt-4o-mini");
     server.abort();
 }
 

@@ -6,6 +6,8 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use crate::stream_observation::StreamObservationTransform;
+
 use super::data_auth::{DataAccess, RequestAuthContext};
 use super::state::RuntimeState;
 
@@ -74,25 +76,87 @@ impl SecretRedactor {
 
 pub(super) struct RedactingSseStream<S> {
     inner: S,
+    transform: RedactingSseObservationTransform,
+    output_queue: VecDeque<Bytes>,
+}
+
+pub(super) struct RedactingSseObservationTransform {
     redactor: SecretRedactor,
     buffer: Vec<u8>,
-    output_queue: VecDeque<Bytes>,
+    max_buffer_bytes: Option<usize>,
+    observation_stopped: bool,
 }
 
 impl<S> RedactingSseStream<S> {
     pub(super) fn new(inner: S, redactor: SecretRedactor) -> Self {
         Self {
             inner,
-            redactor,
-            buffer: Vec::new(),
+            // Client-mutating redaction runs after GuardedSseStream/TranslateSseStream,
+            // so SSE frame size limits are enforced upstream on this path.
+            transform: RedactingSseObservationTransform::new(redactor),
             output_queue: VecDeque::new(),
         }
     }
 
-    fn drain_frames(&mut self) {
+    fn enqueue_observed(&mut self, bytes: &Bytes) {
+        for observed in self.transform.transform_chunk(bytes) {
+            self.output_queue.push_back(observed);
+        }
+    }
+
+    fn finish_observation(&mut self) {
+        for observed in self.transform.finish() {
+            self.output_queue.push_back(observed);
+        }
+    }
+}
+
+impl RedactingSseObservationTransform {
+    pub(super) fn new(redactor: SecretRedactor) -> Self {
+        Self {
+            redactor,
+            buffer: Vec::new(),
+            max_buffer_bytes: None,
+            observation_stopped: false,
+        }
+    }
+
+    pub(super) fn new_bounded(redactor: SecretRedactor, max_buffer_bytes: usize) -> Self {
+        Self {
+            redactor,
+            buffer: Vec::new(),
+            max_buffer_bytes: Some(max_buffer_bytes),
+            observation_stopped: false,
+        }
+    }
+}
+
+impl StreamObservationTransform for RedactingSseObservationTransform {
+    fn transform_chunk(&mut self, bytes: &Bytes) -> Vec<Bytes> {
+        if self.observation_stopped {
+            return Vec::new();
+        }
+        if let Some(max_buffer_bytes) = self.max_buffer_bytes {
+            if bytes.len() > max_buffer_bytes.saturating_sub(self.buffer.len()) {
+                self.buffer.clear();
+                self.observation_stopped = true;
+                return Vec::new();
+            }
+        }
+        self.buffer.extend_from_slice(bytes);
+        let mut out = Vec::new();
         while let Some(frame) = take_one_sse_frame(&mut self.buffer) {
-            self.output_queue
-                .push_back(Bytes::from(redact_sse_frame(&self.redactor, &frame)));
+            out.push(Bytes::from(redact_sse_frame(&self.redactor, &frame)));
+        }
+        out
+    }
+
+    fn finish(&mut self) -> Vec<Bytes> {
+        if self.observation_stopped || self.buffer.is_empty() {
+            Vec::new()
+        } else {
+            let tail = std::mem::take(&mut self.buffer);
+            vec![Bytes::from(redact_raw_frame(&self.redactor, &tail))]
         }
     }
 }
@@ -112,17 +176,13 @@ where
 
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    this.buffer.extend_from_slice(&bytes);
-                    this.drain_frames();
+                    this.enqueue_observed(&bytes);
                 }
                 Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
                 Poll::Ready(None) => {
-                    if !this.buffer.is_empty() {
-                        let tail = std::mem::take(&mut this.buffer);
-                        return Poll::Ready(Some(Ok(Bytes::from(redact_raw_frame(
-                            &this.redactor,
-                            &tail,
-                        )))));
+                    this.finish_observation();
+                    if let Some(bytes) = this.output_queue.pop_front() {
+                        return Poll::Ready(Some(Ok(bytes)));
                     }
                     return Poll::Ready(None);
                 }
@@ -470,5 +530,28 @@ mod tests {
                 "data: {\"delta\":\"Hello [REDACTED]\"}\n\n"
             )
         );
+    }
+
+    #[test]
+    fn redacts_sse_observation_stops_after_bounded_oversized_unterminated_frame() {
+        let mut transform =
+            RedactingSseObservationTransform::new_bounded(SecretRedactor::new(["secret"]), 16);
+
+        let observed = transform.transform_chunk(&Bytes::from_static(b"data: secret"));
+
+        assert!(observed.is_empty());
+        assert_eq!(transform.buffer.len(), 12);
+
+        let observed = transform.transform_chunk(&Bytes::from_static(b" still too much"));
+
+        assert!(observed.is_empty());
+        assert!(transform.buffer.is_empty());
+
+        let observed =
+            transform.transform_chunk(&Bytes::from_static(b"data: {\"value\":\"secret\"}\n\n"));
+
+        assert!(observed.is_empty());
+        assert!(transform.buffer.is_empty());
+        assert!(transform.finish().is_empty());
     }
 }

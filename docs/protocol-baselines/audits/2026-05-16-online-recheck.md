@@ -1,7 +1,7 @@
 # Protocol Spec Online Recheck - 2026-05-16
 
 - Layer: versioned audit
-- Status: active online recheck
+- Status: latest online recheck; historical audit, not an active implementation plan
 - Compared against: repo baselines captured under `snapshots/2026-04-16`
 - Scope: official provider docs for OpenAI Responses / Chat Completions prompt caching, Anthropic Messages prompt caching, and Gemini `generateContent` caching
 - Note: this recheck did not add immutable snapshot artifacts. The 2026-04-16 snapshot bucket remains the archived evidence set.
@@ -26,7 +26,7 @@
 
 No cross-provider status cells changed. The recheck reinforces the existing proxy posture:
 
-- Preserve provider-native cache controls on raw/native passthrough lanes.
+- Preserve provider-native cache controls as an internal forwarding optimization when the selected route can avoid body mutation and response normalization.
 - Preserve or map cache usage counters for observability where possible.
 - Do not translate cache handles or TTLs across providers by default.
 - Any future provider-cache auto-injection should be an explicit routing/config policy because writes can change cost and cache lifetime.
@@ -38,5 +38,5 @@ No cross-provider status cells changed. The recheck reinforces the existing prox
 | --- | --- | --- |
 | OpenAI upstream cache policy | Auto-set `prompt_cache_key` and, where suitable, `prompt_cache_retention` for long stable prefixes when callers omit them. | Opt-in per upstream/model; preserve caller-provided fields. |
 | Anthropic upstream cache policy | Add top-level automatic `cache_control` or safe breakpoints after translation into native Anthropic requests. | Opt-in only because cache writes cost more than base input tokens. |
-| Gemini cache resource adapter | Proxy Gemini `cachedContents` create/list/get/patch/delete resources or expose a documented pre-warm flow. | Keep request-time `cached_content` handle forwarding provider-native and do not create caches implicitly. |
+| Native Gemini cache resources | Historical risk only: this was narrowed by the native Gemini removal plan and is no longer a planned follow-up. | Do not add Gemini `cachedContents` resource lifecycle support; keep Gemini usage on the Google OpenAI-compatible upstream path. |
 | Cache effectiveness telemetry | Aggregate normalized cache read/create counters by upstream/model and route. | Keep provider-native raw counters available because accounting differs. |

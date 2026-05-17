@@ -219,6 +219,12 @@ async fn admin_namespace_state_sanitizes_urls_and_redacts_sensitive_headers() {
         &resolved_proxy,
     )
     .expect("build admin no-auto-decompression upstream client");
+    let no_auto_decompression_streaming_client =
+        crate::upstream::build_no_auto_decompression_streaming_client(
+            config.upstream_timeout,
+            &resolved_proxy,
+        )
+        .expect("build admin no-auto-decompression streaming upstream client");
     upstreams.insert(
         "default".to_string(),
         UpstreamState {
@@ -231,6 +237,7 @@ async fn admin_namespace_state_sanitizes_urls_and_redacts_sensitive_headers() {
             client,
             streaming_client,
             no_auto_decompression_client,
+            no_auto_decompression_streaming_client,
             resolved_proxy,
         },
     );
@@ -369,6 +376,12 @@ async fn admin_namespace_state_reports_environment_proxy_without_echoing_url() {
         &resolved_proxy,
     )
     .expect("build admin env no-auto-decompression upstream client");
+    let no_auto_decompression_streaming_client =
+        crate::upstream::build_no_auto_decompression_streaming_client(
+            config.upstream_timeout,
+            &resolved_proxy,
+        )
+        .expect("build admin env no-auto-decompression streaming upstream client");
     upstreams.insert(
         "default".to_string(),
         UpstreamState {
@@ -381,6 +394,7 @@ async fn admin_namespace_state_reports_environment_proxy_without_echoing_url() {
             client,
             streaming_client,
             no_auto_decompression_client,
+            no_auto_decompression_streaming_client,
             resolved_proxy,
         },
     );
@@ -467,6 +481,12 @@ async fn admin_namespace_state_reports_namespace_proxy_source() {
         &resolved_proxy,
     )
     .expect("build admin namespace no-auto-decompression upstream client");
+    let no_auto_decompression_streaming_client =
+        crate::upstream::build_no_auto_decompression_streaming_client(
+            config.upstream_timeout,
+            &resolved_proxy,
+        )
+        .expect("build admin namespace no-auto-decompression streaming upstream client");
     upstreams.insert(
         "default".to_string(),
         UpstreamState {
@@ -479,6 +499,7 @@ async fn admin_namespace_state_reports_namespace_proxy_source() {
             client,
             streaming_client,
             no_auto_decompression_client,
+            no_auto_decompression_streaming_client,
             resolved_proxy,
         },
     );

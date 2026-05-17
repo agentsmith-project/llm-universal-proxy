@@ -45,8 +45,8 @@ use super::errors::{
     normalized_non_stream_upstream_error, streaming_error_response,
 };
 use super::headers::{
-    append_raw_upstream_response_headers, append_upstream_protocol_response_headers,
-    apply_upstream_headers, build_auth_headers,
+    append_raw_upstream_response_headers, append_raw_upstream_stream_response_headers,
+    append_upstream_protocol_response_headers, apply_upstream_headers, build_auth_headers,
 };
 use super::public_boundary::{
     reject_internal_request_scoped_tool_bridge_context,
@@ -55,7 +55,9 @@ use super::public_boundary::{
 use super::responses_resources::{
     resolve_native_responses_stateful_route_or_error, responses_stateful_request_controls,
 };
-use super::secret_redaction::{redactor_for_request, RedactingSseStream, SecretRedactor};
+use super::secret_redaction::{
+    redactor_for_request, RedactingSseObservationTransform, RedactingSseStream, SecretRedactor,
+};
 use super::state::{AppState, RuntimeNamespaceState, DEFAULT_NAMESPACE};
 use super::tracked_body::TrackedBodyStream;
 
@@ -1102,7 +1104,11 @@ async fn handle_request_core_with_downstream_cancellation(
         "Calling upstream URL: {}",
         request_redactor.redact_text(&url)
     );
-    let upstream_client = if stream {
+    let upstream_client = if stream && llmup.zero_transform_forwarding_active {
+        upstream_state
+            .no_auto_decompression_streaming_client
+            .clone()
+    } else if stream {
         upstream_state.streaming_client.clone()
     } else if llmup.zero_transform_forwarding_active {
         upstream_state.no_auto_decompression_client.clone()
@@ -1145,6 +1151,127 @@ async fn handle_request_core_with_downstream_cancellation(
         let status = res.status();
         let upstream_response_headers = res.headers().clone();
         debug!("Upstream streaming response status: {}", status);
+        if llmup.zero_transform_forwarding_active {
+            if !status.is_success() {
+                let bytes = match upstream::read_response_bytes_limited_with_cancellation(
+                    res,
+                    namespace_state
+                        .config
+                        .resource_limits
+                        .max_upstream_error_body_bytes,
+                    &downstream_cancellation,
+                )
+                .await
+                {
+                    Ok(body) => body,
+                    Err(upstream::DownstreamAwareError::Inner(
+                        upstream::ResponseBodyLimitError::LimitExceeded { limit },
+                    )) => {
+                        tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
+                        return redacted_streaming_error_response(
+                            client_format,
+                            StatusCode::BAD_GATEWAY,
+                            &format!(
+                                "upstream error body exceeded resource limit of {limit} bytes"
+                            ),
+                            &request_redactor,
+                        );
+                    }
+                    Err(upstream::DownstreamAwareError::Inner(
+                        upstream::ResponseBodyLimitError::Inner(error),
+                    )) => {
+                        tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
+                        return redacted_streaming_error_response(
+                            client_format,
+                            StatusCode::BAD_GATEWAY,
+                            &format!("failed to read upstream error body: {error}"),
+                            &request_redactor,
+                        );
+                    }
+                    Err(upstream::DownstreamAwareError::DownstreamCancelled) => {
+                        tracker.finish_cancelled();
+                        return client_closed_response(client_format);
+                    }
+                };
+                tracker.finish_error(status.as_u16());
+                let body_len = bytes.len();
+                let mut response = Response::builder()
+                    .status(status)
+                    .body(Body::from(bytes))
+                    .unwrap();
+                append_raw_upstream_response_headers(
+                    &mut response,
+                    &upstream_response_headers,
+                    body_len,
+                    &request_redactor,
+                );
+                append_compatibility_warning_headers(&mut response, &compatibility_warnings);
+                return response;
+            }
+
+            if !response_is_event_stream(&upstream_response_headers) {
+                tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
+                return redacted_streaming_error_response(
+                    client_format,
+                    StatusCode::BAD_GATEWAY,
+                    "upstream returned non-SSE response for streaming request",
+                    &request_redactor,
+                );
+            }
+
+            let upstream_stream = res
+                .bytes_stream()
+                .map(|result| result.map_err(std::io::Error::other));
+            let observation_max_sse_frame_bytes =
+                namespace_state.config.resource_limits.max_sse_frame_bytes;
+            let mut body_stream: Pin<
+                Box<dyn futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send>,
+            > = Box::pin(upstream_stream);
+            if let (Some(dispatcher), Some(ctx)) = (namespace_state.hooks.clone(), hook_ctx.clone())
+            {
+                body_stream = Box::pin(dispatcher.wrap_stream_with_observation_transform(
+                    body_stream,
+                    ctx,
+                    status.as_u16(),
+                    sse_response_headers(),
+                    Box::new(RedactingSseObservationTransform::new_bounded(
+                        request_redactor.clone(),
+                        observation_max_sse_frame_bytes,
+                    )),
+                ));
+            }
+            if let (Some(recorder), Some(ctx)) =
+                (namespace_state.debug_trace.as_ref(), debug_ctx.clone())
+            {
+                body_stream = Box::pin(recorder.wrap_stream_with_observation_transform(
+                    body_stream,
+                    ctx,
+                    status.as_u16(),
+                    Box::new(RedactingSseObservationTransform::new_bounded(
+                        request_redactor.clone(),
+                        observation_max_sse_frame_bytes,
+                    )),
+                ));
+            }
+            let body = Body::from_stream(TrackedBodyStream::new(
+                body_stream,
+                tracker,
+                status.as_u16(),
+            ));
+            let mut response = Response::builder()
+                .status(status)
+                .header("Cache-Control", "no-cache")
+                .header("Connection", "keep-alive")
+                .body(body)
+                .unwrap();
+            append_raw_upstream_stream_response_headers(
+                &mut response,
+                &upstream_response_headers,
+                &request_redactor,
+            );
+            append_compatibility_warning_headers(&mut response, &compatibility_warnings);
+            return response;
+        }
         if !status.is_success() {
             let error_body = match upstream::read_response_text_limited_with_cancellation(
                 res,

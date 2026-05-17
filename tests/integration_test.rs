@@ -6538,22 +6538,40 @@ async fn wait_for_hook_payloads(captured: &CapturedHookPayloads, count: usize) -
     .expect("expected hook payloads to arrive")
 }
 
+async fn wait_for_debug_trace_file(path: &std::path::Path, needle: &str) -> String {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let log = std::fs::read_to_string(path).unwrap_or_default();
+            if log.contains(needle) {
+                return log;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("expected debug trace file entry to arrive")
+}
+
+fn secret_openai_completion_sse_body(content: &str) -> String {
+    let escaped_content = serde_json::to_string(content).unwrap();
+    format!(
+        concat!(
+            "data: {{\"id\":\"chatcmpl_hook_redaction\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4\",\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\"}},\"finish_reason\":null}}]}}\n\n",
+            "data: {{\"id\":\"chatcmpl_hook_redaction\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\n",
+            "data: {{\"id\":\"chatcmpl_hook_redaction\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}],\"usage\":{{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}}}\n\n",
+            "data: [DONE]\n\n"
+        ),
+        escaped_content
+    )
+}
+
 async fn spawn_secret_openai_completion_mock(
     content: String,
 ) -> (String, tokio::task::JoinHandle<()>) {
     async fn handler(State(content): State<Arc<String>>, Json(body): Json<Value>) -> Response {
         let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
         if stream {
-            let escaped_content = serde_json::to_string(&*content).unwrap();
-            let body = format!(
-                concat!(
-                    "data: {{\"id\":\"chatcmpl_hook_redaction\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4\",\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\"}},\"finish_reason\":null}}]}}\n\n",
-                    "data: {{\"id\":\"chatcmpl_hook_redaction\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\n",
-                    "data: {{\"id\":\"chatcmpl_hook_redaction\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}],\"usage\":{{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}}}\n\n",
-                    "data: [DONE]\n\n"
-                ),
-                escaped_content
-            );
+            let body = secret_openai_completion_sse_body(&content);
             return Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/event-stream")
@@ -7053,14 +7071,21 @@ async fn exchange_hook_non_stream_success_uses_public_redacted_response_body_whe
 }
 
 #[tokio::test]
-async fn exchange_hook_stream_success_uses_redacted_sse_capture() {
+async fn exchange_hook_stream_success_uses_redacted_sse_capture_when_transformation_required() {
     let provider_secret = "hook-stream-provider-secret";
     let proxy_secret = "hook-stream-proxy-client-secret";
+    let alias_model = "hook-stream-redaction-alias";
+    let upstream_model = "gpt-4-redaction-target";
     let content =
         format!("provider={provider_secret}; client={proxy_secret}; proxy={proxy_secret}");
     let (mock_base, _mock) = spawn_secret_openai_completion_mock(content).await;
     let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = config_with_alias(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        alias_model,
+        upstream_model,
+    );
     config.upstreams[0].provider_key = Some(SecretSourceConfig {
         inline: Some(provider_secret.to_string()),
         env: None,
@@ -7083,7 +7108,7 @@ async fn exchange_hook_stream_success_uses_redacted_sse_capture() {
         .post(format!("{proxy_base}/openai/v1/chat/completions"))
         .header("authorization", format!("Bearer {proxy_secret}"))
         .json(&json!({
-            "model": "gpt-4",
+            "model": alias_model,
             "messages": [{ "role": "user", "content": "Hi" }],
             "stream": true
         }))
@@ -7103,6 +7128,13 @@ async fn exchange_hook_stream_success_uses_redacted_sse_capture() {
         .iter()
         .find(|payload| payload.get("request").is_some())
         .unwrap();
+    assert_eq!(exchange["client_model"], alias_model);
+    assert_eq!(exchange["upstream_model"], upstream_model);
+    assert_eq!(
+        exchange["llmup"]["request_processing"],
+        "request_transformation_required"
+    );
+    assert_eq!(exchange["llmup"]["zero_transform_forwarding_active"], false);
     let hook_text = serde_json::to_string(exchange).unwrap();
     assert!(!hook_text.contains(provider_secret), "{hook_text}");
     assert!(!hook_text.contains(proxy_secret), "{hook_text}");
@@ -7111,6 +7143,98 @@ async fn exchange_hook_stream_success_uses_redacted_sse_capture() {
         exchange["response"]["body"]["choices"][0]["message"]["content"],
         "provider=[REDACTED]; client=[REDACTED]; proxy=[REDACTED]"
     );
+}
+
+#[tokio::test]
+async fn hooks_exchange_hook_raw_sse_success_observes_redacted_debug_and_usage_without_mutating_client_body(
+) {
+    let provider_secret = "raw-hook-stream-provider-secret";
+    let proxy_secret = "raw-hook-stream-proxy-client-secret";
+    let content =
+        format!("provider={provider_secret}; client={proxy_secret}; proxy={proxy_secret}");
+    let expected_sse = secret_openai_completion_sse_body(&content);
+    let (mock_base, _mock) = spawn_secret_openai_completion_mock(content).await;
+    let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
+    let trace_path = std::env::temp_dir().join(format!(
+        "llm-proxy-raw-sse-observability-{}.jsonl",
+        uuid::Uuid::new_v4()
+    ));
+
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    config.upstreams[0].provider_key = Some(SecretSourceConfig {
+        inline: Some(provider_secret.to_string()),
+        env: None,
+    });
+    config.hooks = HookConfig {
+        max_pending_bytes: 100 * 1024 * 1024,
+        timeout: Duration::from_secs(3),
+        failure_threshold: 3,
+        cooldown: Duration::from_secs(300),
+        exchange: Some(HookEndpointConfig {
+            url: format!("{hook_base}/hook"),
+            authorization: None,
+        }),
+        usage: Some(HookEndpointConfig {
+            url: format!("{hook_base}/hook"),
+            authorization: None,
+        }),
+    };
+    config.debug_trace = DebugTraceConfig {
+        path: Some(trace_path.display().to_string()),
+        max_text_chars: 8_192,
+    };
+    let (proxy_base, _proxy) =
+        start_proxy_with_data_auth(config, DataAuthConfig::proxy_key(proxy_secret)).await;
+
+    let response = Client::raw()
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .header("authorization", format!("Bearer {proxy_secret}"))
+        .json(&json!({
+            "model": "gpt-4",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let public_sse = response.bytes().await.unwrap();
+    assert_eq!(public_sse.as_ref(), expected_sse.as_bytes());
+    let public_text = String::from_utf8_lossy(&public_sse);
+    assert!(public_text.contains(provider_secret), "{public_text}");
+    assert!(public_text.contains(proxy_secret), "{public_text}");
+    assert!(!public_text.contains("[REDACTED]"), "{public_text}");
+
+    let payloads = wait_for_hook_payloads(&captured, 2).await;
+    let exchange = payloads
+        .iter()
+        .find(|payload| payload.get("request").is_some())
+        .unwrap();
+    let usage = payloads
+        .iter()
+        .find(|payload| payload.get("usage").is_some())
+        .unwrap();
+    assert_eq!(exchange["llmup"]["zero_transform_forwarding_active"], true);
+    assert_eq!(exchange["stream"], true);
+    assert_eq!(exchange["completed"], true);
+    assert_eq!(
+        exchange["response"]["body"]["choices"][0]["message"]["content"],
+        "provider=[REDACTED]; client=[REDACTED]; proxy=[REDACTED]"
+    );
+    assert_eq!(usage["status"], "success");
+    assert_eq!(usage["usage"]["input_tokens"], 1);
+    assert_eq!(usage["usage"]["output_tokens"], 1);
+    let hook_text = serde_json::to_string(&payloads).unwrap();
+    assert!(!hook_text.contains(provider_secret), "{hook_text}");
+    assert!(!hook_text.contains(proxy_secret), "{hook_text}");
+    assert!(hook_text.contains("[REDACTED]"), "{hook_text}");
+
+    let trace_log = wait_for_debug_trace_file(&trace_path, "\"phase\":\"response\"").await;
+    assert!(!trace_log.contains(provider_secret), "{trace_log}");
+    assert!(!trace_log.contains(proxy_secret), "{trace_log}");
+    assert!(trace_log.contains("[REDACTED]"), "{trace_log}");
+
+    let _ = std::fs::remove_file(&trace_path);
 }
 
 #[tokio::test]

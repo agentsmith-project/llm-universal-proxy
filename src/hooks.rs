@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::config::{sanitize_url_for_admin, HookConfig, HookEndpointConfig};
 use crate::formats::UpstreamFormat;
 use crate::request_processing::RequestProcessingInfo;
+use crate::stream_observation::StreamObservationTransform;
 use crate::streaming::take_one_sse_event;
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -709,6 +710,40 @@ impl HookDispatcher {
     where
         S: Stream<Item = Result<Bytes, std::io::Error>>,
     {
+        self.wrap_stream_inner(inner, ctx, status, response_headers, None)
+    }
+
+    pub(crate) fn wrap_stream_with_observation_transform<S>(
+        &self,
+        inner: S,
+        ctx: HookRequestContext,
+        status: u16,
+        response_headers: Vec<HeaderEntry>,
+        observation_transform: Box<dyn StreamObservationTransform>,
+    ) -> HookCaptureStream<S>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>>,
+    {
+        self.wrap_stream_inner(
+            inner,
+            ctx,
+            status,
+            response_headers,
+            Some(observation_transform),
+        )
+    }
+
+    fn wrap_stream_inner<S>(
+        &self,
+        inner: S,
+        ctx: HookRequestContext,
+        status: u16,
+        response_headers: Vec<HeaderEntry>,
+        observation_transform: Option<Box<dyn StreamObservationTransform>>,
+    ) -> HookCaptureStream<S>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>>,
+    {
         let exchange_capture = if self.exchange.is_some() && self.runtime.can_capture_exchange() {
             match EventSpoolSink::new(
                 ctx.client_format,
@@ -734,6 +769,7 @@ impl HookDispatcher {
             capture_enabled,
             exchange_capture,
             observe_events,
+            observation_transform,
         }
     }
 
@@ -1267,12 +1303,55 @@ pub struct HookCaptureStream<S> {
     capture_enabled: bool,
     exchange_capture: Option<ExchangeCaptureMode>,
     observe_events: bool,
+    observation_transform: Option<Box<dyn StreamObservationTransform>>,
 }
 
 impl<S> HookCaptureStream<S> {
+    fn observe_bytes(&mut self, bytes: &Bytes) {
+        self.buffer.extend_from_slice(bytes);
+        while let Some(event) = take_one_sse_event(&mut self.buffer) {
+            self.observer.on_event(&event, false);
+            if let Some(ExchangeCaptureMode::Spooling(sink)) = self.exchange_capture.as_mut() {
+                if let Err(err) = sink.on_event(&event) {
+                    self.exchange_capture = Some(ExchangeCaptureMode::Unavailable { reason: err });
+                    self.capture_enabled = false;
+                }
+            }
+        }
+    }
+
+    fn observe_chunk(&mut self, bytes: &Bytes) {
+        if !self.observe_events {
+            return;
+        }
+        if let Some(mut transform) = self.observation_transform.take() {
+            for observed in transform.transform_chunk(bytes) {
+                self.observe_bytes(&observed);
+            }
+            self.observation_transform = Some(transform);
+        } else {
+            self.observe_bytes(bytes);
+        }
+    }
+
+    fn finish_observation_transform(&mut self) {
+        if !self.observe_events {
+            return;
+        }
+        if let Some(mut transform) = self.observation_transform.take() {
+            for observed in transform.finish() {
+                self.observe_bytes(&observed);
+            }
+            self.observation_transform = Some(transform);
+        }
+    }
+
     fn finalize(&mut self, transport_outcome: TransportOutcome) {
         if self.finalized {
             return;
+        }
+        if matches!(transport_outcome, TransportOutcome::CompletedEof) {
+            self.finish_observation_transform();
         }
         self.finalized = true;
         let observation = StreamObservation {
@@ -1313,21 +1392,7 @@ where
         let this = self.get_mut();
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(bytes))) => {
-                if this.observe_events {
-                    this.buffer.extend_from_slice(&bytes);
-                    while let Some(event) = take_one_sse_event(&mut this.buffer) {
-                        this.observer.on_event(&event, false);
-                        if let Some(ExchangeCaptureMode::Spooling(sink)) =
-                            this.exchange_capture.as_mut()
-                        {
-                            if let Err(err) = sink.on_event(&event) {
-                                this.exchange_capture =
-                                    Some(ExchangeCaptureMode::Unavailable { reason: err });
-                                this.capture_enabled = false;
-                            }
-                        }
-                    }
-                }
+                this.observe_chunk(&bytes);
                 Poll::Ready(Some(Ok(bytes)))
             }
             Poll::Ready(Some(Err(err))) => {
@@ -2211,6 +2276,7 @@ mod tests {
             finalized: false,
             capture_enabled: true,
             observe_events: true,
+            observation_transform: None,
         };
 
         assert!(!stream.finalized);

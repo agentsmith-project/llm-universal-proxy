@@ -229,6 +229,12 @@ pub(super) fn runtime_namespace_state_for_tests(
                 &resolved_proxy,
             )
             .expect("build test no-auto-decompression upstream client");
+            let no_auto_decompression_streaming_client =
+                crate::upstream::build_no_auto_decompression_streaming_client(
+                    config.upstream_timeout,
+                    &resolved_proxy,
+                )
+                .expect("build test no-auto-decompression streaming upstream client");
             (
                 (*name).to_string(),
                 UpstreamState {
@@ -243,6 +249,7 @@ pub(super) fn runtime_namespace_state_for_tests(
                     client,
                     streaming_client,
                     no_auto_decompression_client,
+                    no_auto_decompression_streaming_client,
                     resolved_proxy,
                 },
             )
@@ -381,6 +388,12 @@ pub(super) fn app_state_for_single_upstream_with_timeout(
         &resolved_proxy,
     )
     .expect("build single no-auto-decompression upstream client");
+    let no_auto_decompression_streaming_client =
+        crate::upstream::build_no_auto_decompression_streaming_client(
+            config.upstream_timeout,
+            &resolved_proxy,
+        )
+        .expect("build single no-auto-decompression streaming upstream client");
     let runtime = RuntimeState {
         namespaces: BTreeMap::from([(
             DEFAULT_NAMESPACE.to_string(),
@@ -399,6 +412,7 @@ pub(super) fn app_state_for_single_upstream_with_timeout(
                         client,
                         streaming_client,
                         no_auto_decompression_client,
+                        no_auto_decompression_streaming_client,
                         resolved_proxy,
                     },
                 )]),

@@ -31,7 +31,7 @@ Status cells in the quick matrix answer whether the capability is officially doc
 | One-page provider comparison | [`protocol-baselines/matrices/provider-capability-matrix.md`](protocol-baselines/matrices/provider-capability-matrix.md) |
 | High-risk field mappings | [`protocol-baselines/matrices/field-mapping-matrix.md`](protocol-baselines/matrices/field-mapping-matrix.md) |
 | Vendor-specific facts | [`protocol-baselines/README.md`](protocol-baselines/README.md) |
-| Latest refresh and implementation risks | [`protocol-baselines/audits/2026-05-16-online-recheck.md`](protocol-baselines/audits/2026-05-16-online-recheck.md) |
+| Latest refresh audit and historical implementation-risk notes | [`protocol-baselines/audits/2026-05-16-online-recheck.md`](protocol-baselines/audits/2026-05-16-online-recheck.md) |
 
 ## Current compatibility posture
 

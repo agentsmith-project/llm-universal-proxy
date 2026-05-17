@@ -15,6 +15,7 @@ use tracing::warn;
 use crate::config::DebugTraceConfig;
 use crate::formats::UpstreamFormat;
 use crate::request_processing::RequestProcessingInfo;
+use crate::stream_observation::StreamObservationTransform;
 use crate::streaming::take_one_sse_event;
 
 #[derive(Clone)]
@@ -280,6 +281,7 @@ pub struct DebugTraceStream<S> {
     buffer: Vec<u8>,
     summary: ResponseSummary,
     finalized: bool,
+    observation_transform: Option<Box<dyn StreamObservationTransform>>,
 }
 
 impl DebugTraceRecorder {
@@ -435,6 +437,32 @@ impl DebugTraceRecorder {
     where
         S: Stream<Item = Result<Bytes, std::io::Error>>,
     {
+        self.wrap_stream_inner(inner, ctx, status, None)
+    }
+
+    pub(crate) fn wrap_stream_with_observation_transform<S>(
+        &self,
+        inner: S,
+        ctx: DebugTraceContext,
+        status: u16,
+        observation_transform: Box<dyn StreamObservationTransform>,
+    ) -> DebugTraceStream<S>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>>,
+    {
+        self.wrap_stream_inner(inner, ctx, status, Some(observation_transform))
+    }
+
+    fn wrap_stream_inner<S>(
+        &self,
+        inner: S,
+        ctx: DebugTraceContext,
+        status: u16,
+        observation_transform: Option<Box<dyn StreamObservationTransform>>,
+    ) -> DebugTraceStream<S>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>>,
+    {
         DebugTraceStream {
             inner,
             recorder: self.clone(),
@@ -443,6 +471,7 @@ impl DebugTraceRecorder {
             buffer: Vec::new(),
             summary: ResponseSummary::new(self.max_text_chars),
             finalized: false,
+            observation_transform,
         }
     }
 
@@ -530,10 +559,7 @@ where
         let this = self.get_mut();
         match std::pin::Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(bytes))) => {
-                this.buffer.extend_from_slice(&bytes);
-                while let Some(event) = take_one_sse_event(&mut this.buffer) {
-                    accumulate_event(this.ctx.client_format, &event, &mut this.summary);
-                }
+                this.observe_chunk(&bytes);
                 Poll::Ready(Some(Ok(bytes)))
             }
             Poll::Ready(Some(Err(err))) => {
@@ -549,9 +575,7 @@ where
                 Poll::Ready(Some(Err(err)))
             }
             Poll::Ready(None) => {
-                while let Some(event) = take_one_sse_event(&mut this.buffer) {
-                    accumulate_event(this.ctx.client_format, &event, &mut this.summary);
-                }
+                this.finish_observation_transform();
                 if !this.finalized {
                     this.recorder.record_stream_result(
                         &this.ctx,
@@ -564,6 +588,35 @@ where
                 Poll::Ready(None)
             }
             Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<S> DebugTraceStream<S> {
+    fn observe_bytes(&mut self, bytes: &Bytes) {
+        self.buffer.extend_from_slice(bytes);
+        while let Some(event) = take_one_sse_event(&mut self.buffer) {
+            accumulate_event(self.ctx.client_format, &event, &mut self.summary);
+        }
+    }
+
+    fn observe_chunk(&mut self, bytes: &Bytes) {
+        if let Some(mut transform) = self.observation_transform.take() {
+            for observed in transform.transform_chunk(bytes) {
+                self.observe_bytes(&observed);
+            }
+            self.observation_transform = Some(transform);
+        } else {
+            self.observe_bytes(bytes);
+        }
+    }
+
+    fn finish_observation_transform(&mut self) {
+        if let Some(mut transform) = self.observation_transform.take() {
+            for observed in transform.finish() {
+                self.observe_bytes(&observed);
+            }
+            self.observation_transform = Some(transform);
         }
     }
 }

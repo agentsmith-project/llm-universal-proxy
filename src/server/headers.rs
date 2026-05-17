@@ -162,6 +162,44 @@ pub(super) fn append_raw_upstream_response_headers(
     }
 }
 
+pub(super) fn append_raw_upstream_stream_response_headers(
+    response: &mut Response<Body>,
+    upstream_headers: &reqwest::header::HeaderMap,
+    redactor: &SecretRedactor,
+) {
+    if let Some(value) = upstream_headers.get(reqwest::header::CONTENT_TYPE) {
+        response
+            .headers_mut()
+            .insert(reqwest::header::CONTENT_TYPE, value.clone());
+    }
+
+    for value in upstream_headers
+        .get_all(reqwest::header::CONTENT_ENCODING)
+        .iter()
+    {
+        if value.to_str().is_ok() {
+            response
+                .headers_mut()
+                .append(reqwest::header::CONTENT_ENCODING, value.clone());
+        }
+    }
+
+    for (name, value) in upstream_headers.iter() {
+        if is_forwardable_upstream_protocol_response_header(name.as_str())
+            && !response.headers().contains_key(name)
+        {
+            let Ok(value) = value.to_str() else {
+                continue;
+            };
+            let redacted_value = redactor.redact_text(value);
+            let Ok(redacted_value) = HeaderValue::from_str(&redacted_value) else {
+                continue;
+            };
+            response.headers_mut().append(name, redacted_value);
+        }
+    }
+}
+
 /// Extract only protocol-relevant headers that are safe to forward to upstream.
 /// Avoid forwarding generic browser/runtime headers from the client request.
 pub(super) fn extract_forwardable_headers(headers: &HeaderMap) -> Vec<(String, String)> {

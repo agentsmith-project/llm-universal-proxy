@@ -160,6 +160,12 @@ async fn dashboard_runtime_snapshot_tracks_live_namespace_state() {
         &resolved_proxy,
     )
     .expect("build dashboard no-auto-decompression upstream client");
+    let no_auto_decompression_streaming_client =
+        crate::upstream::build_no_auto_decompression_streaming_client(
+            config.upstream_timeout,
+            &resolved_proxy,
+        )
+        .expect("build dashboard no-auto-decompression streaming upstream client");
     upstreams.insert(
         "auto".to_string(),
         UpstreamState {
@@ -172,6 +178,7 @@ async fn dashboard_runtime_snapshot_tracks_live_namespace_state() {
             client,
             streaming_client,
             no_auto_decompression_client,
+            no_auto_decompression_streaming_client,
             resolved_proxy,
         },
     );

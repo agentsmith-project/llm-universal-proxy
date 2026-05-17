@@ -58,6 +58,7 @@ pub(super) struct UpstreamState {
     pub(super) client: Client,
     pub(super) streaming_client: Client,
     pub(super) no_auto_decompression_client: Client,
+    pub(super) no_auto_decompression_streaming_client: Client,
     pub(crate) resolved_proxy: upstream::ResolvedProxyMetadata,
 }
 
@@ -189,6 +190,11 @@ pub(super) async fn resolve_upstreams(
             upstream::build_upstream_clients(config, upstream_proxy, namespace_proxy)?;
         let no_auto_decompression_client =
             upstream::build_no_auto_decompression_client(config.upstream_timeout, &resolved_proxy)?;
+        let no_auto_decompression_streaming_client =
+            upstream::build_no_auto_decompression_streaming_client(
+                config.upstream_timeout,
+                &resolved_proxy,
+            )?;
         let provider_key = data_access.provider_key_for_upstream(upstream)?;
         let mut discovered = if let Some(f) = upstream.fixed_upstream_format {
             DiscoveredUpstream::fixed(f)
@@ -216,6 +222,7 @@ pub(super) async fn resolve_upstreams(
                 client,
                 streaming_client,
                 no_auto_decompression_client,
+                no_auto_decompression_streaming_client,
                 resolved_proxy,
             },
         );

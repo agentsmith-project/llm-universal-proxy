@@ -38,6 +38,15 @@ const RAW_CHAT_REQUEST: &str = r#"{
   "prompt_cache_key": "stable-prefix",
   "temperature": 1e0
 }"#;
+const RAW_CHAT_STREAM_REQUEST: &str = r#"{
+  "model": "gpt-4o-mini",
+  "messages": [
+    { "role": "user", "content": "ping" }
+  ],
+  "prompt_cache_key": "stable-prefix",
+  "temperature": 1e0,
+  "stream": true
+}"#;
 const RAW_RESPONSES_REQUEST: &str = r#"{
   "model": "gpt-4.1",
   "input": [
@@ -50,6 +59,20 @@ const RAW_RESPONSES_REQUEST: &str = r#"{
   ],
   "prompt_cache_key": "responses-prefix",
   "temperature": 1e0
+}"#;
+const RAW_RESPONSES_STREAM_REQUEST: &str = r#"{
+  "model": "gpt-4.1",
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "input_text", "text": "ping" }
+      ]
+    }
+  ],
+  "prompt_cache_key": "responses-prefix",
+  "temperature": 1e0,
+  "stream": true
 }"#;
 const RAW_ANTHROPIC_REQUEST: &str = r#"{
   "model": "claude-3-5-sonnet",
@@ -67,6 +90,24 @@ const RAW_ANTHROPIC_REQUEST: &str = r#"{
     }
   ],
   "temperature": 1e0
+}"#;
+const RAW_ANTHROPIC_STREAM_REQUEST: &str = r#"{
+  "model": "claude-3-5-sonnet",
+  "max_tokens": 0,
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "ping",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    }
+  ],
+  "temperature": 1e0,
+  "stream": true
 }"#;
 const RAW_CHAT_SUCCESS_RESPONSE: &str = r#"{
   "id" : "chatcmpl_raw_success",
@@ -138,6 +179,76 @@ const RAW_ANTHROPIC_ERROR_RESPONSE: &str = r#"{
   "top_unknown" : ["b", "a"]
 }
 "#;
+const RAW_SSE_CONTENT_TYPE: &str = "text/event-stream; charset=utf-8; x-raw-canary=phase-3b";
+const RAW_UPSTREAM_HOP_BY_HOP_HEADER: &str = "x-llmup-upstream-hop-by-hop-canary";
+const RAW_UPSTREAM_HOP_BY_HOP_VALUE: &str = "phase-3b-hop-by-hop-must-not-forward";
+const RAW_UPSTREAM_KEEP_ALIVE_VALUE: &str = "timeout=17; phase-3b-hop-by-hop=1";
+const RAW_CHAT_STREAM_SUCCESS_RESPONSE: &str = concat!(
+    ": chat comment canary scientific=1e0 decimal=1.2300\n",
+    "id: chat-evt-1\n",
+    "event: chat.completion.chunk\n",
+    "retry: 1234\n",
+    "data: { \"id\" : \"chatcmpl_sse_raw\", \"object\" : \"chat.completion.chunk\", \"created\" : 123, \"model\" : \"gpt-4o-mini\", \"choices\" : [ { \"index\" : 0, \"delta\" : { \"content\" : \"raw ok\", \"x_unknown\" : { \"scientific\" : 1e0, \"decimal\" : 1.2300 } }, \"finish_reason\" : null } ], \"x_top\" : [\"b\", \"a\"] }\n",
+    "\n",
+    "\n",
+    ": heartbeat\n",
+    "\n",
+    "id: chat-usage\n",
+    "event: completion.usage\n",
+    "data: { \"id\" : \"chatcmpl_sse_raw\", \"object\" : \"chat.completion.chunk\", \"choices\" : [], \"usage\" : { \"prompt_tokens\" : 1, \"completion_tokens\" : 1, \"total_tokens\" : 2 }, \"x_usage_unknown\" : true }\n",
+    "\n",
+    "data: [DONE]\n",
+    "\n",
+);
+const RAW_RESPONSES_STREAM_SUCCESS_RESPONSE: &str = concat!(
+    ": responses comment canary scientific=1e0 decimal=1.2300\n",
+    "id: resp-created\n",
+    "event: response.created\n",
+    "retry: 2345\n",
+    "data: { \"type\" : \"response.created\", \"response\" : { \"id\" : \"resp_sse_raw\", \"object\" : \"response\", \"created_at\" : 123, \"model\" : \"gpt-4.1\", \"x_unknown\" : { \"scientific\" : 1e0, \"decimal\" : 1.2300 } } }\n",
+    "\n",
+    ": heartbeat\n",
+    "\n",
+    "id: resp-delta\n",
+    "event: response.output_text.delta\n",
+    "data: { \"type\" : \"response.output_text.delta\", \"item_id\" : \"msg_raw\", \"output_index\" : 0, \"content_index\" : 0, \"delta\" : \"raw ok\", \"x_order\" : [\"b\", \"a\"] }\n",
+    "\n",
+    "id: resp-completed\n",
+    "event: response.completed\n",
+    "data: { \"type\" : \"response.completed\", \"response\" : { \"id\" : \"resp_sse_raw\", \"object\" : \"response\", \"status\" : \"completed\", \"usage\" : { \"input_tokens\" : 1, \"output_tokens\" : 1, \"total_tokens\" : 2 }, \"x_usage\" : { \"scientific\" : 1e0, \"decimal\" : 1.2300 } } }\n",
+    "\n",
+);
+const RAW_ANTHROPIC_STREAM_SUCCESS_RESPONSE: &str = concat!(
+    ": anthropic comment canary scientific=1e0 decimal=1.2300\n",
+    "id: msg-start\n",
+    "event: message_start\n",
+    "retry: 3456\n",
+    "data: { \"type\" : \"message_start\", \"message\" : { \"id\" : \"msg_sse_raw\", \"type\" : \"message\", \"role\" : \"assistant\", \"model\" : \"claude-3-5-sonnet\", \"content\" : [], \"stop_reason\" : null, \"stop_sequence\" : null, \"usage\" : { \"input_tokens\" : 1, \"output_tokens\" : 0 }, \"x_unknown\" : { \"scientific\" : 1e0, \"decimal\" : 1.2300 } } }\n",
+    "\n",
+    "\n",
+    ": heartbeat\n",
+    "\n",
+    "id: content-delta\n",
+    "event: content_block_delta\n",
+    "data: { \"type\" : \"content_block_delta\", \"index\" : 0, \"delta\" : { \"type\" : \"text_delta\", \"text\" : \"raw ok\", \"x_order\" : [\"b\", \"a\"] } }\n",
+    "\n",
+    "id: usage-delta\n",
+    "event: message_delta\n",
+    "data: { \"type\" : \"message_delta\", \"delta\" : { \"stop_reason\" : \"end_turn\", \"stop_sequence\" : null }, \"usage\" : { \"output_tokens\" : 1 }, \"x_usage\" : { \"scientific\" : 1e0, \"decimal\" : 1.2300 } }\n",
+    "\n",
+    "event: message_stop\n",
+    "data: { \"type\" : \"message_stop\" }\n",
+    "\n",
+);
+const RAW_OPENAI_CHAT_INTERNAL_ARTIFACT_STREAM_RESPONSE: &str = concat!(
+    ": mutation-required path must not forward this raw fixture\n",
+    "id: reserved-tool\n",
+    "event: chat.completion.chunk\n",
+    "data: { \"id\" : \"chatcmpl_reserved\", \"object\" : \"chat.completion.chunk\", \"created\" : 123, \"model\" : \"gpt-4o-mini\", \"_llmup_tool_bridge_context\" : { \"leak\" : true }, \"choices\" : [ { \"index\" : 0, \"delta\" : { \"tool_calls\" : [ { \"index\" : 0, \"id\" : \"call_reserved\", \"type\" : \"function\", \"function\" : { \"name\" : \"__llmup_custom__apply_patch\", \"arguments\" : \"{}\" } } ] }, \"finish_reason\" : null } ] }\n",
+    "\n",
+    "data: [DONE]\n",
+    "\n",
+);
 
 fn direct_data_client() -> Client {
     let mut headers = ReqwestHeaderMap::new();
@@ -191,6 +302,14 @@ impl RawUpstreamResponse {
         }
     }
 
+    fn sse_success(body: &'static str) -> Self {
+        Self {
+            status: StatusCode::OK,
+            content_type: RAW_SSE_CONTENT_TYPE,
+            body,
+        }
+    }
+
     fn provider_error(body: &'static str) -> Self {
         Self {
             status: StatusCode::TOO_MANY_REQUESTS,
@@ -213,7 +332,9 @@ struct RawForwardingCase {
     llmup_path: &'static str,
     upstream_path: &'static str,
     request_body: &'static str,
+    stream_request_body: &'static str,
     success_body: &'static str,
+    stream_success_body: &'static str,
     error_body: &'static str,
 }
 
@@ -502,6 +623,12 @@ fn raw_response_with_capture(
         .header("openai-processing-ms", "42")
         .header("retry-after", "3")
         .header("x-ratelimit-remaining-requests", "17")
+        .header("connection", RAW_UPSTREAM_HOP_BY_HOP_HEADER)
+        .header(
+            RAW_UPSTREAM_HOP_BY_HOP_HEADER,
+            RAW_UPSTREAM_HOP_BY_HOP_VALUE,
+        )
+        .header("keep-alive", RAW_UPSTREAM_KEEP_ALIVE_VALUE)
         .header("set-cookie", "session=must-not-forward")
         .body(Body::from(state.response.body))
         .unwrap()
@@ -608,7 +735,9 @@ fn raw_forwarding_cases() -> [RawForwardingCase; 3] {
             llmup_path: "/openai/v1/chat/completions",
             upstream_path: "/v1/chat/completions",
             request_body: RAW_CHAT_REQUEST,
+            stream_request_body: RAW_CHAT_STREAM_REQUEST,
             success_body: RAW_CHAT_SUCCESS_RESPONSE,
+            stream_success_body: RAW_CHAT_STREAM_SUCCESS_RESPONSE,
             error_body: RAW_OPENAI_ERROR_RESPONSE,
         },
         RawForwardingCase {
@@ -617,7 +746,9 @@ fn raw_forwarding_cases() -> [RawForwardingCase; 3] {
             llmup_path: "/openai/v1/responses",
             upstream_path: "/v1/responses",
             request_body: RAW_RESPONSES_REQUEST,
+            stream_request_body: RAW_RESPONSES_STREAM_REQUEST,
             success_body: RAW_RESPONSES_SUCCESS_RESPONSE,
+            stream_success_body: RAW_RESPONSES_STREAM_SUCCESS_RESPONSE,
             error_body: RAW_OPENAI_ERROR_RESPONSE,
         },
         RawForwardingCase {
@@ -626,7 +757,9 @@ fn raw_forwarding_cases() -> [RawForwardingCase; 3] {
             llmup_path: "/anthropic/v1/messages",
             upstream_path: "/v1/messages",
             request_body: RAW_ANTHROPIC_REQUEST,
+            stream_request_body: RAW_ANTHROPIC_STREAM_REQUEST,
             success_body: RAW_ANTHROPIC_SUCCESS_RESPONSE,
+            stream_success_body: RAW_ANTHROPIC_STREAM_SUCCESS_RESPONSE,
             error_body: RAW_ANTHROPIC_ERROR_RESPONSE,
         },
     ]
@@ -634,6 +767,37 @@ fn raw_forwarding_cases() -> [RawForwardingCase; 3] {
 
 fn header_str<'a>(headers: &'a ReqwestHeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+fn header_values<'a>(headers: &'a ReqwestHeaderMap, name: &str) -> Vec<&'a str> {
+    headers
+        .get_all(name)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect()
+}
+
+fn assert_upstream_hop_by_hop_headers_not_forwarded(headers: &ReqwestHeaderMap) {
+    assert!(
+        !header_values(headers, "connection").iter().any(|value| {
+            value.split(',').any(|token| {
+                token
+                    .trim()
+                    .eq_ignore_ascii_case(RAW_UPSTREAM_HOP_BY_HOP_HEADER)
+            })
+        }),
+        "upstream Connection hop-by-hop canary must not be forwarded"
+    );
+    assert!(
+        headers.get(RAW_UPSTREAM_HOP_BY_HOP_HEADER).is_none(),
+        "upstream Connection-nominated hop-by-hop header must not be forwarded"
+    );
+    assert!(
+        !header_values(headers, "keep-alive")
+            .iter()
+            .any(|value| *value == RAW_UPSTREAM_KEEP_ALIVE_VALUE),
+        "upstream Keep-Alive hop-by-hop header must not be forwarded"
+    );
 }
 
 fn assert_raw_response_headers(headers: &ReqwestHeaderMap) {
@@ -656,6 +820,37 @@ fn assert_raw_response_headers(headers: &ReqwestHeaderMap) {
         headers.get("set-cookie").is_none(),
         "sensitive upstream response header must not be forwarded"
     );
+    assert_upstream_hop_by_hop_headers_not_forwarded(headers);
+}
+
+fn assert_raw_stream_response_headers(headers: &ReqwestHeaderMap) {
+    assert_eq!(
+        header_str(headers, CONTENT_TYPE.as_str()),
+        Some(RAW_SSE_CONTENT_TYPE)
+    );
+    assert_eq!(header_str(headers, "cache-control"), Some("no-cache"));
+    assert_eq!(header_str(headers, "connection"), Some("keep-alive"));
+    assert_eq!(header_str(headers, "request-id"), Some("req_raw_phase_3a"));
+    assert_eq!(
+        header_str(headers, "x-request-id"),
+        Some("xreq_raw_phase_3a")
+    );
+    assert_eq!(header_str(headers, "openai-processing-ms"), Some("42"));
+    assert_eq!(header_str(headers, "retry-after"), Some("3"));
+    assert_eq!(
+        header_str(headers, "x-ratelimit-remaining-requests"),
+        Some("17")
+    );
+    assert!(
+        headers.get("content-length").is_none(),
+        "2xx SSE stream must not forward Content-Length"
+    );
+    // The downstream HTTP stack may add Transfer-Encoding for streaming bodies.
+    assert!(
+        headers.get("set-cookie").is_none(),
+        "sensitive upstream response header must not be forwarded"
+    );
+    assert_upstream_hop_by_hop_headers_not_forwarded(headers);
 }
 
 #[tokio::test]
@@ -745,6 +940,165 @@ async fn same_format_non_stream_provider_error_response_forwards_exact_upstream_
             case.name
         );
     }
+}
+
+#[tokio::test]
+async fn same_format_stream_success_response_forwards_exact_upstream_sse_bytes() {
+    for case in raw_forwarding_cases() {
+        let (upstream_base, _upstream, captured_upstream) = spawn_raw_response_capture_upstream(
+            RawUpstreamResponse::sse_success(case.stream_success_body),
+        )
+        .await;
+        let config = fixed_format_config(&upstream_base, case.format);
+        let (llmup_base, _llmup) = start_proxy(config).await;
+        let client = direct_data_client();
+
+        let response = post_raw_json(
+            &client,
+            format!("{llmup_base}{}", case.llmup_path),
+            case.stream_request_body,
+        )
+        .await;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.bytes().await.unwrap();
+
+        assert_eq!(status, StatusCode::OK, "case = {}", case.name);
+        assert_eq!(
+            body.as_ref(),
+            case.stream_success_body.as_bytes(),
+            "case = {}",
+            case.name
+        );
+        assert_raw_stream_response_headers(&headers);
+
+        let requests = wait_for_upstream_path(&captured_upstream, case.upstream_path, 80).await;
+        let request = requests
+            .iter()
+            .find(|request| request.path == case.upstream_path)
+            .unwrap_or_else(|| panic!("{} request should reach upstream", case.name));
+        assert_eq!(
+            request.raw_body.as_deref(),
+            Some(case.stream_request_body.as_bytes()),
+            "case = {}",
+            case.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn same_format_stream_provider_error_response_forwards_exact_upstream_bytes() {
+    for case in raw_forwarding_cases() {
+        let (upstream_base, _upstream, captured_upstream) = spawn_raw_response_capture_upstream(
+            RawUpstreamResponse::provider_error(case.error_body),
+        )
+        .await;
+        let config = fixed_format_config(&upstream_base, case.format);
+        let (llmup_base, _llmup) = start_proxy(config).await;
+        let client = direct_data_client();
+
+        let response = post_raw_json(
+            &client,
+            format!("{llmup_base}{}", case.llmup_path),
+            case.stream_request_body,
+        )
+        .await;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.bytes().await.unwrap();
+
+        assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "case = {}",
+            case.name
+        );
+        assert_eq!(
+            body.as_ref(),
+            case.error_body.as_bytes(),
+            "case = {}",
+            case.name
+        );
+        assert_raw_response_headers(&headers);
+
+        let requests = wait_for_upstream_path(&captured_upstream, case.upstream_path, 80).await;
+        let request = requests
+            .iter()
+            .find(|request| request.path == case.upstream_path)
+            .unwrap_or_else(|| panic!("{} request should reach upstream", case.name));
+        assert_eq!(
+            request.raw_body.as_deref(),
+            Some(case.stream_request_body.as_bytes()),
+            "case = {}",
+            case.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn mutation_required_stream_request_does_not_activate_raw_sse_forwarding() {
+    let (upstream_base, _upstream, captured_upstream) = spawn_raw_response_capture_upstream(
+        RawUpstreamResponse::sse_success(RAW_OPENAI_CHAT_INTERNAL_ARTIFACT_STREAM_RESPONSE),
+    )
+    .await;
+    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    config.model_aliases.insert(
+        "alias-chat".to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: "gpt-4o-mini".to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
+    let (llmup_base, _llmup) = start_proxy(config).await;
+    let client = direct_data_client();
+    let raw_json = r#"{
+  "model": "alias-chat",
+  "messages": [
+    { "role": "user", "content": "ping" }
+  ],
+  "temperature": 1.2300,
+  "stream": true
+}"#;
+
+    let response = post_raw_json(
+        &client,
+        format!("{llmup_base}/openai/v1/chat/completions"),
+        raw_json,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let downstream_body = response.bytes().await.unwrap();
+    assert_ne!(
+        downstream_body.as_ref(),
+        RAW_OPENAI_CHAT_INTERNAL_ARTIFACT_STREAM_RESPONSE.as_bytes(),
+        "mutation-required request must not activate raw SSE forwarding"
+    );
+    let downstream_body_text = String::from_utf8_lossy(&downstream_body);
+    assert!(
+        !downstream_body_text.contains("_llmup_tool_bridge_context"),
+        "internal bridge context leaked: {downstream_body_text}"
+    );
+    assert!(
+        !downstream_body_text.contains("__llmup_custom__"),
+        "internal custom tool prefix leaked: {downstream_body_text}"
+    );
+
+    let requests = wait_for_upstream_path(&captured_upstream, "/v1/chat/completions", 80).await;
+    let request = requests
+        .iter()
+        .find(|request| request.path == "/v1/chat/completions")
+        .expect("chat request should reach upstream");
+    assert_ne!(request.raw_body.as_deref(), Some(raw_json.as_bytes()));
+    assert_eq!(
+        request
+            .body
+            .as_ref()
+            .and_then(|body| body.get("model"))
+            .and_then(Value::as_str),
+        Some("gpt-4o-mini")
+    );
 }
 
 #[tokio::test]

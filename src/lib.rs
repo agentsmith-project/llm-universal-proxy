@@ -15,6 +15,7 @@ pub(crate) mod internal_artifacts;
 #[doc(hidden)]
 pub mod request_processing;
 pub mod server;
+pub(crate) mod stream_observation;
 pub mod streaming;
 pub mod telemetry;
 pub mod translate;

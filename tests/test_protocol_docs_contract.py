@@ -280,6 +280,37 @@ class ProtocolDocsContractTests(unittest.TestCase):
                     ),
                 )
 
+    def test_latest_protocol_audit_is_historical_without_stale_strategy_terms(self):
+        matrix = read_doc("docs/protocol-compatibility-matrix.md")
+        audit_path = "docs/protocol-baselines/audits/2026-05-16-online-recheck.md"
+        audit = read_doc(audit_path)
+
+        self.assertIn(
+            "Latest refresh audit and historical implementation-risk notes",
+            matrix,
+        )
+        self.assertIn(f"({audit_path.removeprefix('docs/')})", matrix)
+        for snippet in (
+            "historical audit",
+            "not an active implementation plan",
+            "internal forwarding optimization",
+            "native Gemini removal plan",
+            "no longer a planned follow-up",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, audit)
+
+        forbidden = (
+            "active online " + "recheck",
+            "raw/native " + "passthrough " + "lanes",
+            "passthrough " + "lanes",
+            "Gemini cache resource " + "adapter",
+            "Proxy Gemini `" + "cachedContents`",
+        )
+        for snippet in forbidden:
+            with self.subTest(snippet=snippet):
+                self.assertNotIn(snippet, audit)
+
     def test_tools_baseline_preserves_hosted_tools_only_on_native_or_shimmed_passthrough(self):
         text = read_doc("docs/protocol-baselines/capabilities/tools.md")
         row = table_row(text, "Hosted / server tools")

@@ -1358,6 +1358,17 @@ async fn exchange_hook_streaming_redacts_request_body_and_plain_header_metadata(
     let (hook_base, _hook_mock, exchange, _usage) = spawn_hook_capture_mock().await;
 
     let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let alias_model = "stream-redaction-alias";
+    let upstream_model = "gpt-4-stream-redaction-target";
+    config.model_aliases.insert(
+        alias_model.to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: upstream_model.to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
     config.hooks = HookConfig {
         max_pending_bytes: 4 * 1024 * 1024,
         timeout: Duration::from_secs(5),
@@ -1375,7 +1386,7 @@ async fn exchange_hook_streaming_redacts_request_body_and_plain_header_metadata(
         .post(format!("{proxy_base}/openai/v1/chat/completions"))
         .header("x-client-note", format!("plain-header-{TEST_PROVIDER_KEY}"))
         .json(&json!({
-            "model": "gpt-4",
+            "model": alias_model,
             "messages": [{
                 "role": "user",
                 "content": format!("request-body-{TEST_PROVIDER_KEY}")
@@ -1393,7 +1404,18 @@ async fn exchange_hook_streaming_redacts_request_body_and_plain_header_metadata(
     assert!(body.contains("[REDACTED]"), "body = {body}");
 
     let exchange_payloads = wait_for_payloads(&exchange, 1).await;
-    let payload_text = serde_json::to_string(exchange_payloads.last().unwrap()).unwrap();
+    let exchange_payload = exchange_payloads.last().unwrap();
+    assert_eq!(exchange_payload["client_model"], alias_model);
+    assert_eq!(exchange_payload["upstream_model"], upstream_model);
+    assert_eq!(
+        exchange_payload["llmup"]["request_processing"],
+        "request_transformation_required"
+    );
+    assert_eq!(
+        exchange_payload["llmup"]["zero_transform_forwarding_active"],
+        false
+    );
+    let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(
         &payload_text,
         TEST_PROVIDER_KEY,
@@ -1457,6 +1479,17 @@ async fn sse_event_field_redacts_known_secret_without_breaking_public_hook_or_de
     let trace_path = unique_temp_path("sse-event-redaction-trace", "jsonl");
 
     let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiResponses);
+    let alias_model = "sse-event-redaction-alias";
+    let upstream_model = "gpt-4.1-sse-event-redaction-target";
+    config.model_aliases.insert(
+        alias_model.to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: upstream_model.to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
     config.hooks = HookConfig {
         max_pending_bytes: 4 * 1024 * 1024,
         timeout: Duration::from_secs(5),
@@ -1477,7 +1510,7 @@ async fn sse_event_field_redacts_known_secret_without_breaking_public_hook_or_de
     let response = Client::new()
         .post(format!("{proxy_base}/openai/v1/responses"))
         .json(&json!({
-            "model": "gpt-4.1",
+            "model": alias_model,
             "input": "Hi",
             "stream": true
         }))
@@ -1500,7 +1533,18 @@ async fn sse_event_field_redacts_known_secret_without_breaking_public_hook_or_de
     );
 
     let exchange_payloads = wait_for_payloads(&exchange, 1).await;
-    let payload_text = serde_json::to_string(exchange_payloads.last().unwrap()).unwrap();
+    let exchange_payload = exchange_payloads.last().unwrap();
+    assert_eq!(exchange_payload["client_model"], alias_model);
+    assert_eq!(exchange_payload["upstream_model"], upstream_model);
+    assert_eq!(
+        exchange_payload["llmup"]["request_processing"],
+        "request_transformation_required"
+    );
+    assert_eq!(
+        exchange_payload["llmup"]["zero_transform_forwarding_active"],
+        false
+    );
+    let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(&payload_text, TEST_PROVIDER_KEY, "SSE exchange hook");
 
     let trace_payload = wait_for_debug_trace_response(&trace_path).await;
@@ -1517,6 +1561,17 @@ async fn sse_id_comment_retry_metadata_redacts_without_dropping_safe_metadata() 
     let trace_path = unique_temp_path("sse-metadata-redaction-trace", "jsonl");
 
     let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiResponses);
+    let alias_model = "sse-metadata-redaction-alias";
+    let upstream_model = "gpt-4.1-sse-metadata-redaction-target";
+    config.model_aliases.insert(
+        alias_model.to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: upstream_model.to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
     config.hooks = HookConfig {
         max_pending_bytes: 4 * 1024 * 1024,
         timeout: Duration::from_secs(5),
@@ -1537,7 +1592,7 @@ async fn sse_id_comment_retry_metadata_redacts_without_dropping_safe_metadata() 
     let response = Client::new()
         .post(format!("{proxy_base}/openai/v1/responses"))
         .json(&json!({
-            "model": "gpt-4.1",
+            "model": alias_model,
             "input": "Hi",
             "stream": true
         }))
@@ -1576,7 +1631,18 @@ async fn sse_id_comment_retry_metadata_redacts_without_dropping_safe_metadata() 
     );
 
     let exchange_payloads = wait_for_payloads(&exchange, 1).await;
-    let payload_text = serde_json::to_string(exchange_payloads.last().unwrap()).unwrap();
+    let exchange_payload = exchange_payloads.last().unwrap();
+    assert_eq!(exchange_payload["client_model"], alias_model);
+    assert_eq!(exchange_payload["upstream_model"], upstream_model);
+    assert_eq!(
+        exchange_payload["llmup"]["request_processing"],
+        "request_transformation_required"
+    );
+    assert_eq!(
+        exchange_payload["llmup"]["zero_transform_forwarding_active"],
+        false
+    );
+    let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(&payload_text, TEST_PROVIDER_KEY, "SSE metadata hook");
 
     let trace_payload = wait_for_debug_trace_response(&trace_path).await;

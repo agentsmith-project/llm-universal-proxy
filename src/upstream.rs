@@ -141,6 +141,13 @@ pub(crate) fn build_no_auto_decompression_client(
     build_client_with_proxy(timeout, resolved_proxy, false, false)
 }
 
+pub(crate) fn build_no_auto_decompression_streaming_client(
+    timeout: Duration,
+    resolved_proxy: &ResolvedProxyMetadata,
+) -> Result<Client, String> {
+    build_client_with_proxy(timeout, resolved_proxy, true, false)
+}
+
 /// Build a reqwest client with timeout from config.
 pub fn build_client(config: &Config) -> Client {
     build_upstream_clients(config, None, config.proxy.as_ref())
