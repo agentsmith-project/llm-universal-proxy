@@ -16,8 +16,8 @@ use common::proxy_helpers::proxy_config;
 use common::runtime_proxy::{start_proxy, upstream_api_root};
 use futures_util::{future::join_all, Stream, StreamExt};
 use llm_universal_proxy::config::{
-    Config, DebugTraceConfig, HookConfig, HookEndpointConfig, ProxyConfig, RuntimeConfigPayload,
-    RuntimeHookConfig, RuntimeUpstreamConfig,
+    Config, DebugTraceConfig, HookConfig, HookEndpointConfig, ModelAlias, ProxyConfig,
+    RuntimeConfigPayload, RuntimeHookConfig, RuntimeUpstreamConfig,
 };
 use llm_universal_proxy::formats::UpstreamFormat;
 use reqwest::{
@@ -905,7 +905,7 @@ async fn spawn_openai_completion_secret_echo_mock(
                     "id": "chatcmpl_secret_echo",
                     "object": "chat.completion",
                     "created": 1,
-                    "model": "gpt-4",
+                    "model": body.get("model").cloned().unwrap_or_else(|| json!("gpt-4")),
                     "choices": [{
                         "index": 0,
                         "message": {
@@ -1273,11 +1273,23 @@ async fn apply_namespace_config(
 }
 
 #[tokio::test]
-async fn exchange_hook_non_stream_redacts_request_body_and_plain_header_metadata() {
+async fn exchange_hook_non_stream_transformation_required_redacts_request_body_and_plain_header_metadata(
+) {
     let (mock_base, _mock) = spawn_openai_completion_secret_echo_mock(TEST_PROVIDER_KEY).await;
     let (hook_base, _hook_mock, exchange, _usage) = spawn_hook_capture_mock().await;
 
     let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let alias_model = "redaction-alias";
+    let upstream_model = "gpt-4-redaction-target";
+    config.model_aliases.insert(
+        alias_model.to_string(),
+        ModelAlias {
+            upstream_name: "default".to_string(),
+            upstream_model: upstream_model.to_string(),
+            limits: None,
+            surface: None,
+        },
+    );
     config.hooks = HookConfig {
         max_pending_bytes: 4 * 1024 * 1024,
         timeout: Duration::from_secs(5),
@@ -1295,7 +1307,7 @@ async fn exchange_hook_non_stream_redacts_request_body_and_plain_header_metadata
         .post(format!("{proxy_base}/openai/v1/chat/completions"))
         .header("x-client-note", format!("plain-header-{TEST_PROVIDER_KEY}"))
         .json(&json!({
-            "model": "gpt-4",
+            "model": alias_model,
             "messages": [{
                 "role": "user",
                 "content": format!("request-body-{TEST_PROVIDER_KEY}")
@@ -1309,9 +1321,26 @@ async fn exchange_hook_non_stream_redacts_request_body_and_plain_header_metadata
     let body = response.text().await.unwrap();
     assert_no_secret_leak(&body, TEST_PROVIDER_KEY, "public non-stream response");
     assert!(body.contains("[REDACTED]"), "body = {body}");
+    let public_body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(public_body["model"], upstream_model);
 
     let exchange_payloads = wait_for_payloads(&exchange, 1).await;
-    let payload_text = serde_json::to_string(exchange_payloads.last().unwrap()).unwrap();
+    let exchange_payload = exchange_payloads.last().unwrap();
+    assert_eq!(exchange_payload["client_model"], alias_model);
+    assert_eq!(exchange_payload["upstream_model"], upstream_model);
+    assert_eq!(
+        exchange_payload["llmup"]["request_processing"],
+        "request_transformation_required"
+    );
+    assert_eq!(
+        exchange_payload["llmup"]["zero_transform_forwarding_active"],
+        false
+    );
+    assert_eq!(
+        exchange_payload["response"]["body"]["model"],
+        upstream_model
+    );
+    let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(
         &payload_text,
         TEST_PROVIDER_KEY,

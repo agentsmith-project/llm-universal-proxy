@@ -6978,14 +6978,22 @@ async fn usage_and_exchange_hooks_fire_for_non_streaming_requests() {
 }
 
 #[tokio::test]
-async fn exchange_hook_non_stream_success_uses_public_redacted_response_body() {
+async fn exchange_hook_non_stream_success_uses_public_redacted_response_body_when_transformation_required(
+) {
     let provider_secret = "hook-non-stream-provider-secret";
     let proxy_secret = "hook-non-stream-proxy-client-secret";
+    let alias_model = "hook-non-stream-redaction-alias";
+    let upstream_model = "gpt-4-redaction-target";
     let content =
         format!("provider={provider_secret}; client={proxy_secret}; proxy={proxy_secret}");
     let (mock_base, _mock) = spawn_secret_openai_completion_mock(content).await;
     let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = config_with_alias(
+        &mock_base,
+        UpstreamFormat::OpenAiCompletion,
+        alias_model,
+        upstream_model,
+    );
     config.upstreams[0].provider_key = Some(SecretSourceConfig {
         inline: Some(provider_secret.to_string()),
         env: None,
@@ -7008,7 +7016,7 @@ async fn exchange_hook_non_stream_success_uses_public_redacted_response_body() {
         .post(format!("{proxy_base}/openai/v1/chat/completions"))
         .header("authorization", format!("Bearer {proxy_secret}"))
         .json(&json!({
-            "model": "gpt-4",
+            "model": alias_model,
             "messages": [{ "role": "user", "content": "Hi" }],
             "stream": false
         }))
@@ -7021,14 +7029,23 @@ async fn exchange_hook_non_stream_success_uses_public_redacted_response_body() {
     assert!(!public_text.contains(provider_secret), "{public_text}");
     assert!(!public_text.contains(proxy_secret), "{public_text}");
     assert!(public_text.contains("[REDACTED]"), "{public_text}");
+    assert_eq!(public_body["model"], upstream_model);
 
     let payloads = wait_for_hook_payloads(&captured, 1).await;
     let exchange = payloads
         .iter()
         .find(|payload| payload.get("request").is_some())
         .unwrap();
+    assert_eq!(exchange["client_model"], alias_model);
+    assert_eq!(exchange["upstream_model"], upstream_model);
+    assert_eq!(
+        exchange["llmup"]["request_processing"],
+        "request_transformation_required"
+    );
+    assert_eq!(exchange["llmup"]["zero_transform_forwarding_active"], false);
     let hook_body = &exchange["response"]["body"];
     assert_eq!(hook_body, &public_body);
+    assert_eq!(hook_body["model"], upstream_model);
     let hook_text = serde_json::to_string(exchange).unwrap();
     assert!(!hook_text.contains(provider_secret), "{hook_text}");
     assert!(!hook_text.contains(proxy_secret), "{hook_text}");
