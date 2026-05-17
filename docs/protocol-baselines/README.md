@@ -13,14 +13,14 @@
 | Layer | Purpose | Primary docs |
 | --- | --- | --- |
 | Official baselines | Vendor contract and snapshot/source facts copied from official docs, kept per protocol; proxy posture may appear only when clearly labeled | `openai-responses.md`, `openai-chat-completions.md`, `anthropic-messages.md`, `google-gemini.md` |
-| Capability diffs | Cross-provider comparison of official surface coverage, degradations, proxy policy, and proxy posture for features that do not map 1:1 | `overview.md`, `capabilities/`, `matrices/` |
+| Capability diffs | Cross-provider comparison of official surface coverage, portability actions, proxy policy, and proxy posture for features that do not map 1:1 | `overview.md`, `capabilities/`, `matrices/` |
 | Versioned audits | Date-stamped refresh notes, change detection, and implementation risk calls | [`audits/2026-05-16-online-recheck.md`](audits/2026-05-16-online-recheck.md), [`audits/2026-04-27-ga-source-spot-check.md`](audits/2026-04-27-ga-source-spot-check.md), [`audits/2026-04-16-spec-refresh.md`](audits/2026-04-16-spec-refresh.md) |
 
 ## Metadata model
 
 Vendor snapshot/captured date records when the source snapshot or source facts were captured. It does not imply the vendor contract was refreshed on the proxy posture updated date.
 
-Proxy posture updated date records when this repository's compatibility policy, portability boundaries, safe-degradation rules, or implementation notes were last aligned. Proxy policy is not a vendor claim, and snapshot/source facts are not proxy policy.
+Proxy posture updated date records when this repository's compatibility policy, portability boundaries, portability warning rules, or implementation notes were last aligned. Proxy policy is not a vendor claim, and snapshot/source facts are not proxy policy.
 
 ## Reading order
 
@@ -34,8 +34,8 @@ Proxy posture updated date records when this repository's compatibility policy, 
 ## Update rules
 
 1. Keep official baseline files vendor-specific and factual. They may record both vendor contract facts and proxy posture, but label snapshot/source facts separately from proxy policy.
-2. Put broad semantic differences, degradations, and proxy guidance in `capabilities/` or `matrices/`, not in vendor baselines.
-3. In summary tables, keep provider-surface facts separate from portability judgments. Provider cells should answer "is this officially documented here?"; notes or mapping-status columns should answer "is it portable?"
+2. Put broad semantic differences, portability actions, and proxy guidance in `capabilities/` or `matrices/`, not in vendor baselines.
+3. In summary tables, keep provider-surface facts separate from portability judgments. Provider cells should answer "is this officially documented here?"; notes or portability-action columns should answer "is it portable?"
 4. Every refresh gets a new dated audit file under `audits/`. Do not silently overwrite an older audit summary.
 5. When a vendor baseline changes meaningfully, update `overview.md` and the affected matrix files in the same change.
 6. Treat `snapshots/` as immutable evidence for the capture that produced them. Add new snapshots in a separate refresh, never rewrite an old capture.

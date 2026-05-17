@@ -5,8 +5,8 @@ Last updated: 2026-05-16
 
 ## Goal
 
-Keep translated agent-facing paths on the single maximum safe compatibility
-strategy while enforcing two hard rules:
+Keep translated agent-facing paths on maximum safe compatibility as the only
+runtime behavior while enforcing two hard rules:
 
 - the proxy must not rewrite the visible tool name supplied by the client
 - the proxy must not reconstruct provider-owned lifecycle state
@@ -27,12 +27,12 @@ Phase 0 and Phase 1 together define the intended translated-path bridge: preserv
 
 ## Current Baseline
 
-- Runtime and config surfaces expose no compatibility switch; translated paths use the single maximum safe compatibility strategy; raw same-protocol forwarding is an internal optimization for eligible zero-mutation routes.
+- Runtime and config surfaces expose no compatibility switch; translated paths use maximum safe compatibility as the only runtime behavior; raw same-protocol forwarding is an internal optimization for eligible zero-mutation routes.
 - `surface_defaults`, alias `surface`, and `effective_model_surface()` exist as the shared model-surface truth chain.
 - model catalog endpoints expose effective `llmup.surface` metadata for wrappers and clients.
 - wrappers consume live/effective surface metadata and fail fast when critical agent-client fields are missing.
 - supported live custom/freeform bridge paths preserve visible tool names such as `apply_patch` and keep `__llmup_custom__*` internal.
-- Responses lifecycle resources remain native-only; the proxy does not invent provider-owned response/session state.
+- Responses lifecycle resources remain same-wire-only; the proxy does not invent provider-owned response/session state.
 
 ## Delivered Phases
 
@@ -63,7 +63,7 @@ Status: delivered; the single maximum compatibility runtime is active, and runti
 Current contract:
 
 - runtime and config surfaces expose no compatibility switch
-- translated paths follow the single maximum safe compatibility strategy
+- translated paths follow maximum safe compatibility as the only runtime behavior
 - raw same-protocol forwarding is an internal optimization for routes that can avoid body mutation and response normalization
 - fail-closed behavior is a hard portability boundary
 - visible tool identity is enforced on live request and response surfaces

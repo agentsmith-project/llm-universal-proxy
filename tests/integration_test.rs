@@ -5039,6 +5039,7 @@ async fn responses_translation_rejects_previous_response_id_without_warning_head
         .unwrap();
 
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(res.headers().get("x-llmup-portability-warning").is_none());
     assert!(res.headers().get("x-proxy-compat-warning").is_none());
     let body: Value = res.json().await.unwrap();
     let message = body["error"]["message"].as_str().unwrap_or_default();
@@ -6846,8 +6847,7 @@ async fn conversation_state_bridge_rejects_extra_custom_tool_call_output_after_p
 }
 
 #[tokio::test]
-async fn conversation_state_bridge_rejects_store_true_custom_tool_call_output_without_pending_call_before_dispatch(
-) {
+async fn conversation_state_bridge_rejects_store_true_before_tool_output_pending_validation() {
     let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_tool_mock(json!({
         "id": "call_custom_exec",
         "type": "custom",
@@ -6882,12 +6882,22 @@ async fn conversation_state_bridge_rejects_store_true_custom_tool_call_output_wi
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let warnings = response
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    assert!(response.headers().get("x-proxy-compat-warning").is_none());
     let body: Value = response.json().await.unwrap();
     let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("store"), "message = {message}");
     assert!(
-        message.contains("custom_tool_call_output") && message.contains("pending"),
+        message.contains("native OpenAI Responses"),
         "message = {message}"
     );
+    assert!(!message.contains("pending"), "message = {message}");
     assert_eq!(
         captured
             .wait_for_count(1, Duration::from_millis(200))
@@ -7167,6 +7177,198 @@ async fn conversation_state_bridge_store_false_does_not_save_replay_state() {
     let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(
         message.contains("previous_response_id"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_store_null_does_not_save_replay_state() {
+    let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
+    let config = bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "First",
+            "store": null,
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let response_id = first_body["id"].as_str().unwrap_or_default().to_string();
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": response_id,
+            "input": "Second",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("previous_response_id"),
+        "message = {message}"
+    );
+    assert_eq!(
+        captured
+            .wait_for_count(2, Duration::from_millis(200))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_disabled_store_continuation_replays_without_saving_next_state() {
+    for (label, store) in [("false", json!(false)), ("null", Value::Null)] {
+        let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
+        let config =
+            bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+        let (proxy_base, _proxy) = start_proxy(config).await;
+        let client = Client::new();
+
+        let first = client
+            .post(format!("{proxy_base}/openai/v1/responses"))
+            .json(&json!({
+                "model": "GLM-5",
+                "input": "First",
+                "stream": false
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            first.status().is_success(),
+            "{label} first status: {}",
+            first.status()
+        );
+        let first_body: Value = first.json().await.unwrap();
+        let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+        assert!(
+            local_id.starts_with("resp_llmup_"),
+            "{label}: first response should create local replay state, body = {first_body:?}"
+        );
+
+        let second = client
+            .post(format!("{proxy_base}/openai/v1/responses"))
+            .json(&json!({
+                "model": "GLM-5",
+                "previous_response_id": local_id,
+                "input": "Second",
+                "store": store,
+                "stream": false
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            second.status().is_success(),
+            "{label} second status: {}",
+            second.status()
+        );
+        let second_body: Value = second.json().await.unwrap();
+        let second_response_id = second_body["id"].as_str().unwrap_or_default().to_string();
+
+        let third = client
+            .post(format!("{proxy_base}/openai/v1/responses"))
+            .json(&json!({
+                "model": "GLM-5",
+                "previous_response_id": second_response_id,
+                "input": "Third",
+                "stream": false
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            third.status(),
+            StatusCode::BAD_REQUEST,
+            "{label} third status"
+        );
+        let body: Value = third.json().await.unwrap();
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("previous_response_id"),
+            "{label}: message = {message}"
+        );
+        assert_eq!(
+            captured
+                .wait_for_count(3, Duration::from_millis(200))
+                .await
+                .len(),
+            2,
+            "{label}: disabled store continuation must not save a replayable next state"
+        );
+    }
+}
+
+#[tokio::test]
+async fn conversation_state_bridge_local_continuation_store_true_fails_closed_before_dispatch() {
+    let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
+    let config = bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+    let client = Client::new();
+
+    let first = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "First",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "status: {}", first.status());
+    let first_body: Value = first.json().await.unwrap();
+    let local_id = first_body["id"].as_str().unwrap_or_default().to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    let second = client
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "previous_response_id": local_id,
+            "input": "Second",
+            "store": true,
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let warnings = second
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    assert!(second.headers().get("x-proxy-compat-warning").is_none());
+    let body: Value = second.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("store"), "message = {message}");
+    assert!(
+        message.contains("native OpenAI Responses"),
         "message = {message}"
     );
     assert_eq!(
@@ -7462,6 +7664,7 @@ async fn responses_translation_rejects_conversation_and_background_stateful_cont
         .unwrap();
 
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(res.headers().get("x-llmup-portability-warning").is_none());
     assert!(res.headers().get("x-proxy-compat-warning").is_none());
     let body: Value = res.json().await.unwrap();
     let message = body["error"]["message"].as_str().unwrap_or_default();
@@ -7498,11 +7701,12 @@ async fn assert_responses_context_management_rejects_on_live_proxy_path(
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let warnings = res
         .headers()
-        .get_all("x-proxy-compat-warning")
+        .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>();
     assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    assert!(res.headers().get("x-proxy-compat-warning").is_none());
     let body: Value = res.json().await.unwrap();
     let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(
@@ -7615,7 +7819,7 @@ async fn stateful_model_less_create_returns_503_when_unique_configured_native_ow
 }
 
 #[tokio::test]
-async fn responses_translated_allowed_degradation_emits_warning_headers() {
+async fn responses_translated_portability_warnings_emit_headers() {
     let (mock_base, _mock) = spawn_anthropic_mock().await;
     let config = proxy_config(&mock_base, UpstreamFormat::Anthropic);
     let (proxy_base, _proxy) = start_proxy(config).await;
@@ -7637,10 +7841,11 @@ async fn responses_translated_allowed_degradation_emits_warning_headers() {
     assert!(res.status().is_success(), "status: {}", res.status());
     let warnings = res
         .headers()
-        .get_all("x-proxy-compat-warning")
+        .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>();
+    assert!(res.headers().get("x-proxy-compat-warning").is_none());
     assert!(
         warnings
             .iter()
@@ -7670,11 +7875,12 @@ async fn responses_store_true_fails_closed_on_live_proxy_path() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let warnings = res
         .headers()
-        .get_all("x-proxy-compat-warning")
+        .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>();
     assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    assert!(res.headers().get("x-proxy-compat-warning").is_none());
     let body: Value = res.json().await.unwrap();
     let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(message.contains("store"), "message = {message}");
@@ -7685,6 +7891,49 @@ async fn responses_store_true_fails_closed_on_live_proxy_path() {
     assert!(
         captured.requests.lock().unwrap().is_empty(),
         "store=true fail-closed path must not reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn responses_store_true_fails_closed_on_live_openai_chat_proxy_path() {
+    let (mock_base, _mock, captured) = spawn_asserting_openai_completion_mock(|_| Ok(())).await;
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let res = Client::new()
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Hi",
+            "store": true,
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let warnings = res
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    assert!(res.headers().get("x-proxy-compat-warning").is_none());
+    let body: Value = res.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("store"), "message = {message}");
+    assert!(
+        message.contains("native OpenAI Responses"),
+        "message = {message}"
+    );
+    assert!(
+        captured
+            .wait_for_count(1, Duration::from_millis(200))
+            .await
+            .is_empty(),
+        "store=true fail-closed path must not reach OpenAI Chat upstream"
     );
 }
 

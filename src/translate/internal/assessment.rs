@@ -4,10 +4,11 @@ use serde_json::Value;
 
 use crate::config::{ModelModality, ModelSurface};
 use crate::formats::UpstreamFormat;
+use crate::provider_state_controls::provider_state_control_enabled;
 
 use super::media::{openai_file_part_mime_conflict_message, openai_file_part_resolved_mime_type};
 use super::messages::{
-    custom_tool_format_downgraded_message, custom_tool_format_reject_message,
+    custom_tool_format_portability_warning_message, custom_tool_format_reject_message,
     custom_tools_not_portable_message, openai_assistant_audio_history_not_portable_message,
     openai_request_audio_not_portable_message, responses_reasoning_continuity_not_portable_message,
     single_candidate_choice_contract_message, translation_target_label,
@@ -45,7 +46,7 @@ pub(super) fn responses_stateful_request_controls_for_translate(body: &Value) ->
             controls.push(field);
         }
     }
-    if stateful_control_is_enabled(body.get("background")) {
+    if provider_state_control_enabled(body.get("background")) {
         controls.push("background");
     }
     for field in ["prompt", "context_management"] {
@@ -53,14 +54,10 @@ pub(super) fn responses_stateful_request_controls_for_translate(body: &Value) ->
             controls.push(field);
         }
     }
-    if stateful_control_is_enabled(body.get("store")) {
+    if provider_state_control_enabled(body.get("store")) {
         controls.push("store");
     }
     controls
-}
-
-fn stateful_control_is_enabled(value: Option<&Value>) -> bool {
-    !matches!(value, None | Some(Value::Null) | Some(Value::Bool(false)))
 }
 
 fn openai_family_format(format: UpstreamFormat) -> bool {
@@ -256,12 +253,12 @@ fn collect_content_position_cache_control_paths(
     }
 }
 
-pub(super) fn cross_protocol_store_warning_message(
+pub(super) fn cross_protocol_store_reject_message(
     client_format: UpstreamFormat,
     upstream_format: UpstreamFormat,
 ) -> String {
     format!(
-        "{} request field `store` has provider-specific persistence semantics and will be dropped when translating to {}",
+        "{} request field `store` is an enabled provider persistence/storage request and cannot be translated to {}; same-wire provider-native handling is required",
         translation_target_label(client_format),
         translation_target_label(upstream_format)
     )
@@ -870,7 +867,7 @@ fn responses_custom_tool_bridge_warning_messages(
                             custom.format.as_ref(),
                         ) =>
                     {
-                        Some(custom_tool_format_downgraded_message(
+                        Some(custom_tool_format_portability_warning_message(
                             "OpenAI Responses",
                             &custom.name,
                             translation_target_label(target_format),
@@ -1755,11 +1752,8 @@ pub(crate) fn assess_request_translation(
         }
     }
 
-    if body.get("store").is_some()
-        && !(client_format == UpstreamFormat::OpenAiResponses
-            && body.get("store").and_then(Value::as_bool) == Some(true))
-    {
-        assessment.warning(cross_protocol_store_warning_message(
+    if provider_state_control_enabled(body.get("store")) {
+        assessment.reject(cross_protocol_store_reject_message(
             client_format,
             upstream_format,
         ));

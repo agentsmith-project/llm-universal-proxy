@@ -54,14 +54,22 @@ class ProtocolDocsContractTests(unittest.TestCase):
                 self.assertNotIn(forbidden, text)
         self.assertIn("Google OpenAI-compatible upstream", text)
         self.assertIn("`format: openai-completion`", text)
+        self.assertIn(
+            "provider surface facts, not llmup product grades",
+            text,
+        )
 
     def test_prd_uses_single_maximum_safe_compatibility_boundary(self):
         text = read_doc("docs/PRD.md")
 
         self.assertNotIn("same-protocol paths stay native", text)
+        self.assertNotIn("Translation Outcomes", text)
+        self.assertNotIn("x-proxy-" + "compat-warning", text)
         for snippet in (
             "Same-wire-protocol native-byte/native-field preservation is an internal request-processing optimization",
             "maximum safe compatibility",
+            "Portability Boundary Handling",
+            "x-llmup-portability-warning",
             "provider-native request-control preservation or documented explicit mapping plus usage telemetry",
             "MUST NOT introduce a `llmup` cache store",
         ):
@@ -188,8 +196,8 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "external provider IDs fail closed",
             "not persistent conversation state",
             "not a response cache",
-            "not a user compatibility mode",
-            "not another compatibility goal",
+            "not user-selectable behavior",
+            "not another product goal",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
@@ -222,6 +230,10 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "| **" + "Exact** |",
             "| **" + "Approximate** |",
             "| **" + "Dropped** |",
+            "Translation " + "Outcomes",
+            "Mapping " + "status",
+            "Warned safe " + "degradation",
+            "Native-" + "only",
             "future optional `" + "count_tokens` preflight",
             "count_tokens " + "preflight",
             "### Phase 6：" + "可选增强",
@@ -332,6 +344,37 @@ class ProtocolDocsContractTests(unittest.TestCase):
                 with self.subTest(path=str(relative_path), pattern=pattern.pattern):
                     self.assertIsNone(pattern.search(text))
 
+    def test_active_docs_use_portability_warning_language_instead_of_degrade_drop_terms(self):
+        paths = (
+            "docs/CONSTITUTION.md",
+            "docs/admin-dynamic-config.md",
+            "docs/configuration.md",
+            "docs/clients.md",
+            "docs/max-compat-design.md",
+            "docs/protocol-baselines/README.md",
+            "docs/protocol-baselines/overview.md",
+            "docs/protocol-baselines/matrices/provider-capability-matrix.md",
+            "docs/engineering/max-compat-development-plan.md",
+            "docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md",
+        )
+        forbidden_patterns = (
+            re.compile(r"\bdegrad(?:e|ed|es|ing|ation|ations)\b", re.IGNORECASE),
+            re.compile(r"\bwarn(?:ed|ing)?/drop(?:ped|s)?\b", re.IGNORECASE),
+            re.compile(r"\bwarn(?:ed|ing)?\s+and\s+drop(?:ped|s)?\b", re.IGNORECASE),
+            re.compile(r"\bcompatibility warnings\b", re.IGNORECASE),
+            re.compile(r"\bsafe-degradation\b", re.IGNORECASE),
+            re.compile(r"\bsafe degradation\b", re.IGNORECASE),
+            re.compile(r"\bcompatibility\s+strategy\b", re.IGNORECASE),
+            re.compile(r"\bcompatibility\s+mode\b", re.IGNORECASE),
+            re.compile(r"兼容(?:性)?分级|兼容级别|转换等级|降级"),
+        )
+
+        for path in paths:
+            text = read_doc(path)
+            for pattern in forbidden_patterns:
+                with self.subTest(path=path, pattern=pattern.pattern):
+                    self.assertIsNone(pattern.search(text))
+
     def test_active_protocol_baseline_docs_reject_old_forwarding_path_language(self):
         paths = (
             "docs/protocol-baselines/capabilities/reasoning.md",
@@ -356,6 +399,9 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "compatibility " + "level",
             "compatibility " + "tier",
             "forwarding " + "only",
+            "mapping " + "status",
+            "warned safe " + "degradation",
+            "native-" + "only",
         )
 
         for path in paths:
@@ -522,7 +568,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
             "provider-native same-wire handling",
             "no body mutation or response normalization is required",
             "explicit compatibility shims",
-            "Cross-provider translation should warn/drop or fail closed",
+            "Cross-provider translation should warn and omit non-portable detail or fail closed",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, row)
@@ -584,13 +630,23 @@ class ProtocolDocsContractTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
 
-    def test_field_mapping_drop_statuses_are_not_ambiguous(self):
+    def test_field_mapping_portability_actions_are_behavioral(self):
         text = read_doc("docs/protocol-baselines/matrices/field-mapping-matrix.md")
 
-        for snippet in (
-            "Fail-closed",
-            "Warn/drop opaque carrier",
+        self.assertIn("Portability action", text)
+        self.assertNotIn("Mapping status", text)
+        for old_status in (
+            "Preserved",
+            "Warned safe degradation",
             "Native-only",
+        ):
+            with self.subTest(old_status=old_status):
+                self.assertNotIn(old_status, text)
+
+        for snippet in (
+            "Fail closed",
+            "Warn and omit opaque carrier",
+            "Same-wire preserve only",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
@@ -598,7 +654,8 @@ class ProtocolDocsContractTests(unittest.TestCase):
         for first_cell in ("Reasoning opaque state", "Compaction"):
             row = table_row(text, first_cell)
             with self.subTest(row=first_cell):
-                self.assertIn("Warn/drop opaque carrier", row)
+                self.assertIn("Warn and omit opaque carrier", row)
+                self.assertIn("Fail closed", row)
                 self.assertNotRegex(row, r"\|\s*Drop\s*\|")
 
     def test_baseline_readme_separates_vendor_contract_from_proxy_policy(self):
@@ -667,7 +724,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
         for snippet in (
             "single maximum compatibility runtime",
             "runtime translated paths always use maximum safe compatibility",
-            "single maximum safe compatibility strategy",
+            "maximum safe compatibility as the only runtime behavior",
             "runtime and config surfaces expose no compatibility switch",
             "raw same-protocol " + "forwarding is an internal optimization",
             "fail-closed behavior is a hard portability boundary",

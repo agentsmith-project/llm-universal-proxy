@@ -191,7 +191,7 @@ The protected release compatible-provider smoke lives in
 | `docs/configuration.md` | Config syntax, auth policies, model aliases, model surface fields |
 | `docs/container.md` | Container build/smoke/release path and release gate summary |
 | `docs/ga-readiness-review.md` | GA posture, remaining evidence, and release-gate checklist |
-| `docs/protocol-compatibility-matrix.md` | Field-level portability, degrade, reject policy |
+| `docs/protocol-compatibility-matrix.md` | Field-level portability, warn-and-omit, reject policy |
 | `docs/protocol-baselines/` | Provider reference captures used for protocol work |
 
 ## Maintenance Rules
@@ -200,6 +200,6 @@ When the implementation changes, update the document that matches the change:
 
 - Update `docs/DESIGN.md` when runtime architecture or major execution chain changes.
 - Update `docs/PROJECT.md` when module paths, tests, scripts, or contributor entrypoints change.
-- Update `docs/protocol-compatibility-matrix.md` when protocol portability or safe-degradation behavior changes.
+- Update `docs/protocol-compatibility-matrix.md` when protocol portability, portability warning, or fail-closed behavior changes.
 - Update `docs/clients.md`, `README.md`, or `README_CN.md` when user-visible setup or client behavior changes.
 - Update release/container docs when `.github/workflows/release.yml`, release gate names, or artifact names change.

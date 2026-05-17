@@ -42,18 +42,18 @@ pub(crate) fn single_required_array_item<'a>(
 
 pub(crate) fn custom_tools_not_portable_message(upstream_format: UpstreamFormat) -> String {
     format!(
-        "OpenAI custom tools cannot be faithfully translated to {}; refusing to downgrade them to function tools",
+        "OpenAI custom tools cannot be faithfully translated to {}; failing closed because no safe function-tool representation exists",
         translation_target_label(upstream_format)
     )
 }
 
-pub(crate) fn custom_tool_format_downgraded_message(
+pub(crate) fn custom_tool_format_portability_warning_message(
     source_label: &str,
     tool_name: &str,
     target_label: &str,
 ) -> String {
     format!(
-        "{source_label} custom tool `{tool_name}` format constraints cannot be faithfully translated to {target_label}; downgrading to raw string input semantics"
+        "{source_label} custom tool `{tool_name}` format constraints cannot be faithfully translated to {target_label}; using raw string input bridge while omitting format constraints to preserve raw string input semantics"
     )
 }
 

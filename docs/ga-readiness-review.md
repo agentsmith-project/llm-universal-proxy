@@ -15,12 +15,12 @@ compatibility boundaries.
 This is not a provider-certified compatibility claim. The compatibility promise
 is maximum safe compatibility with hard portability boundaries:
 supported mappings are documented, high-risk unsupported fields fail before
-upstream calls, and low-risk degradation must be visible rather than silent.
+upstream calls, and low-risk omission of non-portable detail must be visible
+rather than silent.
 When a same-wire request needs no cross-protocol construction, internal handling
 may keep provider-native bytes, fields, and lifecycle resources unchanged if the
-route can avoid body mutation and response normalization; until that
-zero-transformation work lands, same-protocol traffic may still use
-compatibility machinery.
+route can avoid body mutation and response normalization; otherwise
+same-protocol traffic still uses compatibility machinery.
 
 ## Completed Local Baseline
 
@@ -59,7 +59,7 @@ compatibility machinery.
 
 ### OpenAI Responses
 
-OpenAI Responses lifecycle and state resource endpoints target provider-native same-wire handling only when zero-transformation handling is implemented and the route can avoid mutation.
+OpenAI Responses lifecycle and state resource endpoints target provider-native same-wire handling only when the route can avoid mutation and response normalization.
 Cross-provider reconstruction of provider-managed state,
 conversation continuity, `context_management`, compact resources, or opaque
 lifecycle resources must fail closed unless a future mapping is explicitly
@@ -67,7 +67,7 @@ designed and tested.
 
 Request-side opaque reasoning and compaction input items follow maximum safe
 compatibility: opaque carriers such as
-`encrypted_content` may be warned and dropped only when visible summary text or
+`encrypted_content` may be omitted with a portability warning only when visible summary text or
 visible transcript history remains. Opaque-only reasoning or compaction state
 always fails closed, and native Responses same-wire handling should preserve the
 native item unchanged when provider-native same-wire handling is available.

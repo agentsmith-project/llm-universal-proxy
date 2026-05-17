@@ -53,7 +53,7 @@ The captured Responses baseline spans both `/responses` and `/conversations` res
 
 This captured baseline includes the response lifecycle resources and the linked conversation resources, not just `POST /v1/responses`.
 
-Proxy support posture: these lifecycle and state resources are supported on `/openai/v1/...` and `/namespaces/{namespace}/openai/v1/...` only as native OpenAI Responses pass-through. The namespace must resolve to exactly one available upstream that natively supports OpenAI Responses. The proxy preserves method, query, JSON body, and forwardable protocol/auth headers, percent-encodes resource ID path segments before upstream forwarding, and fails closed rather than reconstructing response, conversation, or item ownership across providers.
+Proxy support posture: these lifecycle and state resources are supported on `/openai/v1/...` and `/namespaces/{namespace}/openai/v1/...` only through native OpenAI Responses same-wire handling. The namespace must resolve to exactly one available upstream that natively supports OpenAI Responses. The proxy preserves method, query, JSON body, and forwardable protocol/auth headers, percent-encodes resource ID path segments before upstream forwarding, and fails closed rather than reconstructing response, conversation, or item ownership across providers.
 
 ## Request baseline
 
@@ -143,7 +143,7 @@ In the captured create reference, `context_management` currently supports compac
 
 The captured compact endpoint returns a compacted response object. This is part of the formal surface, not just a guide-only idea.
 
-Proxy posture: `context_management` and compact resources are native OpenAI Responses state surfaces. Native OpenAI Responses forwarding preserves them, including compaction input items with `encrypted_content`. Cross-provider request translation follows the single maximum safe compatibility strategy: request-side compaction input items degrade only when each degraded compaction item has explicit summary text, or when the request contains non-compaction visible portable transcript/history. The proxy warns and drops provider-owned opaque fields such as `encrypted_content` without parsing, decrypting, forwarding, or synthesizing them, and preserves explicit summary text or visible portable transcript as ordinary context. Opaque-only compaction input always fails closed, and one summarized compaction item does not permit another opaque-only compaction item to be silently dropped.
+Proxy posture: `context_management` and compact resources are native OpenAI Responses state surfaces. Native OpenAI Responses same-wire handling preserves them, including compaction input items with `encrypted_content`. Under maximum safe compatibility, request-side compaction input items may omit opaque carrier fields only when each affected compaction item has explicit summary text, or when the request contains non-compaction visible portable transcript/history. The proxy emits a portability warning and omits provider-owned opaque fields such as `encrypted_content` without parsing, decrypting, forwarding, or synthesizing them, and preserves explicit summary text or visible portable transcript as ordinary context. Opaque-only compaction input always fails closed, and one summarized compaction item does not permit another opaque-only compaction item to be silently omitted.
 
 ### Tool surface
 
@@ -219,7 +219,7 @@ The captured `include` surface is especially important because it gates extra fi
 - `computer_call_output.output.image_url`
 - `code_interpreter_call.outputs`
 
-Proxy posture: `reasoning.encrypted_content` is opaque reasoning-continuity state. Native OpenAI Responses forwarding preserves `include: ["reasoning.encrypted_content"]` and request input reasoning items with `encrypted_content` exactly. Cross-provider request translation follows the single maximum safe compatibility strategy: `include: ["reasoning.encrypted_content"]` is warned and dropped, and reasoning item `encrypted_content` may be dropped without parsing, decoding, or replaying it only when visible summary text or visible transcript/history remains. If the reasoning item has `summary`, only that summary is reused as unsigned reasoning/thinking. Opaque-only reasoning always fails closed. Proxy-local carrier strings that encode Anthropic signed or omitted thinking provenance are never replayed into another provider's request history.
+Proxy posture: `reasoning.encrypted_content` is opaque reasoning-continuity state. Native OpenAI Responses same-wire handling preserves `include: ["reasoning.encrypted_content"]` and request input reasoning items with `encrypted_content` exactly. Under maximum safe compatibility, `include: ["reasoning.encrypted_content"]` is omitted with a portability warning, and reasoning item `encrypted_content` may be omitted without parsing, decoding, or replaying it only when visible summary text or visible transcript/history remains. If the reasoning item has `summary`, only that summary is reused as unsigned reasoning/thinking. Opaque-only reasoning always fails closed. Proxy-local carrier strings that encode Anthropic signed or omitted thinking provenance are never replayed into another provider's request history.
 
 ## Response baseline
 

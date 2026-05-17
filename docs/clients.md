@@ -107,7 +107,7 @@ That is why the homepage no longer presents one flat endpoint table for manual c
 
 Reasoning effort such as `xhigh` is still a request-side or client-side setting. Keep that out of the alias name.
 
-Responses reasoning/compaction continuity is intentionally bounded for cross-provider routes: the single maximum safe compatibility strategy may warn and drop an opaque carrier only when visible summary text or visible transcript history remains. Opaque-only reasoning and opaque-only compaction fail closed as a hard portability boundary, and provider-owned state is preserved only when same-wire-protocol handling can remain byte-preserving internally.
+Responses reasoning/compaction continuity is intentionally bounded for cross-provider routes: maximum safe compatibility may emit a portability warning and omit an opaque carrier only when visible summary text or visible transcript history remains. Opaque-only reasoning and opaque-only compaction fail closed as a hard portability boundary, and provider-owned state is preserved only when same-wire-protocol handling can remain byte-preserving internally.
 
 ## Manual Wiring Without Wrappers
 

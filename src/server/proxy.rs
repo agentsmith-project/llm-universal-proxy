@@ -25,6 +25,7 @@ use crate::hooks::{
     capture_headers, json_response_headers, new_request_id, now_timestamp_ms, sse_response_headers,
     HeaderEntry, HookRequestContext,
 };
+use crate::provider_state_controls::provider_state_control_enabled;
 use crate::request_processing::{
     classify_request_processing, RequestProcessing, RequestProcessingInput, StateBridgeModifier,
 };
@@ -43,7 +44,7 @@ use super::conversation_state_bridge::{
 };
 use super::data_auth::{self, RequestAuthContext};
 use super::errors::{
-    append_compatibility_warning_headers, classify_post_translation_non_stream_status,
+    append_portability_warning_headers, classify_post_translation_non_stream_status,
     client_closed_response, error_response, format_upstream_unavailable_message,
     normalized_non_stream_upstream_error, streaming_error_response,
 };
@@ -1069,7 +1070,7 @@ async fn handle_request_core_with_downstream_cancellation(
     });
     tracker.set_request_processing(llmup);
 
-    let mut compatibility_warnings = match classify_request_boundary_with_policy(
+    let mut portability_warnings = match classify_request_boundary_with_policy(
         client_format,
         upstream_format,
         &original_body,
@@ -1090,7 +1091,7 @@ async fn handle_request_core_with_downstream_cancellation(
             );
         }
     };
-    for warning in &compatibility_warnings {
+    for warning in &portability_warnings {
         warn!(
             "portability warning: client_format={} upstream_format={} warning={}",
             client_format, upstream_format, warning
@@ -1330,7 +1331,7 @@ async fn handle_request_core_with_downstream_cancellation(
                     body_len,
                     &request_redactor,
                 );
-                append_compatibility_warning_headers(&mut response, &compatibility_warnings);
+                append_portability_warning_headers(&mut response, &portability_warnings);
                 return response;
             }
 
@@ -1394,7 +1395,7 @@ async fn handle_request_core_with_downstream_cancellation(
                 &upstream_response_headers,
                 &request_redactor,
             );
-            append_compatibility_warning_headers(&mut response, &compatibility_warnings);
+            append_portability_warning_headers(&mut response, &portability_warnings);
             return response;
         }
         if !status.is_success() {
@@ -1528,7 +1529,7 @@ async fn handle_request_core_with_downstream_cancellation(
             &upstream_response_headers,
             &request_redactor,
         );
-        append_compatibility_warning_headers(&mut response, &compatibility_warnings);
+        append_portability_warning_headers(&mut response, &portability_warnings);
         return response;
     }
 
@@ -1626,7 +1627,7 @@ async fn handle_request_core_with_downstream_cancellation(
             body_len,
             &request_redactor,
         );
-        append_compatibility_warning_headers(&mut response, &compatibility_warnings);
+        append_portability_warning_headers(&mut response, &portability_warnings);
         return response;
     }
     if !status.is_success() {
@@ -1727,7 +1728,7 @@ async fn handle_request_core_with_downstream_cancellation(
                 Ok(None) => {}
                 Err(message) => {
                     warn!("conversation_state_bridge capture skipped: {message}");
-                    compatibility_warnings.push(message);
+                    portability_warnings.push(message);
                 }
             }
         }
@@ -1764,7 +1765,7 @@ async fn handle_request_core_with_downstream_cancellation(
             &request_redactor,
         );
     }
-    append_compatibility_warning_headers(&mut response, &compatibility_warnings);
+    append_portability_warning_headers(&mut response, &portability_warnings);
     response
 }
 
@@ -1880,8 +1881,15 @@ async fn prepare_conversation_state_bridge(
         return Ok(None);
     }
 
-    let store_false = body.get("store").and_then(Value::as_bool) == Some(false);
-    let store_true = body.get("store").and_then(Value::as_bool) == Some(true);
+    if provider_state_control_enabled(body.get("store")) {
+        return Err(responses_store_requires_native_responses_message(
+            upstream_format,
+        ));
+    }
+    let store_disabled = matches!(
+        body.get("store"),
+        Some(Value::Null) | Some(Value::Bool(false))
+    );
     let has_previous_response_id = body.get("previous_response_id").is_some();
 
     if stream && preloaded_response.is_some() {
@@ -1905,22 +1913,12 @@ async fn prepare_conversation_state_bridge(
         match responses_bridge_input_items_from_body(body) {
             Ok(items) => {
                 if bridge_items_include_tool_output(&items) {
-                    if store_true {
-                        let output_type = first_bridge_tool_output_type(&items);
-                        let call_type = bridge_tool_output_kind_for_item_type(output_type)
-                            .map(BridgeToolCallKind::call_item_type)
-                            .unwrap_or("tool_call");
-                        return Err(format!(
-                            "conversation_state_bridge replay cannot store OpenAI Responses `{output_type}` without a pending `{call_type}` from local `previous_response_id`"
-                        ));
-                    }
                     remove_local_bridge_state_controls(body);
                     return Ok(None);
                 }
                 remove_local_bridge_state_controls(body);
                 items
             }
-            Err(message) if store_true => return Err(message),
             Err(_) => {
                 remove_local_bridge_state_controls(body);
                 return Ok(None);
@@ -1928,7 +1926,7 @@ async fn prepare_conversation_state_bridge(
         }
     };
 
-    if store_false {
+    if store_disabled {
         return Ok(None);
     }
     Ok(Some(BridgeCaptureCandidate {
@@ -1942,6 +1940,12 @@ async fn prepare_conversation_state_bridge(
         max_bytes: namespace_state.config.conversation_state_bridge.max_bytes,
         local_response_id: stream.then(ConversationStateBridgeStore::mint_response_id),
     }))
+}
+
+fn responses_store_requires_native_responses_message(upstream_format: UpstreamFormat) -> String {
+    format!(
+        "Responses request control `store` requires a native OpenAI Responses upstream and cannot be translated to {upstream_format}; the proxy does not reconstruct provider state"
+    )
 }
 
 fn conversation_state_bridge_route_config_changed_error() -> &'static str {

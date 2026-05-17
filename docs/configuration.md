@@ -272,15 +272,15 @@ Resource boundaries for client request bodies, upstream response bodies, and str
 
 ### Compatibility Behavior
 
-Translated paths use one product behavior: maximum safe compatibility. The proxy preserves the most complete client-visible representation it can, emits warnings for safe degradations, and rejects requests before upstream when a field would require unsafe approximation.
+Translated paths use one product behavior: maximum safe compatibility. The proxy preserves the most complete client-visible representation it can, emits portability warnings when omitting non-portable detail, and rejects requests before upstream when a field would require unsafe approximation.
 
-Fail-closed behavior is a hard portability boundary, not a lower compatibility setting. Responses reasoning or compaction carriers may be warned and dropped only when visible summary text or visible transcript history remains. Requests with opaque-only reasoning, opaque-only compaction, provider-owned state, unsupported media, and unsupported source transports fail closed. Provider-owned state is preserved only when same-wire-protocol handling can remain byte-preserving internally.
+Fail-closed behavior is a hard portability boundary, not a lower compatibility setting. Responses reasoning or compaction carriers may be omitted with a portability warning only when visible summary text or visible transcript history remains. Requests with opaque-only reasoning, opaque-only compaction, provider-owned state, unsupported media, and unsupported source transports fail closed. Provider-owned state is preserved only when same-wire-protocol handling can remain byte-preserving internally.
 
 ### `conversation_state_bridge`
 
 `conversation_state_bridge` controls the retention bounds for llmup's built-in
 local transcript replay. It is part of the single maximum safe compatibility
-behavior, not a user-selectable compatibility mode:
+behavior, not user-selectable behavior:
 
 ```yaml
 conversation_state_bridge:

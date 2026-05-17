@@ -14,7 +14,7 @@ LLM Universal Proxy (public short name: llmup)
 
 ### 1.2 Product Definition
 
-A single-binary HTTP proxy that provides protocol-namespaced entrypoints and translation between supported LLM API surfaces. Clients using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages can route through one stable proxy to configured upstream endpoints. The product goal is maximum safe compatibility: preserve the most complete portable representation possible, warn on safe degradations, and reject non-portable provider-native features before upstream. When no cross-protocol construction is needed, internal handling may keep provider-native request/response bytes and fields unchanged; this remains an implementation detail inside the same product behavior. Gemini models remain usable only through Google's OpenAI-compatible endpoint configured as `format: openai-completion`, not as a native Gemini wire protocol.
+A single-binary HTTP proxy that provides protocol-namespaced entrypoints and translation between supported LLM API surfaces. Clients using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages can route through one stable proxy to configured upstream endpoints. The product goal is maximum safe compatibility: preserve the most complete portable representation possible, emit portability warnings when non-portable detail is omitted, and reject non-portable provider-native features before upstream. When no cross-protocol construction is needed, internal handling may keep provider-native request/response bytes and fields unchanged; this remains an implementation detail inside the same product behavior. Gemini models remain usable only through Google's OpenAI-compatible endpoint configured as `format: openai-completion`, not as a native Gemini wire protocol.
 
 ### 1.3 Problem Statement
 
@@ -101,7 +101,7 @@ The proxy MUST translate the following request fields across protocols:
 | Typed media source boundary | Must | Treat `surface.modalities.input` as a media-type gate, not a source transport promise; provider `file_id` and provider-native or local URIs such as `gs://`, `s3://`, and `file://` fail closed unless a documented adapter supports them |
 | Typed media MIME provenance | Must | Reject conflicting MIME hints before routing so surface gates and translators cannot disagree about the actual media kind |
 | Thinking/reasoning config | May | Preserve where upstream supports it |
-| Built-in / non-function tools | Won't | Warned safe degradation during cross-protocol translation unless a documented bridge can preserve the original visible tool identity |
+| Built-in / non-function tools | Won't | Warn and omit non-portable detail during cross-protocol translation unless a documented bridge can preserve the original visible tool identity |
 
 ### 2.5 Response Translation
 
@@ -120,7 +120,7 @@ The proxy MUST translate the following response fields:
 
 ### 2.6 Compatibility Contract
 
-The proxy MUST have one compatibility goal: maximum safe compatibility. It MUST preserve portable core semantics and client-visible tool identity, emit compatibility warnings for safe degradations, and fail closed for provider-state reconstruction, unsafe semantic approximation, unsupported media/source transports, and opaque-only continuity carriers.
+The proxy MUST have one compatibility goal: maximum safe compatibility. It MUST preserve portable core semantics and client-visible tool identity, emit `x-llmup-portability-warning` headers when it omits non-portable detail, and fail closed for provider-state reconstruction, unsafe semantic approximation, unsupported media/source transports, and opaque-only continuity carriers.
 
 Same-wire-protocol native-byte/native-field preservation is an internal request-processing optimization for requests that require no body mutation or response normalization; it is not user-selectable and does not change the product goal. Provider prompt-cache support is provider-native request-control preservation or documented explicit mapping plus usage telemetry; it MUST NOT introduce a `llmup` cache store, response cache, semantic cache, cache-aware routing, or provider cache resource lifecycle manager. Local transcript replay for llmup-owned `resp_llmup_*` continuations is a built-in, short-term, process-memory state expansion helper under the same maximum safe compatibility goal. It is bounded by `ttl_seconds` and `max_bytes`; `store:false`, expiration, restart, namespace/owner mismatch, route/config drift, and external provider-owned IDs fail closed. It is not persistent conversation state, provider lifecycle reconstruction, a response cache, or another compatibility goal.
 
@@ -161,7 +161,7 @@ The proxy MUST support:
 | Exchange hooks | Should | Async HTTP webhook for full request/response capture |
 | Usage hooks | Should | Async HTTP webhook for token usage metering |
 | Dashboard | May | Web Admin Dashboard/static UI showing live request stats and upstream health |
-| Compatibility warnings | Must | `x-proxy-compat-warning` response headers for degraded translations |
+| Portability warnings | Must | `x-llmup-portability-warning` response headers when non-portable detail is omitted |
 | Request ID tracking | Must | Every request gets a unique ID for correlation |
 
 Dashboard requirements:
@@ -251,7 +251,7 @@ Admin namespace writes MUST use server-owned revisions with exact compare-and-sw
 | Baseline proxy overhead | Measured and kept low; no product metric is tied to internal native-byte/native-field preservation |
 | Translation latency overhead | < 10ms added latency per request |
 | Streaming chunk translation | < 1ms per chunk |
-| Concurrent requests | Support 100+ concurrent requests without degradation |
+| Concurrent requests | Support 100+ concurrent requests without material slowdown |
 | Memory per request | Bounded; no unbounded accumulation during streaming |
 
 ### 3.2 Reliability
@@ -297,7 +297,7 @@ This reduces the translation matrix from O(N²) to O(N) — adding a new protoco
 4. Run unified routing, capability, and hard-boundary checks before upstream
 5. If the client and upstream use the same wire protocol and no body mutation or response normalization is required -> the proxy may keep provider-native request/response bytes and fields unchanged internally
 6. Otherwise -> construct the upstream request to preserve the maximum safe portable representation
-7. Apply hard portability boundaries before upstream: reject provider-owned state, opaque-only continuity, unsupported media/source transports, or unsafe approximations that cannot be preserved or safely degraded
+7. Apply hard portability boundaries before upstream: reject provider-owned state, opaque-only continuity, unsupported media/source transports, or unsafe approximations that cannot be preserved or represented by omitting non-portable detail with a portability warning
 8. During request construction:
    a. Translate request: A → OpenAI Chat → B
    b. Send translated request to upstream
@@ -420,25 +420,25 @@ Current real-client regression coverage is intentionally narrow: smoke cases ass
 
 ---
 
-## 7. Compatibility and Degradation Policy
+## 7. Compatibility and Portability Boundary Policy
 
-### 7.1 Translation Outcomes
+### 7.1 Portability Boundary Handling
 
-| Outcome | Meaning | Example |
+| Action | Meaning | Example |
 |-------|---------|---------|
-| **Preserved** | Portable semantics and client-visible contracts remain intact | Text content, basic tool calls |
-| **Warned safe degradation** | A non-portable detail is omitted only when the remaining visible context is safe to send | Opaque reasoning carrier with visible summary text |
-| **Rejected before upstream** | No safe representation exists, so the proxy returns an error without contacting upstream | External provider-owned `previous_response_id`, unsupported media source |
+| **Preserve portable semantics** | Portable semantics and client-visible contracts remain intact | Text content, basic tool calls |
+| **Warn and omit non-portable detail** | A non-portable detail is omitted only when the remaining visible context is safe to send | Opaque reasoning carrier with visible summary text |
+| **Fail closed before upstream** | No safe representation exists, so the proxy returns an error without contacting upstream | External provider-owned `previous_response_id`, unsupported media source |
 
-### 7.2 Degradation Signaling
+### 7.2 Portability Warning Signaling
 
-When the proxy safely degrades a field, it MUST:
-1. Emit `x-proxy-compat-warning` response headers
-2. Log the degradation to server logs
+When the proxy omits non-portable detail while preserving safe portable context, it MUST:
+1. Emit `x-llmup-portability-warning` response headers
+2. Log the portability warning to server logs
 3. NOT silently pretend 1:1 fidelity
 
-When a field cannot be preserved or safely degraded, the request MUST be
-rejected before upstream.
+When a field cannot be preserved or represented by warning and omitting
+non-portable detail, the request MUST be rejected before upstream.
 
 ### 7.3 Known Limitations
 
@@ -474,9 +474,9 @@ These are NOT in scope for the current version. Non-goals are listed explicitly 
 
 | Metric | Target |
 |--------|--------|
-| All 9 active protocol combinations within documented portability boundaries | 9/9 assessed as pass, warn, or reject as specified |
-| Streaming behavior across all active protocol combinations within documented portability boundaries | 9/9 assessed as pass, warn, or reject as specified |
+| All 9 active protocol combinations within documented portability boundaries | 9/9 assessed as preserve, warn-and-omit, or fail-closed as specified |
+| Streaming behavior across all active protocol combinations within documented portability boundaries | 9/9 assessed as preserve, warn-and-omit, or fail-closed as specified |
 | Codex CLI works through configured proxy surfaces | Required test upstreams pass within the wrapper surface contract |
 | Claude Code works through configured proxy surfaces | Required test upstreams pass within the wrapper surface contract |
 | Internal optimization remains invisible to product behavior | No user-selectable forwarding/cache switch and no product metric tied to that optimization |
-| No silent data loss during translation | All compat warnings are emitted correctly |
+| No silent data loss during translation | All portability warnings are emitted correctly |

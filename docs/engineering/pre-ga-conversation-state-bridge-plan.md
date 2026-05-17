@@ -26,7 +26,7 @@
 - 展开后的上下文继续走现有协议转换器，目标 provider 看到的是完整 transcript，而不是 OpenAI Responses 的状态句柄。
 - 状态桥只保存会话重放所需的输入/输出事件，不缓存或复用模型响应。
 - 不可安全 replay 的情况保持 fail closed；本地 replay 只接受 `llmup` 自己生成并仍然有效的本地 ID。
-- 状态桥是最大安全兼容策略下的 state expansion。它会使请求需要构造/转换，必须在 trace 和 warnings 中可见；它不是独立产品行为、用户可选策略或兼容级别。
+- 状态桥是最大安全兼容目标下的 state expansion。它会使请求需要构造/转换，必须在 trace 和 warnings 中可见；它不是独立产品行为，也不引入用户可选处理策略。
 - 最大安全兼容性仍是唯一实现目标。
 
 一句话边界：这是 `ConversationStateBridge`，不是 cache。
@@ -67,7 +67,7 @@ OpenAI Responses 和 Conversations 是状态型接口。官方文档描述了两
 
 Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript replay。客户端或 SDK 通常需要在每次请求里带上完整历史。
 
-当前 `llmup` 支持 OpenAI Responses 请求转换到 Chat/Anthropic，并已为非流式 `previous_response_id` continuation 增加本地内存展开、普通 function call/tool output replay、portable custom tool call/output replay、visible reasoning summary replay、第一轮 streaming completed visible output capture 和 route/config owner hardening。Native Gemini 已不是 active runtime surface；Gemini 品牌只能作为 OpenAI-compatible upstream 走 OpenAI Chat wire protocol。外部 provider `resp_*` / `conv_*` 仍不能导入；未知本地 ID、过期 ID、owner mismatch、route/config drift 继续 fail closed。首轮 `store:false` 请求仍会调用上游，但不保存本地状态；之后如果 client 试图用对应历史继续 replay，会因为没有本地状态而 fail closed。`stream:true` + `previous_response_id` 仍 fail closed，后续 continuation 只走非流式 replay。
+当前 `llmup` 支持 OpenAI Responses 请求转换到 Chat/Anthropic，并已为非流式 `previous_response_id` continuation 增加本地内存展开、普通 function call/tool output replay、portable custom tool call/output replay、visible reasoning summary replay、第一轮 streaming completed visible output capture 和 route/config owner hardening。Native Gemini 已不是 active runtime surface；Gemini 品牌只能作为 OpenAI-compatible upstream 走 OpenAI Chat wire protocol。外部 provider `resp_*` / `conv_*` 仍不能导入；未知本地 ID、过期 ID、owner mismatch、route/config drift 继续 fail closed。首轮 `store:false/null` 请求仍会调用上游，但不保存本地状态；之后如果 client 试图用对应历史继续 replay，会因为没有本地状态而 fail closed。显式 `store:true` 跨协议 fail closed，因为这是 provider persistence request；`stream:true` + `previous_response_id` 仍 fail closed，后续 continuation 只走非流式 replay。
 
 ## 当前 Codebase 判断
 
@@ -81,7 +81,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 - 非流式 text Responses -> OpenAI Chat / Anthropic continuation 已实现：第一轮保存 user text 和 assistant text，第二轮用本地 `previous_response_id` 展开历史后再进入现有转换链。
 - 普通 Responses `function_call` / `function_call_output` 与 portable `custom_tool_call` / `custom_tool_call_output` 本地 replay 已实现：只保存 `type`、`call_id`、`name`、`arguments` / `input` / `output` 可移植字段；不保存 tools、tool_choice 或 parallel controls；非 portable custom、proxied、namespaced provider/internal 工具语义继续 fail closed 或不提交本地 replay state。
 - visible reasoning summary replay 已实现：只保存和展开 `summary[].summary_text.text`，不保存 `encrypted_content`、Anthropic thinking signature、redacted/omitted thinking 或 provider-private reasoning 字段。
-- `store:false` 首轮仍调用上游但不保存本地状态；未知/过期/owner mismatch 本地 ID fail closed。
+- `store:false/null` 首轮仍调用上游但不保存本地状态；未知/过期/owner mismatch 本地 ID fail closed。
 - native OpenAI Responses forwarding 保留 provider ID，不导入本地状态。
 - `background` / `store` enabled-semantics alignment / translation-boundary detector unification slice 已完成：`background:false|null` 和 `store:false|null` 不再触发 provider-owned stateful fail-closed，`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。
 - route/config owner hardening 已完成：StoredBridgeResponse 保存内部 route/config fingerprint；continuation 在 upstream dispatch 前按当前 runtime/fingerprint 重新校验，drift 时 400 fail closed；无 `model` 的 single-upstream replay 在配置未变时仍成功。
@@ -100,7 +100,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 已接受的 pre-GA 方向变化：
 
 - `docs/CONSTITUTION.md` 已记录 provider-owned lifecycle state reconstruction 仍 out of scope，并把本地 transcript replay 限定为 built-in、短期、纯内存、llmup-owned local ID 的 state expansion helper。
-- 本计划不引入持久化数据库。宪章措辞应保持：内存 `ConversationStateBridge` 是最大安全兼容策略下的内部 state expansion 能力，不是另一套兼容策略、兼容级别或用户可选开关。
+- 本计划不引入持久化数据库。宪章措辞应保持：内存 `ConversationStateBridge` 是最大安全兼容目标下的内部 state expansion 能力，不是另一套产品行为或用户可选开关。
 
 ## 设计原则
 
@@ -112,7 +112,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 6. 不在内部 raw same-protocol forwarding 路径中启用。native OpenAI Responses upstream 继续透传 provider state；状态桥只在需要请求构造/转换的路径上展开本地 state。
 7. 明确最小 owner 边界。namespace 和认证主体必须参与状态隔离，避免不同调用方互相读取状态。
 8. 只实现简单 TTL 和全局最大内存占用。状态过期、进程重启、状态不存在时直接 fail closed。
-9. `store: false` 不保存状态。
+9. `store: false/null` 不保存状态；显式 `store:true` 跨协议 fail closed，因为这是 provider persistence request。
 10. 不通过自然语言判断内容是否可压缩或可省略。任何裁剪、摘要、compaction 都必须是显式后续阶段。
 
 状态类型必须分清：
@@ -136,12 +136,12 @@ conversation_state_bridge:
 - 本地 transcript replay 是最大安全兼容目标下的内置能力，不是用户选择的开关。
 - `ttl_seconds` 控制状态生命周期。
 - `max_bytes` 是全局内存上限，不做 per-tenant/per-conversation 细分。
-- `store: false` 优先于 bridge 保存，但这是固定语义，不做成配置项。
+- `store: false/null` 优先于 bridge 保存，但这是固定语义，不做成配置项；显式 `store:true` 不转译成本地保存策略。
 - 保存内容仅限 `llmup` 自己生成的 `resp_llmup_*` 本地 ID 对应的可 replay transcript；外部 provider ID 不导入。
 
 ## 请求处理观测
 
-不新增单独主路径或用户可选策略。状态桥参与 capture 或 expansion 时，请求处理观测为 `RequestTransformationRequired`，并在外部 `llmup` 观测中暴露事实性的 `local_state_handling` 字段；默认无本地 state 处理时省略该字段。这表示请求需要显式 state expansion 后再构造/转换，仍属于单一最大安全兼容策略。provider-native prompt-cache 合成仍只是 provider-native request-control support：
+不新增单独主路径或用户可选策略。状态桥参与 capture 或 expansion 时，请求处理观测为 `RequestTransformationRequired`，并在外部 `llmup` 观测中暴露事实性的 `local_state_handling` 字段；默认无本地 state 处理时省略该字段。这表示请求需要显式 state expansion 后再构造/转换，仍属于单一最大安全兼容目标。provider-native prompt-cache 合成仍只是 provider-native request-control support：
 
 ```text
 enum RequestProcessing {
@@ -174,7 +174,7 @@ local_state_handling: omitted | capture_candidate | expanded
 插入点要求：
 
 - 状态展开/lookup 必须发生在 `resolve_requested_model_or_error()` 和 `original_body` 进入 boundary assessment 之前。否则 model-less `previous_response_id` 会先被现有 stateful routing 逻辑拒绝。
-- Bridge preprocessor 成功后，要消费并移除本地 `previous_response_id` 和 `store` 控制，把历史和当前 `input` 合成显式 `input`，再进入现有 `assess_request_translation_with_surface()` 和 `translate_request_with_policy()`。
+- Bridge preprocessor 成功后，要消费并移除本地 `previous_response_id` 和 disabled `store:false/null` 控制，把历史和当前 `input` 合成显式 `input`，再进入现有 `assess_request_translation_with_surface()` 和 `translate_request_with_policy()`；enabled `store` 必须在跨协议路径上 fail closed，不能被 mutation 隐藏。
 - 第一轮保存必须记录 resolved route owner；第二轮省略 `model` 时用 store owner 恢复路由，第二轮显式 `model` 与 store owner 冲突时 fail closed。
 - 状态 store 挂在 `AppState`，不要塞进 `RuntimeState` 快照，避免每次认证上下文 clone 大状态。
 
@@ -229,7 +229,7 @@ struct BridgeResponse {
 - 原始 response body 的“可直接返回副本”。
 - provider-private opaque state，包括 `encrypted_content`、Anthropic thinking signature、redacted/omitted thinking。
 - debug trace / hook payload中的未脱敏副本。
-- `store: false` 请求对应的 response state。
+- `store: false/null` 请求对应的 response state。
 
 ## ID 策略
 
@@ -277,10 +277,11 @@ struct BridgeResponse {
 
 规则：
 
-- Bridge preprocessor 必须先消费 `store`，再进入跨协议 stateful-control assessment。
-- `store: false`：首轮请求仍继续调用上游，但不保存 response state；如果之后 client 用对应历史 ID 继续 `previous_response_id` replay，会因为本地 store 没有可展开状态而 fail closed。
-- `store: true` 或省略：当内存状态桥已配置且 route 允许时保存。显式 `store: true` 不应继续触发现有 translated route 的 provider-owned state fail-closed 规则，因为它在内存状态桥下表达的是 `llmup` 本地短期 state。
-- 如果未来引入 route-level no-store/ZDR policy，它必须禁用 bridge 保存；初版只需要尊重请求级 `store: false`。
+- Bridge preprocessor 只能消费 disabled `store:false/null` 作为本地 no-save policy；enabled `store` 必须保留 hard boundary 语义。
+- `store: false/null`：请求仍继续调用上游，但不保存 response state；如果之后 client 用对应历史 ID 继续 `previous_response_id` replay，会因为本地 store 没有可展开状态而 fail closed。local continuation 可以在 replay 后带 `store:false/null`，但不会保存下一轮 response state。
+- 省略 `store`：当内存状态桥已配置且 route 允许时保存本地 replay state。
+- 显式 `store:true`：跨协议路径 fail closed，因为这是 provider persistence request，只能由 native OpenAI Responses 上游保持语义。
+- 如果未来引入 route-level no-store/ZDR policy，它必须禁用 bridge 保存；初版只需要尊重请求级 `store:false/null`。
 
 ### `background`
 
@@ -311,7 +312,7 @@ struct BridgeResponse {
 
 - native OpenAI Responses forwarding 保持现状。
 - translated route 上继续 fail closed，除非未来实现显式本地 compact adapter。
-- request-side compaction item 只有在已有可见 summary/text 可重放时，才沿用现有 degrade 规则。
+- request-side compaction item 只有在已有可见 summary/text 可重放时，才沿用现有 portability warning / omit 规则。
 
 ## 响应捕获规则
 
@@ -408,7 +409,7 @@ struct BridgeResponse {
 隐私保护：
 
 - 纯内存不等于无数据保留。文档必须明确：开启状态桥会在 `llmup` 进程内保存 prompt 和模型输出，直到 TTL 或进程退出。
-- `store: false` 不保存。
+- `store: false/null` 不保存。
 - 不允许 hook/debug 输出状态内容。
 
 ## 开发阶段
@@ -430,7 +431,7 @@ Current-main delivery status:
 
 交付：
 
-- 更新 `CONSTITUTION.md`：默认 stateless；可选纯内存 `ConversationStateBridge` 是最大安全兼容策略下明确配置的 state expansion 能力。
+- 更新 `CONSTITUTION.md`：默认 stateless；可选纯内存 `ConversationStateBridge` 是最大安全兼容目标下明确配置的 state expansion 能力。
 - 更新 state-continuity docs：区分 provider-owned state、llmup-owned bridge state、cache。
 - 新增配置 schema 文档，且文档只暴露 `ttl_seconds` / `max_bytes` 保留边界。
 
@@ -467,7 +468,7 @@ Current-main delivery status:
 - Responses -> Anthropic 第一轮返回本地 response ID。
 - 第二轮带 `previous_response_id`，Anthropic upstream 捕获到第一轮 user、第一轮 assistant、新 user input。
 - 未知/过期/owner mismatch response ID fail closed。
-- `store: false` 后续 replay fail closed。
+- `store: false/null` 后续 replay fail closed。
 
 ### Phase 3：工具调用 Replay
 
@@ -530,7 +531,7 @@ Current-main delivery status:
 - TTL 到期后 replay fail closed。
 - 超过 `max_bytes` 时不提交 replay 状态，并记录 warning/trace。
 - debug trace 只含 metadata，不含 prompt 内容。
-- `store: false` 不保存。
+- `store: false/null` 不保存。
 - Responses stateful controls 在 native routing resolver、bridge preprocessor 和 translation boundary 上行为一致。
 
 ### 非当前方向：必须另起评审
@@ -552,8 +553,8 @@ Current-main delivery status:
 | Route owner | model-less continuation 使用保存的 upstream/model/config owner；显式 model 或 config revision/hash 冲突 fail closed |
 | TTL | expired state fail closed 且有 trace reason |
 | max_bytes | 超过全局内存上限时不提交 state，且有 warning/trace |
-| store:false | 首轮仍调用上游但不保存；后续使用对应历史 replay 时因无本地状态 fail closed；不泄露内容 |
-| detector enabled-semantics | `background:false|null` / `store:false|null` 不触发 provider-owned stateful fail-closed；enabled/present controls 仍 fail closed |
+| store:false/null | 请求仍调用上游但不保存；后续使用对应历史 replay 时因无本地状态 fail closed；local continuation 可 replay 但不保存下一轮；不泄露内容 |
+| detector enabled-semantics | `background:false|null` / `store:false|null` 不触发 provider-owned stateful fail-closed；enabled controls 仍 fail closed |
 | Native forwarding | OpenAI Responses native routes 不被本地 bridge 改写 |
 | 工具调用 | 普通 function_call/function_call_output 和 portable custom_tool_call/custom_tool_call_output replay 已交付；非 portable custom/proxied/namespaced provider/internal 工具语义仍不 replay |
 | Reasoning summary | visible reasoning summary replay 已交付；只保存 `summary[].summary_text.text`，opaque-only carrier fail closed 或不进入本地 replay state |

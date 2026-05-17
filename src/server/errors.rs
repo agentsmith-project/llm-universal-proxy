@@ -285,7 +285,7 @@ pub(super) fn classify_post_translation_non_stream_status(
     }
 }
 
-pub(super) fn append_compatibility_warning_headers(
+pub(super) fn append_portability_warning_headers(
     response: &mut Response<Body>,
     warnings: &[String],
 ) {
@@ -294,7 +294,7 @@ pub(super) fn append_compatibility_warning_headers(
         if let Ok(value) = axum::http::HeaderValue::from_str(&sanitized) {
             response
                 .headers_mut()
-                .append("x-proxy-compat-warning", value);
+                .append("x-llmup-portability-warning", value);
         }
     }
 }

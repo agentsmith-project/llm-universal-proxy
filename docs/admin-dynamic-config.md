@@ -222,10 +222,10 @@ In `client_provider_key` mode, `provider_key.env` and `provider_key_env` are not
 
 Runtime writes use the same client-visible surface contract as static YAML. Raw HTTP tests can omit `surface_defaults`, but Codex, Claude Code, and other supported wrapper/live-profile flows should provide at least the conservative text-only surface shown below, or an accurate alias-level `surface`.
 
-Responses reasoning/compaction continuity follows the same single maximum safe
-compatibility strategy in dynamically written namespaces: an opaque carrier may
-be warned and dropped only when visible summary text or visible transcript
-history remains; opaque-only reasoning and opaque-only compaction fail closed;
+Responses reasoning/compaction continuity follows the same maximum safe
+compatibility boundary in dynamically written namespaces: visible summary text
+or visible transcript history may continue without provider-owned opaque
+carriers; opaque-only reasoning and opaque-only compaction fail closed;
 provider-native same-wire handling preserves provider-owned state only when no
 body mutation or response normalization is required and the same protocol can
 preserve native semantics.

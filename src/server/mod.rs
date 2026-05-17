@@ -579,7 +579,7 @@ async fn with_request_downstream_cancellation(
 use admin::{authorize_admin_request, extract_bearer_token, handle_admin_namespace_state};
 #[cfg(test)]
 use errors::{
-    append_compatibility_warning_headers, classify_post_translation_non_stream_status,
+    append_portability_warning_headers, classify_post_translation_non_stream_status,
     error_response, normalize_upstream_error, normalized_non_stream_upstream_error,
     streaming_error_response, NormalizedUpstreamError,
 };

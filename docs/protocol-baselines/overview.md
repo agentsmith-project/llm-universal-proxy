@@ -9,7 +9,7 @@
 
 | Layer | What it answers | What it should not answer |
 | --- | --- | --- |
-| Official baselines | "What does provider X officially document on its own wire format?" | "How should the proxy degrade this into another provider?" |
+| Official baselines | "What does provider X officially document on its own wire format?" | "What portability action should the proxy take for another provider?" |
 | Capability diffs | "Which features line up, drift, or stay vendor-specific?" | "What is every field in provider X's request body?" |
 | Versioned audits | "What changed in the official surface since the last refresh, and where is the risk?" | "What is the evergreen compatibility story?" |
 
@@ -43,7 +43,7 @@ The summary matrices deliberately split provider-surface coverage from portabili
 | Need | Doc |
 | --- | --- |
 | One-page provider comparison | [`matrices/provider-capability-matrix.md`](matrices/provider-capability-matrix.md) |
-| High-risk field mapping and safe-degradation rules | [`matrices/field-mapping-matrix.md`](matrices/field-mapping-matrix.md) |
+| High-risk field mapping and portability actions | [`matrices/field-mapping-matrix.md`](matrices/field-mapping-matrix.md) |
 | Dated refresh decisions and risks | [`audits/2026-05-16-online-recheck.md`](audits/2026-05-16-online-recheck.md) |
 
 ## Working rule for future refreshes

@@ -2048,10 +2048,11 @@ async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cach
     assert_eq!(response.status(), StatusCode::OK);
     let warnings = response
         .headers()
-        .get_all("x-proxy-compat-warning")
+        .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>();
+    assert!(response.headers().get("x-proxy-compat-warning").is_none());
     assert!(
         warnings
             .iter()
@@ -2450,7 +2451,32 @@ fn classify_request_boundary_rejects_translated_stateful_responses_controls() {
 }
 
 #[test]
-fn classify_request_boundary_keeps_warning_path_for_allowed_degradation() {
+fn classify_request_boundary_rejects_translated_store_enabled_by_itself() {
+    for (label, store) in [
+        ("true", serde_json::json!(true)),
+        ("non_bool", serde_json::json!("enabled")),
+    ] {
+        let decision = classify_request_boundary(
+            crate::formats::UpstreamFormat::OpenAiResponses,
+            crate::formats::UpstreamFormat::Anthropic,
+            &serde_json::json!({
+                "store": store
+            }),
+        );
+
+        let RequestBoundaryDecision::Reject(message) = decision else {
+            panic!("expected {label} store rejection, got {decision:?}");
+        };
+        assert!(message.contains("store"), "message = {message}");
+        assert!(
+            message.contains("native OpenAI Responses"),
+            "message = {message}"
+        );
+    }
+}
+
+#[test]
+fn classify_request_boundary_keeps_portability_warning_path() {
     let decision = classify_request_boundary(
         crate::formats::UpstreamFormat::OpenAiResponses,
         crate::formats::UpstreamFormat::Anthropic,
@@ -3335,11 +3361,12 @@ async fn live_responses_store_true_fails_closed_before_upstream() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let warnings = response
         .headers()
-        .get_all("x-proxy-compat-warning")
+        .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>();
     assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    assert!(response.headers().get("x-proxy-compat-warning").is_none());
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("json body bytes");
@@ -3352,6 +3379,62 @@ async fn live_responses_store_true_fails_closed_before_upstream() {
         message.contains("native OpenAI Responses"),
         "message = {message}"
     );
+
+    let recorded = requests.lock().await;
+    assert!(recorded.is_empty(), "requests = {recorded:?}");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn live_openai_chat_store_true_to_responses_fails_closed_before_upstream() {
+    let response_body = serde_json::json!({
+        "id": "resp_1",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": []
+    });
+    let (mock_base, requests, server) = spawn_openai_responses_mock(response_body).await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiResponses);
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/chat/completions".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "store": true,
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let warnings = response
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    assert!(response.headers().get("x-proxy-compat-warning").is_none());
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("json body bytes");
+    let body: Value = serde_json::from_slice(&body).expect("json body");
+    let message = body["error"]["message"]
+        .as_str()
+        .expect("error message string");
+    assert!(message.contains("store"), "message = {message}");
+    assert!(message.contains("OpenAI Responses"), "message = {message}");
 
     let recorded = requests.lock().await;
     assert!(recorded.is_empty(), "requests = {recorded:?}");
@@ -4054,10 +4137,11 @@ async fn live_responses_grammar_custom_tool_bridge_to_openai_default_allows_with
     assert_eq!(response.status(), StatusCode::OK);
     let warnings = response
         .headers()
-        .get_all("x-proxy-compat-warning")
+        .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>();
+    assert!(response.headers().get("x-proxy-compat-warning").is_none());
     assert!(
         warnings.iter().any(|warning| {
             warning.contains("apply_patch") && warning.contains("OpenAI Chat Completions")
@@ -4267,10 +4351,11 @@ async fn live_responses_grammar_custom_tool_bridge_to_anthropic_default_allows_w
     assert_eq!(response.status(), StatusCode::OK);
     let warnings = response
         .headers()
-        .get_all("x-proxy-compat-warning")
+        .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>();
+    assert!(response.headers().get("x-proxy-compat-warning").is_none());
     assert!(
         warnings
             .iter()

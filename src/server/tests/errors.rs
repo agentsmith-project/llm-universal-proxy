@@ -313,7 +313,7 @@ fn classify_post_translation_non_stream_status_maps_anthropic_api_error_to_500()
 }
 
 #[test]
-fn append_compatibility_warning_headers_exposes_each_warning() {
+fn append_portability_warning_headers_exposes_each_warning() {
     let mut response = Response::builder()
         .status(StatusCode::OK)
         .body(Body::empty())
@@ -323,13 +323,14 @@ fn append_compatibility_warning_headers_exposes_each_warning() {
         "second warning with\nnewline".to_string(),
     ];
 
-    append_compatibility_warning_headers(&mut response, &warnings);
+    append_portability_warning_headers(&mut response, &warnings);
 
     let values: Vec<_> = response
         .headers()
-        .get_all("x-proxy-compat-warning")
+        .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|v| v.to_str().ok())
         .collect();
     assert_eq!(values, vec!["first warning", "second warning with newline"]);
+    assert!(response.headers().get("x-proxy-compat-warning").is_none());
 }

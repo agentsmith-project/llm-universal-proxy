@@ -358,7 +358,10 @@ class GaDocsContractTests(unittest.TestCase):
             success_metrics,
         )
         self.assertIn("documented portability boundaries", success_metrics)
-        self.assertIn("pass, warn, or reject as specified", success_metrics)
+        self.assertIn(
+            "preserve, warn-and-omit, or fail-closed as specified",
+            success_metrics,
+        )
 
     def test_maximum_compatibility_phase_5_is_delivered_for_ga_docs_with_maintenance_open(self):
         text = read_doc("docs/engineering/max-compat-development-plan.md")

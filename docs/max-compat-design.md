@@ -74,7 +74,7 @@ The product promise is bounded: protocol coverage means every request is governe
 - same-wire native preservation is an internal optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries when no body mutation or response normalization is required
 - provider prompt-cache support is provider-native request-control support: preserve or map only explicit provider-native cache request controls as a request-control modifier; this is not `llmup` caching and not a separate product behavior
 - local transcript replay is a built-in state expansion helper: keep short-term process-memory transcript state only for llmup-owned `resp_llmup_*` IDs when request construction needs it; configure only retention bounds, not a compatibility switch
-- constructed requests use maximum safe compatibility: preserve the maximum safe portable representation and warn when a safe degradation is visible
+- constructed requests use maximum safe compatibility: preserve the maximum safe portable representation and emit portability warnings when non-portable detail is omitted
 - provider-native state and native extensions: preserve only when same-wire internal handling can keep native semantics unchanged unless a documented, explicit shim exists
 
 Portable core:
@@ -107,14 +107,14 @@ Current implementation facts:
 
 Request-side reasoning encrypted_content rules:
 
-- For request-side reasoning encrypted_content, include `reasoning.encrypted_content` is warned and dropped on cross-provider translation because it only asks the source provider to emit an opaque carrier the target cannot use.
-- A reasoning item `encrypted_content` carrier may be dropped only when the item has visible summary text or the request still contains visible transcript/history that can be replayed as portable context.
+- For request-side reasoning encrypted_content, include `reasoning.encrypted_content` is omitted with a portability warning on cross-provider translation because it only asks the source provider to emit an opaque carrier the target cannot use.
+- A reasoning item `encrypted_content` carrier may be omitted only when the item has visible summary text or the request still contains visible transcript/history that can be replayed as portable context.
 - The opaque-only reasoning case always fails closed. The proxy must not silently discard the only continuity signal.
 
 Request-side compaction input rules:
 
-- For request-side compaction input, a compaction item may warn/drop opaque carrier fields only when that compaction item has an explicit visible summary, or when the request contains non-compaction visible portable transcript/history that can carry the context forward.
-- In the same request, one summarized compaction item does not permit another opaque-only compaction item to be silently dropped.
+- For request-side compaction input, a compaction item may omit opaque carrier fields with a portability warning only when that compaction item has an explicit visible summary, or when the request contains non-compaction visible portable transcript/history that can carry the context forward.
+- In the same request, one summarized compaction item does not permit another opaque-only compaction item to be silently omitted.
 - Opaque-only compaction always fails closed.
 - Native Responses same-wire handling preserves compaction items unchanged.
 
@@ -142,7 +142,7 @@ Current translator boundaries:
 
 Provider/model availability still comes from configuration. Do not mark a live upstream as multimodal unless that provider integration and selected model are validated for the media shape. In particular, the live MiniMax test provider should remain text-only in first-party docs; current multimodal e2e coverage uses first-party mock upstreams rather than real MiniMax.
 
-Unsupported media and unsupported source transports are hard boundaries. HTTP(S) URLs are distinct from provider-native or local URIs: an HTTP(S) image or PDF URL may pass only on a path with an explicit target representation, while provider-owned identifiers and URIs such as `file_id`, `gs://`, `file://`, and `s3://` are not portable unless a documented adapter says otherwise. Unknown typed parts, media source forms that the target translator cannot represent, and media missing from the effective surface must be rejected before the upstream call instead of being silently dropped.
+Unsupported media and unsupported source transports are hard boundaries. HTTP(S) URLs are distinct from provider-native or local URIs: an HTTP(S) image or PDF URL may pass only on a path with an explicit target representation, while provider-owned identifiers and URIs such as `file_id`, `gs://`, `file://`, and `s3://` are not portable unless a documented adapter says otherwise. Unknown typed parts, media source forms that the target translator cannot represent, and media missing from the effective surface must be rejected before the upstream call instead of being silently omitted.
 
 MIME provenance is part of that boundary. OpenAI Chat `file` and OpenAI Responses `input_file` parts may carry explicit `mime_type` / `mimeType`, MIME-bearing `file_data` data URIs, and filename-derived hints. The proxy treats disagreement between those sources as unsafe and rejects the request before translation, including same-format Responses forwarding. That prevents a request from passing a PDF-only surface gate while the translator later emits video, audio, image, or another concrete media type from the actual data URI.
 
@@ -154,7 +154,7 @@ The product behavior is intentionally singular:
 - request construction always uses maximum safe compatibility
 - provider prompt-cache support is provider-native request-control support, not a `llmup` cache and not a separate product behavior
 - local transcript replay is an internal helper under maximum safe compatibility, not a user-facing mode
-- hard portability boundaries fail closed before upstream when the proxy cannot preserve or safely degrade semantics
+- hard portability boundaries fail closed before upstream when the proxy cannot preserve semantics or represent them by omitting non-portable detail with a portability warning
 
 Hard boundaries:
 
@@ -308,7 +308,7 @@ Current behavior:
 
 - if custom text/grammar bridge would require changing the model-visible stable tool name, reject
 - allow bridged custom text/grammar transport only when stable tool name remains unchanged and replay safety is preserved
-- prefer bridged transport with stable tool identity preservation, warning when grammar or format constraints degrade on the target protocol
+- prefer bridged transport with stable tool identity preservation, emitting a portability warning when grammar or format constraints cannot be represented exactly on the target protocol
 
 `apply_patch` specifically should remain advertised to Codex as `freeform` in the client-visible surface, while the upstream transport bridge stays internal.
 
@@ -372,5 +372,5 @@ Remaining work:
 
 - inventing cross-provider lifecycle state
 - promising lossless translation for hosted or server-native tools
-- hiding all degradation from the user
+- hiding omitted non-portable detail from the user
 - turning wrapper-specific client behavior into the core routing identity

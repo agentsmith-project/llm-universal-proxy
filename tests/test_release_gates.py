@@ -628,7 +628,7 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
             ),
             "reasoning": (
                 "reasoning.encrypted_content",
-                "maximum-compatible",
+                "maximum safe compatibility",
                 "visible summary",
                 "opaque-only reasoning fails closed",
                 "provider-native same-wire handling",
@@ -636,14 +636,15 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
             "state": (
                 "context_management",
                 "request-side compaction input",
-                "maximum-compatible",
+                "maximum safe compatibility",
                 "opaque-only",
                 "Native Responses same-wire handling",
                 "native same-wire handling",
             ),
             "field_mapping": (
                 "Reasoning opaque state",
-                "maximum-compatible",
+                "Portability action",
+                "Warn and omit opaque carrier",
                 "Compaction",
                 "opaque-only compaction",
                 "provider-native same-wire handling",
@@ -653,7 +654,7 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
                 "request-side compaction",
                 "visible portable transcript",
                 "Opaque-only compaction input",
-                "Native OpenAI Responses forwarding",
+                "Native OpenAI Responses same-wire handling",
             ),
             "ga_review": (
                 "maximum safe compatibility",

@@ -245,7 +245,7 @@ class DocsHomepageContractTests(unittest.TestCase):
             "internal handling may keep provider-native bytes and fields unchanged",
             "when request or response construction is needed",
             "fail-closed behavior is a hard portability boundary",
-            "requests whose semantics cannot be preserved or safely degraded are rejected before upstream",
+            "requests that hit a hard portability boundary are rejected before upstream",
         )
         for snippet in english_snippets:
             with self.subTest(language="README", snippet=snippet):
@@ -257,7 +257,7 @@ class DocsHomepageContractTests(unittest.TestCase):
             "保留 provider-native bytes 和字段",
             "需要 request 或 response construction",
             "fail-closed 代表 hard portability boundary",
-            "无法安全保留或降级语义的请求会在上游前被拒绝",
+            "触及 hard portability boundary 的请求会在上游前被拒绝",
         )
         for snippet in chinese_snippets:
             with self.subTest(language="README_CN", snippet=snippet):

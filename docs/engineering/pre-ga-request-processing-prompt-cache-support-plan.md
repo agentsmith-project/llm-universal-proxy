@@ -2,7 +2,7 @@
 
 - Status: current-main status update; internal raw same-protocol forwarding is present; coarse-grained provider-native prompt-cache request-control disposition is visible in traces/hooks as `preserved_native` / `explicit_extension_mapped` / `dropped`; OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` mapping and Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` mapping are present; same-protocol wrong-target explicit extensions fail closed; usage hooks emit optional same-protocol zero-transform/native-preserved `ProviderCacheUsage` source-field telemetry for known OpenAI Chat, OpenAI Responses, and Anthropic cache usage fields; Conversation State Bridge supports first-response streaming completed text capture, while `stream:true` + `previous_response_id` still fails closed
 - Date: 2026-05-17
-- Scope: internal request processing classification, internal raw same-protocol provider forwarding optimization, provider-native prompt-cache request-control support, provider-returned cache usage observation, and request-handling simplification under the single maximum safe compatibility strategy
+- Scope: internal request processing classification, internal raw same-protocol provider forwarding optimization, provider-native prompt-cache request-control support, provider-returned cache usage observation, and request-handling simplification under the single maximum safe compatibility goal
 - Non-scope: any `llmup`-managed cache, gateway response/result cache, provider cache resource/lifecycle management, semantic cache, cache storage, persistence, Conversations API emulation, local retrieval, cache-aware routing, broad fallback DSLs, pricing catalogs, guardrails, prompt management, admin UI expansion
 
 ## Plan Coordination
@@ -21,15 +21,15 @@ Gemini remains usable only as a provider brand behind an OpenAI-compatible upstr
 
 Make the pre-GA behavior easy to reason about:
 
-- `llmup` has one product strategy: maximum safe compatibility. It preserves portable semantics where possible, emits explicit warnings when supported translation omits non-portable detail, and fails closed when semantics cannot be preserved safely.
+- `llmup` has one product goal: maximum safe compatibility. It preserves portable semantics where possible, emits explicit warnings when supported translation omits non-portable detail, and fails closed when semantics cannot be preserved safely.
 - Maximum safe compatibility is the implementation goal for every route.
 - `RequestTransformationNotRequired` and `RequestTransformationRequired` are internal request-processing classifications, not product behavior.
-- Observability records whether a request needs construction, protocol conversion, or enhancement. Same-protocol requests that do not need mutation use raw provider forwarding as an internal request-processing optimization under the same strategy.
+- Observability records whether a request needs construction, protocol conversion, or enhancement. Same-protocol requests that do not need mutation use raw provider forwarding as an internal request-processing optimization under the same goal.
 - Provider-native prompt-cache request controls are currently preserved as original payload on supported native paths. Delivered translated slices map OpenAI-family `extra_body.anthropic.cache_control` to Anthropic top-level `cache_control`, and Anthropic-shaped `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` to OpenAI-family target top-level fields. Current main also exposes the coarse-grained disposition in debug traces/hooks and fails closed on same-protocol explicit extensions aimed at the wrong provider. No additional translated cache-control expansion is on the current handoff path.
 - The proxy does not cache responses/results, prompts, embeddings, tokens, KV state, or provider cache resources.
 - The proxy does not invent a cross-provider cache abstraction.
 
-Same-format means the provider-facing wire protocol, not the provider brand. An OpenAI-compatible upstream can use the internal raw same-protocol forwarding path for OpenAI-shaped requests when the route does not require body mutation or response normalization. If a compatible upstream needs provider shims, model body rewrites, or response normalization, the request is constructed or translated under the same maximum safe compatibility strategy.
+Same-format means the provider-facing wire protocol, not the provider brand. An OpenAI-compatible upstream can use the internal raw same-protocol forwarding path for OpenAI-shaped requests when the route does not require body mutation or response normalization. If a compatible upstream needs provider shims, model body rewrites, or response normalization, the request is constructed or translated under the same maximum safe compatibility goal.
 
 Raw same-protocol forwarding is an internal request-processing optimization under maximum safe compatibility.
 
@@ -55,7 +55,7 @@ Current request-processing facts:
 
 - [src/request_processing.rs](../../src/request_processing.rs) owns `RequestProcessing`, `StateBridgeModifier`, and `PromptCacheRequestControl`.
 - [src/server/proxy.rs](../../src/server/proxy.rs) uses raw request bytes and raw non-stream response bytes on `RequestTransformationNotRequired`.
-- Provider-native prompt-cache fields are classified as `Preserved` for OpenAI-family `prompt_cache_key` / `prompt_cache_retention` and same-protocol Anthropic `cache_control`.
+- Provider-native prompt-cache fields are recorded as preserved-native behavior for OpenAI-family `prompt_cache_key` / `prompt_cache_retention` and same-protocol Anthropic `cache_control`.
 - `NormalizedUsage` provides baseline provider-returned usage observation, including known OpenAI cached-token and Anthropic cache read/write counters where already parsed. Usage hooks also emit optional `ProviderCacheUsage` source-field telemetry for known OpenAI Chat, OpenAI Responses, and Anthropic prompt-cache usage fields only on same-protocol zero-transform/native-preserved paths.
 - Cross-protocol translated routes and same-format constructed routes currently omit `provider_cache_usage` even when the client-visible response contains cache usage counters. This avoids misattributing client-visible usage as raw provider source telemetry until upstream raw usage is separately observed by hooks.
 - Current main includes the OpenAI-family -> Anthropic top-level `extra_body.anthropic.cache_control` explicit mapping and the Anthropic -> OpenAI-family top-level `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` explicit mapping. Other translated cache-control marker mapping is not implemented.
@@ -72,7 +72,7 @@ Comparable gateways expose separate provider-native surfaces, gateway controls, 
 - Vercel AI Gateway namespaces gateway behavior in `providerOptions.gateway`, including `caching: 'auto'`, instead of pretending provider cache controls are the same.
 - Envoy AI Gateway exposes a provider-agnostic `cache_control` field, but scopes it to Anthropic-compatible targets where it can be translated into native Anthropic / Vertex Claude / Bedrock Claude controls.
 
-The common lesson for `llmup`: keep one maximum safe compatibility strategy, and classify only whether a request needs construction, conversion, or enhancement. Provider prompt-cache request fields should remain provider-native request controls, not `llmup` cache. Any cache usage observation must be read-only telemetry over provider-returned usage fields, not a `llmup` cache implementation.
+The common lesson for `llmup`: keep one maximum safe compatibility goal, and classify only whether a request needs construction, conversion, or enhancement. Provider prompt-cache request fields should remain provider-native request controls, not `llmup` cache. Any cache usage observation must be read-only telemetry over provider-returned usage fields, not a `llmup` cache implementation.
 
 ## Target Architecture
 
@@ -98,7 +98,7 @@ This plan owns the internal request processing classification and provider-nativ
 Request processing classification:
 
 - `RequestTransformationNotRequired`: internal classification for a request where client protocol equals upstream wire protocol and no configured route feature requires body mutation, provider-native request-control mapping, or response normalization.
-- `RequestTransformationRequired`: internal classification for a request where protocols differ, or the selected route needs a provider/protocol shim, target-provider request construction, provider-native request-control mapping, model alias body rewrite, provider-specific role repair, translation default injection, format conversion, or error-shape conversion. This still follows the single maximum safe compatibility strategy.
+- `RequestTransformationRequired`: internal classification for a request where protocols differ, or the selected route needs a provider/protocol shim, target-provider request construction, provider-native request-control mapping, model alias body rewrite, provider-specific role repair, translation default injection, format conversion, or error-shape conversion. This still follows the single maximum safe compatibility goal.
 
 The route decision should be visible in debug traces and metrics through `llmup.request_body_handling`, `llmup.local_state_handling` when capture/replay is active, and `llmup.provider_prompt_cache_request_control`.
 
@@ -149,7 +149,7 @@ Allowed behavior:
 - Start from the target-provider request after routing and any required translation or request construction.
 - Add only provider-native prompt-cache request controls from explicit extension mapping.
 - Preserve all other request and response semantics as close to native as possible.
-- Emit trace metadata for mapped or dropped fields.
+- Emit trace metadata for mapped or omitted fields.
 
 Disallowed behavior:
 
@@ -188,7 +188,7 @@ Do:
 - Optionally observe provider-returned cache usage counters for metrics and debug traces.
 - Keep translated-path support narrow: forward or map only explicit provider-native extension fields that are documented and intentionally supported.
 - In translated paths, map provider-supported caching controls only when explicit provider-native intent is present in the request shape.
-- Keep mapped or dropped controls visible in debug traces and compatibility warnings so users can see exactly what `llmup` changed.
+- Keep mapped or omitted controls visible in debug traces and portability warnings so users can see exactly what `llmup` changed.
 - Fail closed when a provider cache handle contains non-reconstructable context and the target provider cannot honor it.
 - Run all explicit mapping after the target-provider request has been built, because provider cache matching uses the exact target-side prompt prefix, order, and parameters.
 
@@ -209,7 +209,7 @@ Prompt-cache behavior is computed internally from the target request shape and e
 
 - `preserved_native`: keep provider-native fields unchanged on same-protocol or OpenAI-family paths where the target can honor them.
 - `explicit_extension_mapped`: map a documented explicit provider-native extension only after the target request shape is known.
-- `dropped`: warn/drop provider-native cache controls when the target cannot honor them.
+- `dropped`: emit a portability warning and omit provider-native cache controls when the target cannot honor them.
 
 Explicit provider-native support is an internal implementation detail under the same maximum safe compatibility goal. This plan does not define automatic prompt-cache key or breakpoint insertion.
 
@@ -220,7 +220,7 @@ Already present:
 - OpenAI Chat/Responses `prompt_cache_key` and `prompt_cache_retention` are treated as OpenAI-native controls and are preserved on OpenAI-family targets when supported.
 - OpenAI-family requests translated to Anthropic can map explicit `extra_body.anthropic.cache_control` to Anthropic top-level `cache_control`, with fail-closed validation and no `llmup` cache.
 - Anthropic-shaped requests translated to OpenAI Chat/Responses can map explicit `extra_body.openai.prompt_cache_key` and optional `prompt_cache_retention` to OpenAI-family top-level fields, with fail-closed validation and no `llmup` cache.
-- Anthropic `cache_control` is detected as non-portable when translating away from Anthropic and is warned/dropped instead of being mapped to unrelated provider controls.
+- Anthropic `cache_control` is detected as non-portable when translating away from Anthropic and is omitted with a portability warning instead of being mapped to unrelated provider controls.
 - OpenAI Chat/Responses to Anthropic does not inject `cache_control` by default; [tests/integration_test.rs](../../tests/integration_test.rs) has a regression test for concurrent OpenAI-to-Anthropic requests that asserts no marker injection.
 - Known OpenAI content/tool `cache_control` markers are rejected fail-closed before any Anthropic per-block marker is emitted.
 - Anthropic to OpenAI translation strips `cache_control` and does not create OpenAI `prompt_cache_key`.
@@ -234,7 +234,7 @@ Known gaps:
 - OpenAI-shaped requests routed to Anthropic have only the explicit top-level `extra_body.anthropic.cache_control` mapping.
 - OpenAI-shaped content parts and tool structures routed to Anthropic do not preserve explicit per-block Anthropic `cache_control` extension fields; known attempts fail closed.
 - Anthropic-shaped requests routed to OpenAI can use only the explicit target-provider `extra_body.openai.prompt_cache_key` extension.
-- There is no shared disposition object that explains why a cache control was preserved, mapped, or dropped.
+- There is no shared disposition object that explains why a cache control was preserved, mapped, or omitted.
 - Streaming raw-forwarding coverage and fine-grained prompt-cache trace metadata should be kept honest in tests, but the current product stance remains preserve/observe only.
 
 ### Translated Prompt-Cache Rules
@@ -287,12 +287,12 @@ Disallowed translated support:
 - Do not preserve or map OpenAI content/tool `cache_control` markers in current main; known markers fail closed.
 - Do not auto-upgrade Anthropic TTL to `1h`.
 - Do not derive OpenAI `prompt_cache_key` from Anthropic `cache_control`, `cache_control.ttl`, `max_tokens: 0`, message text, metadata, conversation IDs, request IDs, or similar request content.
-- Do not copy an OpenAI `prompt_cache_key` value into another provider field as if the semantics were identical. If the target provider cannot honor a supplied control, warn/drop it.
+- Do not copy an OpenAI `prompt_cache_key` value into another provider field as if the semantics were identical. If the target provider cannot honor a supplied control, emit a portability warning and omit it.
 - Do not support Google/Gemini `extra_body.google.cached_content` in the default OpenAI-compatible path. It is a provider-specific extension that would reintroduce native Gemini resource lifecycle scope.
 
 Out-of-scope marker notes:
 
-- Current main does not implement OpenAI-shaped block-marker mapping. Known OpenAI content/tool `cache_control` markers fail closed rather than being silently dropped or partially preserved.
+- Current main does not implement OpenAI-shaped block-marker mapping. Known OpenAI content/tool `cache_control` markers fail closed rather than being silently omitted or partially preserved.
 - Additional translated cache-control mapping is not a current handoff task. Any expansion must start with a separate scope review and must not add automatic markers or `llmup` cache behavior.
 - Unsupported or ambiguous markers fail closed when the caller explicitly requested provider prompt caching.
 
@@ -320,7 +320,7 @@ This checklist records the explicit provider-native request controls and usage f
 | OpenAI Responses | OpenAI Chat | Preserve OpenAI prompt-cache controls during OpenAI-family translation. Do not use Responses `store` / `previous_response_id` / `conversation` as cache controls. |
 | OpenAI Responses | OpenAI Responses | Internal raw same-protocol forwarding preserves `prompt_cache_key`, `prompt_cache_retention`, automatic prompt caching, and raw usage. |
 | OpenAI Responses | Anthropic Messages | Same as OpenAI Chat -> Anthropic, after Responses input is converted to the Messages pivot. Keep visible summaries/history stable, but do not translate OpenAI state controls into cache controls. |
-| Anthropic Messages | OpenAI Chat | Delivered explicit slice: map `extra_body.openai.prompt_cache_key` and optional `prompt_cache_retention` to OpenAI Chat top-level fields. Warn/drop Anthropic `cache_control`; never copy raw prompt text, Anthropic TTL, `max_tokens: 0`, metadata, conversation IDs, or request IDs into the key. |
+| Anthropic Messages | OpenAI Chat | Delivered explicit slice: map `extra_body.openai.prompt_cache_key` and optional `prompt_cache_retention` to OpenAI Chat top-level fields. Omit Anthropic `cache_control` with a portability warning; never copy raw prompt text, Anthropic TTL, `max_tokens: 0`, metadata, conversation IDs, or request IDs into the key. |
 | Anthropic Messages | OpenAI Responses | Same as Anthropic -> OpenAI Chat, with OpenAI Responses `prompt_cache_key` and `prompt_cache_retention` as target fields. Do not map Anthropic `max_tokens: 0` prewarm into Responses state. |
 | Anthropic Messages | Anthropic Messages | Internal raw same-protocol forwarding preserves top-level and block-level `cache_control`, TTL, `max_tokens: 0` prewarm, thinking cache behavior, and raw usage. |
 
@@ -332,7 +332,7 @@ Native Gemini rows are intentionally absent. `format: google`, `format: gemini`,
 - Preserve target prompt prefix order: tools, system/developer instructions, static media/document context, then dynamic user content. Avoid reordering tool definitions or schema keys.
 - Never use natural-language classification to decide that content is stable.
 - Do not derive OpenAI `prompt_cache_key` from timestamps, request IDs, random trace IDs, short-lived user text, provider credentials, `previous_response_id`, `conversation`, or `resp_llmup_*`.
-- Emit trace fields for every mapped or dropped cache control: target provider, disposition, field, explicit source, TTL/retention source, and reason.
+- Emit trace fields for every mapped or omitted cache control: target provider, disposition, field, explicit source, TTL/retention source, and reason.
 - Cache usage telemetry must not influence routing, fallback, or upstream selection.
 
 ### Usage And Threshold Diagnostics
@@ -451,9 +451,9 @@ Deliverables:
 - Keep OpenAI-shaped content/tool `cache_control` unsupported in current main; known markers fail closed.
 - Do not add top-level Anthropic `cache_control` unless the request supplied an explicit supported Anthropic extension.
 - Do not add OpenAI `prompt_cache_key` unless the request supplied an explicit supported OpenAI extension.
-- Continue warning/dropping low-risk non-portable provider cache controls when the target provider cannot honor them.
+- Continue emitting portability warnings and omitting low-risk non-portable provider cache controls when the target provider cannot honor them.
 - Keep translation marker-free unless an explicit extension is present.
-- Add trace/debug fields that show internal disposition, target provider, mapped fields, explicit source, and drop reason.
+- Add trace/debug fields that show internal disposition, target provider, mapped fields, explicit source, and omit reason.
 
 Acceptance tests:
 
@@ -463,7 +463,7 @@ Acceptance tests:
 - `extra_body.openai.prompt_cache_key` maps exactly to OpenAI-family top-level `prompt_cache_key`, and `prompt_cache_retention` maps only when explicitly supplied as `in_memory` or `24h`.
 - Invalid `extra_body.openai` shapes fail closed before upstream.
 - Explicit OpenAI content/tool `cache_control` markers fail closed in current main; they are not preserved as Anthropic block-level markers.
-- Anthropic `cache_control` translated to OpenAI still warns/drops under the explicit-support disposition rather than becoming an OpenAI cache control.
+- Anthropic `cache_control` translated to OpenAI still emits a portability warning and is omitted under the explicit-support disposition rather than becoming an OpenAI cache control.
 - No translated path derives `prompt_cache_key` from raw prompt text, Anthropic TTL, `max_tokens: 0`, metadata, conversation IDs, request IDs, or `resp_llmup_*`.
 - OpenAI-to-Anthropic does not add block-level markers in current main.
 - `prompt_cache_retention: "24h"` and Anthropic `ttl: "1h"` are never derived from each other.

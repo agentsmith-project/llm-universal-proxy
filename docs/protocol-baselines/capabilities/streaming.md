@@ -3,7 +3,7 @@
 - Layer: capability-diff
 - Status: active
 - Last refreshed: 2026-04-16
-- Scope: transport, event taxonomy, terminal semantics, and safe-degradation behavior
+- Scope: transport, event taxonomy, terminal semantics, and portability warning behavior
 
 ## Summary
 

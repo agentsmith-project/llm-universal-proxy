@@ -2,6 +2,7 @@ use serde::{ser::SerializeStruct, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::formats::UpstreamFormat;
+use crate::provider_state_controls::provider_state_control_enabled;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -229,14 +230,10 @@ fn responses_input_has_developer_role(body: &Value) -> bool {
 fn responses_stateful_request_controls_present(body: &Value) -> bool {
     body.get("previous_response_id").is_some()
         || body.get("conversation").is_some()
-        || control_is_enabled(body.get("background"))
-        || control_is_enabled(body.get("store"))
+        || provider_state_control_enabled(body.get("background"))
+        || provider_state_control_enabled(body.get("store"))
         || body.get("prompt").is_some()
         || body.get("context_management").is_some()
-}
-
-fn control_is_enabled(value: Option<&Value>) -> bool {
-    !matches!(value, None | Some(Value::Null) | Some(Value::Bool(false)))
 }
 
 fn classify_provider_native_prompt_cache(

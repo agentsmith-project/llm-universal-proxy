@@ -12,6 +12,7 @@ pub(crate) mod downstream;
 pub mod formats;
 pub mod hooks;
 pub(crate) mod internal_artifacts;
+pub(crate) mod provider_state_controls;
 #[doc(hidden)]
 pub mod request_processing;
 pub mod server;

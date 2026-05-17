@@ -15,6 +15,7 @@ use url::form_urlencoded;
 use crate::config::ResourceLimits;
 use crate::downstream::DownstreamCancellation;
 use crate::formats::UpstreamFormat;
+use crate::provider_state_controls::provider_state_control_enabled;
 use crate::streaming::GuardedSseStream;
 use crate::upstream;
 
@@ -2067,10 +2068,10 @@ pub(super) fn responses_stateful_request_controls(body: &Value) -> Vec<&'static 
     if body.get("conversation").is_some() {
         controls.push("conversation");
     }
-    if control_is_enabled(body.get("background")) {
+    if provider_state_control_enabled(body.get("background")) {
         controls.push("background");
     }
-    if control_is_enabled(body.get("store")) {
+    if provider_state_control_enabled(body.get("store")) {
         controls.push("store");
     }
     if body.get("prompt").is_some() {
@@ -2080,13 +2081,6 @@ pub(super) fn responses_stateful_request_controls(body: &Value) -> Vec<&'static 
         controls.push("context_management");
     }
     controls
-}
-
-fn control_is_enabled(value: Option<&Value>) -> bool {
-    match value {
-        Some(Value::Bool(false)) | None | Some(Value::Null) => false,
-        Some(_) => true,
-    }
 }
 
 pub(super) fn quoted_field_list(fields: &[&str]) -> String {

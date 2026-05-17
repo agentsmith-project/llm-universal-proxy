@@ -983,8 +983,7 @@ fn messages_to_responses_preserves_reasoning_items() {
 }
 
 #[test]
-fn openai_responses_round_trip_preserves_order_and_multimodal_parts_with_default_instruction_downgrade(
-) {
+fn openai_responses_round_trip_merges_default_instructions_and_preserves_parts() {
     let original = json!({
         "model": "gpt-4o",
         "messages": [
@@ -2520,7 +2519,7 @@ fn translate_request_same_format_does_not_scan_regular_text_or_schema_as_selecto
 }
 
 #[test]
-fn translate_request_openai_same_format_default_downgrades_developer_role() {
+fn translate_request_openai_same_format_default_merges_developer_role() {
     let mut body = json!({
         "model": "gpt-4o",
         "messages": [
@@ -2546,7 +2545,7 @@ fn translate_request_openai_same_format_default_downgrades_developer_role() {
 }
 
 #[test]
-fn translate_request_openai_same_format_minimax_downgrades_developer_role_and_keeps_compat_overrides(
+fn translate_request_openai_same_format_minimax_merges_developer_role_and_preserves_model_overrides(
 ) {
     let mut body = json!({
         "model": "MiniMax-M2.7-highspeed",
@@ -2761,7 +2760,7 @@ fn translate_request_responses_to_openai_flattens_text_only_content_arrays() {
 }
 
 #[test]
-fn translate_request_responses_to_openai_default_downgrades_developer_role_to_user() {
+fn translate_request_responses_to_openai_default_merges_developer_role_into_user_message() {
     let mut body = json!({
         "model": "gpt-4o",
         "input": [
@@ -4145,7 +4144,7 @@ fn translate_request_openai_custom_tool_to_anthropic_rejects() {
 
     assert_eq!(
         err,
-        "OpenAI custom tools cannot be faithfully translated to Anthropic; refusing to downgrade them to function tools"
+        "OpenAI custom tools cannot be faithfully translated to Anthropic; failing closed because no safe function-tool representation exists"
     );
 }
 
@@ -4187,7 +4186,7 @@ fn assess_request_translation_responses_custom_tool_to_anthropic_rejects_nonport
         "err = {err}"
     );
     assert!(err.contains("failing closed"), "err = {err}");
-    assert!(!err.contains("downgrading"), "err = {err}");
+    assert!(!err.contains("downgrade"), "err = {err}");
 }
 
 #[test]
@@ -4258,7 +4257,19 @@ fn assess_request_translation_responses_custom_tool_to_anthropic_default_allows_
     assert!(
         warnings
             .iter()
-            .any(|warning| warning.contains("downgrading to raw string input semantics")),
+            .any(|warning| warning.contains("using raw string input bridge")),
+        "warnings = {warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("omitting format constraints")),
+        "warnings = {warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| !warning.contains("downgrade")),
         "warnings = {warnings:?}"
     );
 }
@@ -4331,7 +4342,19 @@ fn assess_request_translation_responses_custom_tool_to_openai_default_allows_pla
     assert!(
         warnings
             .iter()
-            .any(|warning| warning.contains("downgrading to raw string input semantics")),
+            .any(|warning| warning.contains("using raw string input bridge")),
+        "warnings = {warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("omitting format constraints")),
+        "warnings = {warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| !warning.contains("downgrade")),
         "warnings = {warnings:?}"
     );
 }
@@ -4780,6 +4803,130 @@ fn assess_request_translation_responses_to_openai_rejects_enabled_stateful_contr
         assert!(
             message.contains(field),
             "field = {field}, message = {message}"
+        );
+    }
+}
+
+#[test]
+fn assess_request_translation_openai_chat_to_responses_rejects_enabled_store_and_allows_disabled_store(
+) {
+    for (label, store) in [("true", json!(true)), ("non_false", json!("enabled"))] {
+        let body = json!({
+            "model": "gpt-4o",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "store": store
+        });
+
+        let assessment = assess_request_translation(
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiResponses,
+            &body,
+        );
+        let TranslationDecision::Reject(message) = assessment.decision() else {
+            panic!("expected {label} store to fail closed, got {assessment:?}");
+        };
+        assert!(message.contains("store"), "message = {message}");
+        assert!(message.contains("OpenAI Responses"), "message = {message}");
+    }
+
+    for (label, store) in [("false", json!(false)), ("null", json!(null))] {
+        let body = json!({
+            "model": "gpt-4o",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "store": store
+        });
+
+        let assessment = assess_request_translation(
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiResponses,
+            &body,
+        );
+        assert_eq!(
+            assessment.decision(),
+            TranslationDecision::Allow,
+            "disabled {label} store should be a cross-protocol no-op"
+        );
+    }
+}
+
+#[test]
+fn assess_request_translation_cross_protocol_store_enabled_fails_closed_for_other_surfaces() {
+    for (client_format, upstream_format, body) in [
+        (
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::Anthropic,
+            json!({
+                "model": "claude-3",
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "store": true
+            }),
+        ),
+        (
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiCompletion,
+            json!({
+                "model": "claude-3",
+                "max_tokens": 32,
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "store": true
+            }),
+        ),
+        (
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiResponses,
+            json!({
+                "model": "claude-3",
+                "max_tokens": 32,
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "store": "enabled"
+            }),
+        ),
+    ] {
+        let assessment = assess_request_translation(client_format, upstream_format, &body);
+        let TranslationDecision::Reject(message) = assessment.decision() else {
+            panic!(
+                "expected enabled store to fail closed for {client_format:?}->{upstream_format:?}, got {assessment:?}"
+            );
+        };
+        assert!(message.contains("store"), "message = {message}");
+    }
+
+    for (client_format, upstream_format, body) in [
+        (
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::Anthropic,
+            json!({
+                "model": "claude-3",
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "store": false
+            }),
+        ),
+        (
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiCompletion,
+            json!({
+                "model": "claude-3",
+                "max_tokens": 32,
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "store": null
+            }),
+        ),
+        (
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiResponses,
+            json!({
+                "model": "claude-3",
+                "max_tokens": 32,
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "store": false
+            }),
+        ),
+    ] {
+        let assessment = assess_request_translation(client_format, upstream_format, &body);
+        assert_eq!(
+            assessment.decision(),
+            TranslationDecision::Allow,
+            "disabled store should be allowed for {client_format:?}->{upstream_format:?}"
         );
     }
 }
@@ -7011,8 +7158,7 @@ fn translate_request_claude_to_non_anthropic_rejects_user_turn_that_would_reorde
 }
 
 #[test]
-fn translate_request_claude_to_openai_default_downgrades_multiblock_system_without_injected_newlines(
-) {
+fn translate_request_claude_to_openai_default_maps_multiblock_system_without_injected_newlines() {
     let mut body = json!({
         "model": "claude-3",
         "system": [
@@ -7519,7 +7665,7 @@ fn translate_request_claude_to_openai_collapses_text_blocks_to_string() {
 }
 
 #[test]
-fn translate_request_claude_to_openai_drops_metadata_for_compatibility() {
+fn translate_request_claude_to_openai_drops_metadata_when_mapping_to_openai() {
     let mut body = json!({
         "model": "claude-3",
         "metadata": { "user_id": "abc" },

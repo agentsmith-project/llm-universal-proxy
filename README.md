@@ -108,12 +108,12 @@ Reasoning effort such as `xhigh` is a client/request-side setting, not part of t
 
 `llmup` gives clients a stable local protocol surface, not unlimited provider equivalence.
 
-- the product goal is maximum safe compatibility: preserve the richest safe portable representation, warn on visible degradations, and reject unsafe or non-portable semantics before upstream
+- the product goal is maximum safe compatibility: preserve the richest safe portable representation, emit portability warnings when non-portable detail is omitted, and reject unsafe or non-portable semantics before upstream
 - when no cross-protocol request construction is needed, internal handling may keep provider-native bytes and fields unchanged if routing, auth, headers, and observability do not require body mutation or response normalization
 - when request or response construction is needed, `llmup` still maximizes safe preservation and may warn or reject non-portable provider-native features
-- fail-closed behavior is a hard portability boundary: requests whose semantics cannot be preserved or safely degraded are rejected before upstream
+- fail-closed behavior is a hard portability boundary: requests that hit a hard portability boundary are rejected before upstream
 - native extensions and provider-owned lifecycle state require native upstream handling unless a documented shim says otherwise
-- Responses reasoning/compaction continuity may warn and drop an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; provider-owned state is preserved only when same-wire-protocol internal handling can keep native semantics unchanged
+- Responses reasoning/compaction continuity may emit a portability warning and omit an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; provider-owned state is preserved only when same-wire-protocol internal handling can keep native semantics unchanged
 - the quickstart includes conservative text-only `surface_defaults`; turn on search, image, or parallel-tool flags only when that model surface really supports them
 - multimodal `surface.modalities.input` gates media types, not every source transport; HTTP(S) image/PDF URLs are distinct from provider or local URIs such as `gs://`, `s3://`, and `file://`
 - Gemini models remain usable through Google's OpenAI-compatible endpoint by configuring that upstream as `format: openai-completion`; native Gemini `generateContent` wire format is not an active proxy surface
