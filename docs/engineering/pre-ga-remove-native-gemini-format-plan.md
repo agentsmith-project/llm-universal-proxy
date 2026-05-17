@@ -42,7 +42,7 @@ Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再
 3. Prompt-cache delivered split：OpenAI-family -> Anthropic 顶层 `extra_body.anthropic.cache_control` 显式映射、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 显式映射已交付；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
 4. 当前不把 block-level mapping 放入 handoff；任何超出已交付顶层显式映射的 mapping 都必须单独 scope review，且不新增用户/运营配置面。
 5. 普通 function_call replay、portable custom tool replay、streaming first-response completed text capture，以及同协议 zero-transform/native-preserved `provider_cache_usage` usage hook 只读 telemetry 已交付；streaming capture 只覆盖第一轮 completed text，后续 continuation 仍走非流式 replay，`stream:true` + `previous_response_id` 仍 fail closed；cross-protocol translated routes 和 same-format constructed routes 暂不输出该 telemetry。
-6. Visible reasoning summary replay 已交付；下一步顺序改为 shared detector / trace cleanup；如果继续提 stream capture，只作为 streaming continuation 或更复杂 streaming item capture 的后续扩展，不作为当前 handoff 第一项。
+6. Visible reasoning summary replay 与 shared detector / trace cleanup 已交付；如果继续提 stream capture，只作为 streaming continuation 或更复杂 streaming item capture 的后续扩展，不作为当前 handoff 第一项。
 
 如果必须完全并行开发，其他两个 workstream 必须把所有 Gemini 相关改动视为 remove-native-gemini workstream 的独占范围，不再添加新的 Gemini cache/state 测试或 helper。
 

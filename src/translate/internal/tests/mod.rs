@@ -4805,6 +4805,28 @@ fn assess_request_translation_responses_to_openai_rejects_enabled_stateful_contr
             "field = {field}, message = {message}"
         );
     }
+    assert_stateful_fields_in_order(
+        &message,
+        &[
+            "previous_response_id",
+            "conversation",
+            "background",
+            "store",
+            "prompt",
+            "context_management",
+        ],
+    );
+}
+
+fn assert_stateful_fields_in_order(message: &str, fields: &[&str]) {
+    let mut offset = 0;
+    for field in fields {
+        let needle = format!("`{field}`");
+        let relative = message[offset..]
+            .find(&needle)
+            .unwrap_or_else(|| panic!("missing {needle} in {message}"));
+        offset += relative + needle.len();
+    }
 }
 
 #[test]
@@ -5096,24 +5118,37 @@ fn assess_request_translation_openai_responses_same_format_rejects_anthropic_pro
 
 #[test]
 fn assess_request_translation_anthropic_same_format_rejects_openai_prompt_cache_extension() {
-    let body = json!({
-        "model": "claude-3",
-        "max_tokens": 32,
-        "messages": [{ "role": "user", "content": "Hi" }],
-        "extra_body": {
-            "openai": {
+    for (label, openai) in [
+        (
+            "key",
+            json!({
                 "prompt_cache_key": "stable-prefix"
+            }),
+        ),
+        (
+            "retention",
+            json!({
+                "prompt_cache_retention": "24h"
+            }),
+        ),
+    ] {
+        let body = json!({
+            "model": "claude-3",
+            "max_tokens": 32,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": {
+                "openai": openai
             }
-        }
-    });
+        });
 
-    let assessment =
-        assess_request_translation(UpstreamFormat::Anthropic, UpstreamFormat::Anthropic, &body);
-    let TranslationDecision::Reject(message) = assessment.decision() else {
-        panic!("expected rejection, got {assessment:?}");
-    };
-    assert!(message.contains("extra_body.openai"), "message = {message}");
-    assert!(message.contains("target OpenAI"), "message = {message}");
+        let assessment =
+            assess_request_translation(UpstreamFormat::Anthropic, UpstreamFormat::Anthropic, &body);
+        let TranslationDecision::Reject(message) = assessment.decision() else {
+            panic!("expected {label} rejection, got {assessment:?}");
+        };
+        assert!(message.contains("extra_body.openai"), "message = {message}");
+        assert!(message.contains("target OpenAI"), "message = {message}");
+    }
 }
 
 #[test]

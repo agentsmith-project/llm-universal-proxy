@@ -1844,16 +1844,20 @@ async fn request_processing_observability_marks_local_state_capture_and_expansio
     assert!(request_entries[1]["llmup"].get("state_bridge").is_none());
 
     let hook_payloads = wait_for_hook_payload_count(&hook_payloads, 2).await;
+    let mut hook_local_state_handlings = hook_payloads
+        .iter()
+        .map(|payload| {
+            assert!(payload["llmup"].get("state_bridge").is_none());
+            payload["llmup"]["local_state_handling"]
+                .as_str()
+                .expect("hook payload local_state_handling")
+        })
+        .collect::<Vec<_>>();
+    hook_local_state_handlings.sort_unstable();
     assert_eq!(
-        hook_payloads[0]["llmup"]["local_state_handling"],
-        "capture_candidate"
+        hook_local_state_handlings,
+        vec!["capture_candidate", "expanded"]
     );
-    assert!(hook_payloads[0]["llmup"].get("state_bridge").is_none());
-    assert_eq!(
-        hook_payloads[1]["llmup"]["local_state_handling"],
-        "expanded"
-    );
-    assert!(hook_payloads[1]["llmup"].get("state_bridge").is_none());
 
     upstream_server.abort();
     hook_server.abort();
@@ -2908,6 +2912,29 @@ fn classify_request_processing_marks_model_insertion_without_hitting_native_resp
         responses.request_processing,
         crate::request_processing::RequestProcessing::RequestTransformationRequired
     );
+
+    let responses_disabled_stateful_without_model = serde_json::json!({
+        "background": false,
+        "store": null,
+        "input": "Continue"
+    });
+    let responses = crate::request_processing::classify_request_processing(
+        crate::request_processing::RequestProcessingInput {
+            client_format: crate::formats::UpstreamFormat::OpenAiResponses,
+            upstream_format: crate::formats::UpstreamFormat::OpenAiResponses,
+            body: &responses_disabled_stateful_without_model,
+            requested_model: "",
+            upstream_model: "",
+            stream: false,
+            forced_stream: false,
+            route_policy_requires_body_mutation: false,
+            state_bridge: crate::request_processing::StateBridgeModifier::Off,
+        },
+    );
+    assert_eq!(
+        responses.request_processing,
+        crate::request_processing::RequestProcessing::RequestTransformationRequired
+    );
 }
 
 #[test]
@@ -3209,6 +3236,37 @@ fn classify_request_processing_marks_anthropic_to_openai_explicit_prompt_cache_e
         assert_eq!(
             serde_json::to_value(info.provider_native_prompt_cache).unwrap(),
             serde_json::json!("explicit_extension_mapped"),
+            "upstream_format = {upstream_format}"
+        );
+    }
+}
+
+#[test]
+fn classify_request_processing_does_not_mark_anthropic_to_openai_prompt_cache_retention_extension_as_mapped(
+) {
+    let anthropic_body = serde_json::json!({
+        "model": "claude-3",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "openai": {
+                "prompt_cache_retention": "24h"
+            }
+        }
+    });
+
+    for upstream_format in [
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiResponses,
+    ] {
+        let info =
+            crate::request_processing::classify_request_processing(request_processing_input(
+                crate::formats::UpstreamFormat::Anthropic,
+                upstream_format,
+                &anthropic_body,
+            ));
+        assert_eq!(
+            serde_json::to_value(info.provider_native_prompt_cache).unwrap(),
+            serde_json::json!("none"),
             "upstream_format = {upstream_format}"
         );
     }

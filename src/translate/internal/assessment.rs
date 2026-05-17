@@ -4,7 +4,13 @@ use serde_json::Value;
 
 use crate::config::{ModelModality, ModelSurface};
 use crate::formats::UpstreamFormat;
-use crate::provider_state_controls::provider_state_control_enabled;
+use crate::prompt_cache_controls::{
+    anthropic_extra_body_openai_prompt_cache_controls_present,
+    anthropic_protocol_cache_control_present, openai_extra_body_anthropic_cache_control_present,
+};
+use crate::provider_state_controls::{
+    provider_state_control_enabled, responses_stateful_request_controls,
+};
 
 use super::media::{openai_file_part_mime_conflict_message, openai_file_part_resolved_mime_type};
 use super::messages::{
@@ -18,7 +24,7 @@ use super::models::{
     SemanticToolKind, SharedControlProfile, TranslationAssessment,
 };
 use super::openai_family::{
-    openai_extra_body_anthropic_cache_control, openai_extra_body_google_cached_content,
+    openai_extra_body_google_cached_content,
     validated_anthropic_extra_body_openai_prompt_cache_controls,
     validated_openai_extra_body_anthropic_cache_control,
 };
@@ -33,32 +39,11 @@ use super::tools::{
     semantic_tool_kind_from_value, tool_call_is_marked_non_replayable,
 };
 use super::{
-    anthropic_nonportable_content_block_message, anthropic_protocol_uses_cache_control,
+    anthropic_nonportable_content_block_message,
     anthropic_request_has_nonportable_thinking_provenance,
     anthropic_request_nonportable_tool_definition_message,
     anthropic_request_tool_result_order_message,
 };
-
-pub(super) fn responses_stateful_request_controls_for_translate(body: &Value) -> Vec<&'static str> {
-    let mut controls = Vec::new();
-    for field in ["previous_response_id", "conversation"] {
-        if body.get(field).is_some() {
-            controls.push(field);
-        }
-    }
-    if provider_state_control_enabled(body.get("background")) {
-        controls.push("background");
-    }
-    for field in ["prompt", "context_management"] {
-        if body.get(field).is_some() {
-            controls.push(field);
-        }
-    }
-    if provider_state_control_enabled(body.get("store")) {
-        controls.push("store");
-    }
-    controls
-}
 
 fn openai_family_format(format: UpstreamFormat) -> bool {
     matches!(
@@ -75,7 +60,7 @@ fn assess_prompt_cache_extension_target_mismatch(
 ) {
     if openai_family_format(client_format)
         && upstream_format != UpstreamFormat::Anthropic
-        && openai_extra_body_anthropic_cache_control(body).is_some()
+        && openai_extra_body_anthropic_cache_control_present(body)
     {
         assessment.reject(format!(
             "extra_body.anthropic.cache_control is an explicit Anthropic prompt-cache control and cannot be forwarded to {}; target Anthropic is required",
@@ -85,22 +70,13 @@ fn assess_prompt_cache_extension_target_mismatch(
 
     if client_format == UpstreamFormat::Anthropic
         && !openai_family_format(upstream_format)
-        && anthropic_extra_body_openai_prompt_cache_control_present(body)
+        && anthropic_extra_body_openai_prompt_cache_controls_present(body)
     {
         assessment.reject(format!(
             "extra_body.openai prompt-cache controls are explicit OpenAI prompt-cache controls and cannot be forwarded to {}; target OpenAI is required",
             translation_target_label(upstream_format)
         ));
     }
-}
-
-fn anthropic_extra_body_openai_prompt_cache_control_present(body: &Value) -> bool {
-    body.get("extra_body")
-        .and_then(|extra_body| extra_body.get("openai"))
-        .is_some_and(|openai| {
-            openai.get("prompt_cache_key").is_some()
-                || openai.get("prompt_cache_retention").is_some()
-        })
 }
 
 fn assess_openai_family_prompt_cache_extensions(
@@ -121,7 +97,7 @@ fn assess_openai_family_prompt_cache_extensions(
     }
 
     if upstream_format == UpstreamFormat::Anthropic
-        && openai_extra_body_anthropic_cache_control(body).is_some()
+        && openai_extra_body_anthropic_cache_control_present(body)
     {
         if let Err(message) = validated_openai_extra_body_anthropic_cache_control(body) {
             assessment.reject(message);
@@ -1643,7 +1619,7 @@ pub(super) fn anthropic_warning_only_request_controls_for_translate(
             controls.push(field);
         }
     }
-    if anthropic_protocol_uses_cache_control(body) {
+    if anthropic_protocol_cache_control_present(body) {
         controls.push("cache_control");
     }
     controls
@@ -1700,7 +1676,7 @@ pub(crate) fn assess_request_translation(
     if client_format == UpstreamFormat::OpenAiResponses
         && upstream_format != UpstreamFormat::OpenAiResponses
     {
-        let controls = responses_stateful_request_controls_for_translate(body);
+        let controls = responses_stateful_request_controls(body);
         if !controls.is_empty() {
             let quoted = controls
                 .iter()

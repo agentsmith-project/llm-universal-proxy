@@ -2,7 +2,12 @@ use serde::{ser::SerializeStruct, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::formats::UpstreamFormat;
-use crate::provider_state_controls::provider_state_control_enabled;
+use crate::prompt_cache_controls::{
+    anthropic_extra_body_openai_prompt_cache_key_present, anthropic_protocol_cache_control_present,
+    openai_extra_body_anthropic_cache_control_present,
+    openai_family_prompt_cache_top_level_fields_present,
+};
+use crate::provider_state_controls::responses_stateful_request_controls_present;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -227,15 +232,6 @@ fn responses_input_has_developer_role(body: &Value) -> bool {
         })
 }
 
-fn responses_stateful_request_controls_present(body: &Value) -> bool {
-    body.get("previous_response_id").is_some()
-        || body.get("conversation").is_some()
-        || provider_state_control_enabled(body.get("background"))
-        || provider_state_control_enabled(body.get("store"))
-        || body.get("prompt").is_some()
-        || body.get("context_management").is_some()
-}
-
 fn classify_provider_native_prompt_cache(
     client_format: UpstreamFormat,
     upstream_format: UpstreamFormat,
@@ -250,7 +246,7 @@ fn classify_provider_native_prompt_cache(
 
     if openai_family_format(client_format)
         && upstream_format == UpstreamFormat::Anthropic
-        && openai_prompt_cache_fields_present(body)
+        && openai_family_prompt_cache_top_level_fields_present(body)
     {
         return PromptCacheRequestControl::Dropped;
     }
@@ -264,21 +260,21 @@ fn classify_provider_native_prompt_cache(
 
     if client_format == UpstreamFormat::Anthropic
         && openai_family_format(upstream_format)
-        && anthropic_protocol_uses_cache_control(body)
+        && anthropic_protocol_cache_control_present(body)
     {
         return PromptCacheRequestControl::Dropped;
     }
 
     if openai_family_format(client_format)
         && openai_family_format(upstream_format)
-        && openai_prompt_cache_fields_present(body)
+        && openai_family_prompt_cache_top_level_fields_present(body)
     {
         return PromptCacheRequestControl::Preserved;
     }
 
     if client_format == upstream_format
         && client_format == UpstreamFormat::Anthropic
-        && anthropic_protocol_uses_cache_control(body)
+        && anthropic_protocol_cache_control_present(body)
     {
         PromptCacheRequestControl::Preserved
     } else {
@@ -291,63 +287,4 @@ fn openai_family_format(format: UpstreamFormat) -> bool {
         format,
         UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
     )
-}
-
-fn openai_prompt_cache_fields_present(body: &Value) -> bool {
-    body.get("prompt_cache_key").is_some() || body.get("prompt_cache_retention").is_some()
-}
-
-fn openai_extra_body_anthropic_cache_control_present(body: &Value) -> bool {
-    body.get("extra_body")
-        .and_then(|extra_body| extra_body.get("anthropic"))
-        .and_then(|anthropic| anthropic.get("cache_control"))
-        .is_some()
-}
-
-fn anthropic_extra_body_openai_prompt_cache_key_present(body: &Value) -> bool {
-    body.get("extra_body")
-        .and_then(|extra_body| extra_body.get("openai"))
-        .and_then(|openai| openai.get("prompt_cache_key"))
-        .is_some()
-}
-
-fn anthropic_protocol_uses_cache_control(body: &Value) -> bool {
-    if body.get("cache_control").is_some() {
-        return true;
-    }
-    if body
-        .get("system")
-        .is_some_and(anthropic_system_uses_cache_control)
-    {
-        return true;
-    }
-    if body
-        .get("messages")
-        .and_then(Value::as_array)
-        .is_some_and(|messages| messages.iter().any(anthropic_message_uses_cache_control))
-    {
-        return true;
-    }
-    body.get("tools")
-        .and_then(Value::as_array)
-        .is_some_and(|tools| tools.iter().any(anthropic_block_has_cache_control))
-}
-
-fn anthropic_system_uses_cache_control(system: &Value) -> bool {
-    match system {
-        Value::Array(blocks) => blocks.iter().any(anthropic_block_has_cache_control),
-        Value::Object(_) => anthropic_block_has_cache_control(system),
-        _ => false,
-    }
-}
-
-fn anthropic_message_uses_cache_control(message: &Value) -> bool {
-    message
-        .get("content")
-        .and_then(Value::as_array)
-        .is_some_and(|blocks| blocks.iter().any(anthropic_block_has_cache_control))
-}
-
-fn anthropic_block_has_cache_control(block: &Value) -> bool {
-    block.get("cache_control").is_some()
 }

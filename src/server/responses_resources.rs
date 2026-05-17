@@ -15,7 +15,7 @@ use url::form_urlencoded;
 use crate::config::ResourceLimits;
 use crate::downstream::DownstreamCancellation;
 use crate::formats::UpstreamFormat;
-use crate::provider_state_controls::provider_state_control_enabled;
+use crate::provider_state_controls::responses_stateful_request_controls;
 use crate::streaming::GuardedSseStream;
 use crate::upstream;
 
@@ -2058,29 +2058,6 @@ pub(super) fn responses_auto_discovery_ambiguity_message(request_kind: &str) -> 
     format!(
         "{request_kind} are ambiguous in multi-upstream namespaces that use auto-discovery; set `fixed_upstream_format` on the owning upstream or route explicitly because provenance-free routing cannot rely on discovery-time capabilities"
     )
-}
-
-pub(super) fn responses_stateful_request_controls(body: &Value) -> Vec<&'static str> {
-    let mut controls = Vec::new();
-    if body.get("previous_response_id").is_some() {
-        controls.push("previous_response_id");
-    }
-    if body.get("conversation").is_some() {
-        controls.push("conversation");
-    }
-    if provider_state_control_enabled(body.get("background")) {
-        controls.push("background");
-    }
-    if provider_state_control_enabled(body.get("store")) {
-        controls.push("store");
-    }
-    if body.get("prompt").is_some() {
-        controls.push("prompt");
-    }
-    if body.get("context_management").is_some() {
-        controls.push("context_management");
-    }
-    controls
 }
 
 pub(super) fn quoted_field_list(fields: &[&str]) -> String {

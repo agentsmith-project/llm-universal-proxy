@@ -373,6 +373,7 @@ Current-main delivery status:
 - Delivered slice: usage hooks emit optional `provider_cache_usage` telemetry from same-protocol zero-transform/native-preserved raw observed provider usage source fields for OpenAI Chat, OpenAI Responses, and Anthropic, omitting the field entirely when no known cache usage source field is present.
 - Delivered guardrail: cross-protocol translated routes and same-format constructed routes omit `provider_cache_usage` for now, even when the client-visible response has cache counters, because hooks do not yet receive a separate upstream raw usage object for attribution.
 - Delivered slice: Responses stateful-control detector enabled-semantics alignment for `background` / `store`; `background:false|null` and `store:false|null` no longer trigger provider-owned stateful fail-closed, while enabled/present controls still fail closed.
+- Delivered slice: shared stateful/prompt-cache detector cleanup; Responses stateful control order now has one source for request-processing, resource routing, and translation assessment, and provider prompt-cache coarse detection reuses the same read-only helpers without changing the external `provider_prompt_cache_request_control` values.
 - Delivered slice: OpenAI-family -> Anthropic explicit extension mapping for `extra_body.anthropic.cache_control` to top-level Anthropic `cache_control`, with fail-closed validation and no `llmup` cache.
 - Delivered slice: Anthropic -> OpenAI-family explicit target-provider extension mapping for `extra_body.openai.prompt_cache_key` and optional `prompt_cache_retention`, with fail-closed validation and no `llmup` cache.
 - Delivered dependency: Conversation State Bridge route/config owner hardening is complete. Continuations re-check the current runtime/internal fingerprint before upstream dispatch and fail closed on drift; this fingerprint is not a product feature or user configuration.
@@ -526,7 +527,7 @@ Required local tests:
 
 Recommended next order:
 
-1. Shared detector / trace cleanup: keep state/cache detector metadata consistent without adding a product configuration surface.
+1. Delivered: shared detector / trace cleanup keeps state/cache detector metadata consistent without adding a product configuration surface.
 2. Prompt-cache trace/docs guardrails: keep explicit provider-native cache-control support visible as portability omissions and warnings without broadening the product surface.
 3. Streaming extensions later: any streaming continuation capture is a later State Bridge extension, not the current prompt-cache handoff item.
 

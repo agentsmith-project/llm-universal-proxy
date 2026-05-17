@@ -25,7 +25,9 @@ use crate::hooks::{
     capture_headers, json_response_headers, new_request_id, now_timestamp_ms, sse_response_headers,
     HeaderEntry, HookRequestContext,
 };
-use crate::provider_state_controls::provider_state_control_enabled;
+use crate::provider_state_controls::{
+    provider_state_control_enabled, responses_stateful_request_controls,
+};
 use crate::request_processing::{
     classify_request_processing, RequestProcessing, RequestProcessingInput, StateBridgeModifier,
 };
@@ -56,9 +58,7 @@ use super::public_boundary::{
     reject_internal_request_scoped_tool_bridge_context,
     validate_provider_forwarding_request_boundary, REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD,
 };
-use super::responses_resources::{
-    resolve_native_responses_stateful_route_or_error, responses_stateful_request_controls,
-};
+use super::responses_resources::resolve_native_responses_stateful_route_or_error;
 use super::secret_redaction::{
     redactor_for_request, RedactingSseObservationTransform, RedactingSseStream, SecretRedactor,
 };

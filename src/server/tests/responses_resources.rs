@@ -1,4 +1,5 @@
 use super::*;
+use crate::provider_state_controls::responses_stateful_request_controls;
 use crate::server::responses_resources::{
     handle_openai_responses_resource, handle_openai_responses_resource_with_auth_context,
     TestOpenAiResponsesResourceRequest,
@@ -1292,6 +1293,53 @@ fn responses_stateful_request_controls_ignore_disabled_background_and_store() {
     ] {
         let controls = responses_stateful_request_controls(&body);
         assert!(controls.is_empty(), "{label}: controls = {controls:?}");
+    }
+}
+
+#[test]
+fn resolve_native_responses_stateful_route_or_error_reports_stateful_controls_in_detector_order() {
+    let namespace_state = runtime_namespace_state_for_tests(&[
+        ("a", crate::formats::UpstreamFormat::OpenAiResponses, true),
+        ("b", crate::formats::UpstreamFormat::OpenAiResponses, true),
+    ]);
+    let body = serde_json::json!({
+        "previous_response_id": "resp_1",
+        "conversation": { "id": "conv_1" },
+        "background": true,
+        "store": true,
+        "prompt": { "id": "pmpt_1" },
+        "context_management": { "type": "auto" }
+    });
+
+    let error = resolve_native_responses_stateful_route_or_error(
+        &namespace_state,
+        "",
+        crate::formats::UpstreamFormat::OpenAiResponses,
+        &body,
+    )
+    .expect_err("multiple native upstreams should fail");
+
+    assert_stateful_fields_in_order(
+        &error,
+        &[
+            "previous_response_id",
+            "conversation",
+            "background",
+            "store",
+            "prompt",
+            "context_management",
+        ],
+    );
+}
+
+fn assert_stateful_fields_in_order(message: &str, fields: &[&str]) {
+    let mut offset = 0;
+    for field in fields {
+        let needle = format!("`{field}`");
+        let relative = message[offset..]
+            .find(&needle)
+            .unwrap_or_else(|| panic!("missing {needle} in {message}"));
+        offset += relative + needle.len();
     }
 }
 

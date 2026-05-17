@@ -1,6 +1,6 @@
 # Pre-GA Conversation State Bridge 工作计划
 
-- 状态：current-main status update；内置短期纯内存 transcript replay、普通 `function_call` / `function_call_output`、portable `custom_tool_call` / `custom_tool_call_output` 的非流式本地 replay、visible reasoning summary replay、streaming first-response completed visible output capture 和 route/config owner hardening 已实现；`response.completed` bytes 交给 client 前 state 已写入；usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` 只读 telemetry；shared detector/trace cleanup 仍待后续
+- 状态：current-main status update；内置短期纯内存 transcript replay、普通 `function_call` / `function_call_output`、portable `custom_tool_call` / `custom_tool_call_output` 的非流式本地 replay、visible reasoning summary replay、streaming first-response completed visible output capture 和 route/config owner hardening 已实现；`response.completed` bytes 交给 client 前 state 已写入；usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` 只读 telemetry；shared detector/trace cleanup 已交付
 - 日期：2026-05-17
 - 范围：在最大安全兼容目标下提供内置、短期、纯内存 transcript retention/replay，用于把使用 OpenAI Responses 本地 continuation 的客户端转换到需要显式 transcript 的 provider 协议
 - 非范围：LLM response cache、provider cache 生命周期/资源管理、semantic cache、跨进程持久化数据库、Conversations API 模拟、本地 retrieval、provider 私有 opaque state 反解、后台任务队列产品化、提示词管理产品；Conversations API bridge、持久化后端、外部状态导入、admin 浏览/分布式同步等不是当前方向，必须另起评审
@@ -92,7 +92,7 @@ Chat Completions 和 Anthropic Messages 的共同基线是显式 transcript repl
 
 仍未完成：
 
-- remaining detector work：如需继续提 detector，只限共享 helper、细粒度 trace metadata、以及其它 consolidation，不再把 enabled-semantics 小切片列为下一步。
+- remaining trace metadata work：如需继续提 trace cleanup，只限细粒度 trace metadata 以及其它 consolidation，不再把 enabled-semantics 或 shared detector helper 小切片列为下一步。
 - proxy-key 与 client-provider-key 都已有本地 replay owner hash；client-provider-key 继续包含 provider key，proxy-key 绑定 data-auth generation/auth kind，不引入新用户配置。
 - streaming continuation replay 尚未实现；当前本地 replay 只支持第一轮 streaming completed visible output capture，后续 `previous_response_id` continuation 仍必须非流式，`stream:true` + `previous_response_id` 仍 fail closed。
 - 细粒度 trace metadata 尚未完成；需要补齐 bridge enabled、hit/miss/expired/owner_mismatch、replay item count、memory limit 等不含 prompt 内容的 metadata。
@@ -424,8 +424,9 @@ Current-main delivery status:
 - Delivered slice: visible reasoning summary replay；本地 state 只保存 `summary[].summary_text.text`，不保存或导入 `encrypted_content`、Anthropic thinking signature、redacted/omitted thinking 或 provider-private reasoning 字段。
 - Delivered slice: prompt-cache 顶层显式映射已交付，包括 OpenAI-family -> Anthropic `extra_body.anthropic.cache_control`、Anthropic -> OpenAI-family `extra_body.openai.prompt_cache_key` / `prompt_cache_retention`；coarse disposition trace/hook visibility 和 same-protocol wrong-target fail-closed 也已交付。
 - Delivered slice: usage hook 已交付同协议 zero-transform/native-preserved `provider_cache_usage` source-field telemetry；cross-protocol translated routes 和 same-format constructed routes 暂不输出，且该 telemetry 不参与 cache store、lookup、key、eviction、response reuse、routing 或 fallback。
+- Delivered slice: shared detector / trace cleanup 已交付；Responses stateful controls 和 provider prompt-cache coarse detection 已收敛到共享只读 helper，外部 trace/hook enum 值不变。
 - Handoff guardrail: 当前 handoff 不继续扩展 prompt-cache request-control；custom tool replay 和 `provider_cache_usage` telemetry 已交付，不再作为下一步前置项。
-- Next: shared detector helper / 细粒度 trace metadata consolidation。Streaming continuation capture 仅作为后续扩展，不是当前 handoff 第一项。
+- Next: 细粒度 trace metadata consolidation。Streaming continuation capture 仅作为后续扩展，不是当前 handoff 第一项。
 
 ### Phase 0：合同冻结与文档更新
 
@@ -524,7 +525,7 @@ Current-main delivery status:
 - 实现全局 `max_bytes` 检查。
 - 在 debug trace 中记录 bridge enabled、state hit/miss/expired/owner_mismatch、replay item count。
 - 确认 hook/debug 不包含状态内容。
-- 已完成 `background` / `store` enabled-semantics alignment：`background:false|null` 和 `store:false|null` 不触发 provider-owned stateful fail-closed；`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。剩余 detector 工作只包括共享 helper、细粒度 trace metadata、以及其它 consolidation。
+- 已完成 `background` / `store` enabled-semantics alignment 和 shared detector cleanup：`background:false|null` 和 `store:false|null` 不触发 provider-owned stateful fail-closed；`background:true`、`store:true`、`previous_response_id`、`conversation`、`prompt`、`context_management` 仍 fail closed。剩余工作只包括细粒度 trace metadata 以及其它 consolidation。
 
 验收：
 
@@ -572,7 +573,7 @@ Current-main delivery status:
 
 推荐下一步顺序：
 
-1. Shared detector / trace cleanup：共享 detector helper、细粒度 trace metadata consolidation，不新增产品配置面。
+1. Delivered: shared detector / trace cleanup：共享 detector helper 已交付；细粒度 trace metadata consolidation 不新增产品配置面。
 2. Streaming continuation capture：仅作为后续单独评审项，不作为当前 handoff 第一项；本地 Conversations API bridge 属于非当前方向。
 
 主要代码区域：

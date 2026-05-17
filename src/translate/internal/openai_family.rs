@@ -137,9 +137,7 @@ pub(super) fn openai_normalized_decoding_controls(body: &Value) -> NormalizedDec
 }
 
 pub(super) fn openai_extra_body_anthropic_cache_control(body: &Value) -> Option<&Value> {
-    body.get("extra_body")
-        .and_then(|extra_body| extra_body.get("anthropic"))
-        .and_then(|anthropic| anthropic.get("cache_control"))
+    crate::prompt_cache_controls::openai_extra_body_anthropic_cache_control(body)
 }
 
 pub(super) fn openai_extra_body_google_cached_content(body: &Value) -> Option<&Value> {
@@ -159,8 +157,7 @@ pub(super) struct OpenAiPromptCacheControls {
 }
 
 pub(super) fn anthropic_extra_body_openai_prompt_cache_controls(body: &Value) -> Option<&Value> {
-    body.get("extra_body")
-        .and_then(|extra_body| extra_body.get("openai"))
+    crate::prompt_cache_controls::anthropic_extra_body_openai_prompt_cache_controls(body)
 }
 
 pub(super) fn validated_anthropic_extra_body_openai_prompt_cache_controls(

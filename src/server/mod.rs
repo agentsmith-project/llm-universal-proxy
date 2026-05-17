@@ -591,8 +591,6 @@ use proxy::{
     resolve_requested_model_or_error, RequestBoundaryDecision, TestRequestCoreRequest,
 };
 #[cfg(test)]
-use responses_resources::{
-    resolve_native_responses_stateful_route_or_error, responses_stateful_request_controls,
-};
+use responses_resources::resolve_native_responses_stateful_route_or_error;
 #[cfg(test)]
 use state::{RuntimeNamespaceState, RuntimeState, UpstreamState, DEFAULT_NAMESPACE};

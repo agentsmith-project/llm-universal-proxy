@@ -1003,10 +1003,6 @@ fn validate_anthropic_content_tool_names(content: &Value) -> Result<(), String> 
     Ok(())
 }
 
-fn anthropic_block_has_cache_control(block: &Value) -> bool {
-    block.get("cache_control").is_some()
-}
-
 fn anthropic_block_has_nonportable_thinking_provenance(block: &Value) -> bool {
     if block.get("type").and_then(Value::as_str) != Some("thinking") {
         return false;
@@ -1029,46 +1025,6 @@ fn anthropic_content_block_supported(block_type: &str) -> bool {
         block_type,
         "text" | "image" | "tool_use" | "server_tool_use" | "tool_result" | "thinking"
     )
-}
-
-fn anthropic_protocol_uses_cache_control(body: &Value) -> bool {
-    if body.get("cache_control").is_some() {
-        return true;
-    }
-
-    let system_uses_cache_control = body
-        .get("system")
-        .map(|system| match system {
-            Value::Array(blocks) => blocks.iter().any(anthropic_block_has_cache_control),
-            Value::Object(_) => anthropic_block_has_cache_control(system),
-            _ => false,
-        })
-        .unwrap_or(false);
-    if system_uses_cache_control {
-        return true;
-    }
-
-    let messages_use_cache_control = body
-        .get("messages")
-        .and_then(Value::as_array)
-        .map(|messages| {
-            messages.iter().any(|message| {
-                message
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .map(|blocks| blocks.iter().any(anthropic_block_has_cache_control))
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-    if messages_use_cache_control {
-        return true;
-    }
-
-    body.get("tools")
-        .and_then(Value::as_array)
-        .map(|tools| tools.iter().any(anthropic_block_has_cache_control))
-        .unwrap_or(false)
 }
 
 fn anthropic_block_not_portable_message(block_type: &str, target_label: &str) -> String {
