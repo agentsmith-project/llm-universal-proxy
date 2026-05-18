@@ -213,28 +213,26 @@ class GaDocsContractTests(unittest.TestCase):
             rf"current (?:published )?(?:container )?release is `{re.escape(refs['next_release_tag'].casefold())}`",
         )
 
-    def test_readmes_summarize_published_container_usage(self):
+    def test_readmes_keep_container_usage_as_advanced_link(self):
         refs = container_refs()
-        english = normalized_whitespace(read_doc("README.md"))
 
-        readme_expectations = {
-            "README.md": (
-                english,
-                f'The current published container release is `{refs["published_release_tag"]}`',
-                f'Cargo package version `{refs["next_package_version"]}` is the next release identity, not a published container tag yet',
-                rf"current published .*`{re.escape(refs['next_release_tag'])}`",
-            ),
-        }
-
-        for path, (text, published_semantics, next_semantics, forbidden) in readme_expectations.items():
+        for path in ("README.md", "README_CN.md"):
+            text = read_doc(path)
+            normalized = normalized_whitespace(text)
             with self.subTest(path=path):
-                self.assertIn(refs["image"], text)
-                self.assertIn(published_semantics, text)
-                self.assertIn(next_semantics, text)
-                self.assertIn("digest", text)
-                self.assertIn("docs/container.md", text)
+                for snippet in (
+                    "install.sh",
+                    "llmup-config",
+                    "llmup-codex",
+                    "llmup-claude",
+                    "docs/advanced-usage.md",
+                    "docs/container.md",
+                ):
+                    self.assertIn(snippet, normalized)
+                self.assertNotIn(refs["image"], text)
+                self.assertNotIn("digest", text.casefold())
+                self.assertNotIn(f'{refs["image"]}:{refs["published_release_tag"]}', text)
                 self.assertNotIn(f'{refs["image"]}:{refs["next_release_tag"]}', text)
-                self.assertNotRegex(text.casefold(), forbidden.casefold())
 
     def test_docker_compose_defaults_to_current_release_not_latest(self):
         refs = container_refs()
@@ -269,19 +267,31 @@ class GaDocsContractTests(unittest.TestCase):
             'check_contains "docs/container.md" "GITHUB_USERNAME"',
             'check_contains "docs/container.md" "If the package is public"',
             'check_contains "docs/container.md" "unauthorized, 403, or package page appears 404"',
-            'check_contains "README_CN.md" "不用 Docker，也不用先学完整配置，先把本地二进制跑起来"',
-            'check_contains "README_CN.md" ".local/bin/llm-universal-proxy"',
-            'check_contains "README_CN.md" ".env.llmup.local"',
-            'check_contains "README_CN.md" "provider_key:"',
-            'check_contains "README_CN.md" "env: MINIMAX_API_KEY"',
-            'check_contains "README_CN.md" "--model minimax"',
-            'check_contains "README_CN.md" "llmup-anthropic-like.yaml"',
-            'check_contains "README_CN.md" "--model my-claude-like-model"',
-            'check_absent "README_CN.md" "preset-openai-compatible"',
-            'check_absent "README_CN.md" "## 容器镜像"',
-            'check_contains "README.md" "${PUBLISHED_CONTAINER_RELEASE_TAG}"',
-            'check_contains "README.md" "${NEXT_PACKAGE_VERSION}"',
-            'check_readme_container_release_semantics "README.md" en',
+            "check_user_tooling_doc_contract",
+            'check_contains_all "$readme" "install.sh" "llmup-config" "llmup-codex" "llmup-claude" "docs/advanced-usage.md"',
+            '"llm-universal-proxy-macos-aarch64.tar.gz"',
+            '".local/bin/llm-universal-proxy"',
+            '"scripts/run_codex_proxy.sh"',
+            '"scripts/run_claude_proxy.sh"',
+            '"--config-source"',
+            '"--env-file"',
+            '"provider_key_env:"',
+            '"model_aliases:"',
+            '"data_auth:"',
+            '"--model minimax"',
+            'check_contains_all "docs/clients.md"',
+            '"launcher-managed"',
+            'check_absent_all "docs/clients.md"',
+            "'OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY'",
+            '"llm-universal-proxy --config"',
+            'check_contains_all "docs/advanced-usage.md"',
+            '"Manual Proxy Startup"',
+            '"Multi-Endpoint YAML"',
+            '"Manual Codex Wiring"',
+            '"Manual Claude Wiring"',
+            'check_contains "README.md" "docs/container.md"',
+            'check_contains "docs/container.md" "${PUBLISHED_CONTAINER_IMAGE}:${PUBLISHED_CONTAINER_RELEASE_TAG}"',
+            'check_contains "docs/container.md" "Cargo package version \\`${NEXT_PACKAGE_VERSION}\\`"',
             'check_absent "docs/container.md" "fine-grained personal access token"',
             'check_absent "docs/container.md" \'$GITHUB_ACTOR\'',
             'check_contains "examples/docker-compose.yaml" "${PUBLISHED_CONTAINER_IMAGE}:${PUBLISHED_CONTAINER_RELEASE_TAG}"',
@@ -505,9 +515,11 @@ class GaDocsContractTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, completed_baseline)
 
-    def test_client_manual_wiring_documents_proxy_key_sdk_contract(self):
+    def test_advanced_usage_documents_proxy_key_sdk_contract(self):
         clients = read_doc("docs/clients.md")
-        manual = markdown_section(clients, "Manual Wiring Without Wrappers")
+        advanced = read_doc("docs/advanced-usage.md")
+        codex = markdown_section(advanced, "Manual Codex Wiring")
+        claude = markdown_section(advanced, "Manual Claude Wiring")
 
         for forbidden in (
             "OPENAI_API_KEY=dummy",
@@ -515,18 +527,42 @@ class GaDocsContractTests(unittest.TestCase):
             "GEMINI_API_KEY=dummy",
         ):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, manual)
+                self.assertNotIn(forbidden, advanced)
 
         for snippet in (
             "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "`proxy_key` mode",
+            "local proxy key",
+        ):
+            with self.subTest(section="codex", snippet=snippet):
+                self.assertIn(snippet, codex)
+
+        for snippet in (
             "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
             "`proxy_key` mode",
-            "`client_provider_key` mode, set these SDK keys to the real provider key",
+            "local proxy key",
+        ):
+            with self.subTest(section="claude", snippet=snippet):
+                self.assertIn(snippet, claude)
+
+        for snippet in (
+            "`client_provider_key` mode",
             "`provider_key_env`",
             "provider_key_env: GEMINI_API_KEY",
+            "The provider key belongs to the proxy",
         ):
             with self.subTest(snippet=snippet):
-                self.assertIn(snippet, manual)
+                self.assertIn(snippet, advanced)
+
+        for manual_snippet in (
+            "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "llm-universal-proxy --config",
+            "provider_key_env:",
+        ):
+            with self.subTest(section="clients", forbidden=manual_snippet):
+                self.assertNotIn(manual_snippet, clients)
+        self.assertIn("Advanced Usage", clients)
 
     def test_user_entry_auth_docs_do_not_describe_env_only_auth_or_provider_keys(self):
         docs = {
@@ -548,16 +584,31 @@ class GaDocsContractTests(unittest.TestCase):
                 with self.subTest(path=relative_path, forbidden=snippet):
                     self.assertNotIn(snippet, text)
 
+        user_entry_docs = {
+            "README.md": docs["README.md"],
+            "README_CN.md": docs["README_CN.md"],
+            "docs/clients.md": docs["docs/clients.md"],
+        }
+        advanced_auth_snippets = (
+            "Prefer static `data_auth`",
+            "compatibility environment fallback",
+            "`provider_key.inline`, `provider_key.env`, or legacy `provider_key_env`",
+        )
+        for relative_path, text in user_entry_docs.items():
+            for snippet in advanced_auth_snippets:
+                with self.subTest(path=relative_path, forbidden=snippet):
+                    self.assertNotIn(snippet, text)
+
         expectations = {
-            "README.md": (
-                "Prefer static `data_auth`",
-                "environment fallback when `data_auth` is omitted",
-                "`provider_key.inline`, `provider_key.env`, or legacy `provider_key_env`",
+            "docs/advanced-usage.md": (
+                "`data_auth.proxy_key` protects the local proxy",
+                "`provider_key.inline`, `provider_key.env`, or `provider_key_env`",
+                "`client_provider_key` mode",
             ),
-            "docs/clients.md": (
-                "Prefer static `data_auth`",
-                "compatibility environment fallback when `data_auth` is omitted",
-                "`provider_key.inline`, `provider_key.env`, or legacy `provider_key_env`",
+            "docs/configuration.md": (
+                "The preferred static configuration is the top-level `data_auth` object",
+                "environment fallback",
+                "`provider_key.inline`, `provider_key.env`, and `provider_key_env`",
             ),
             "docs/CONSTITUTION.md": (
                 "Prefer static `data_auth`",
@@ -566,9 +617,10 @@ class GaDocsContractTests(unittest.TestCase):
             ),
         }
         for relative_path, snippets in expectations.items():
+            text = read_doc(relative_path)
             for snippet in snippets:
                 with self.subTest(path=relative_path, snippet=snippet):
-                    self.assertIn(snippet, docs[relative_path])
+                    self.assertIn(snippet, text)
 
     def test_configuration_doc_covers_global_auth_and_static_yaml_examples(self):
         config_doc = read_doc("docs/configuration.md")

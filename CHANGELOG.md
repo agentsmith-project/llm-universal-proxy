@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.2.32 - 2026-05-18
+
+- Added the user-facing tooling layer: `llmup-config`, `llmup-codex`, and `llmup-claude` now provide a low-friction local setup path while preserving the existing `llm-universal-proxy --config ...` advanced server mode.
+- Added a POSIX `install.sh` release asset path that installs the main binary, creates the three user-tool aliases, verifies checksums, rejects unsafe archives, avoids `sudo`, and prints absolute next-step commands when the install directory is not on the current `PATH`.
+- Reworked README / README_CN around the new install -> configure -> launch flow and moved manual proxy startup, multi-endpoint YAML, and manual Codex/Claude wiring into `docs/advanced-usage.md`.
+- Hardened release, governance, and documentation contracts around the new user-tooling path, including installer smoke coverage, help/version checks, README leakage checks, and launcher-managed versus manual-proxy documentation boundaries.
+- Advanced the main-branch release identity to Cargo package version `0.2.32`, the next patch version after the unpublished `0.2.31` development identity and the published, occupied `v0.2.30` tag, without moving, deleting, or reusing the existing tag.
+
 ## v0.2.31 - 2026-05-18
 
 - Advanced the main-branch release identity to Cargo package version `0.2.31`, the next patch version after the published, occupied `v0.2.30` tag, without moving, deleting, or reusing the existing tag.
