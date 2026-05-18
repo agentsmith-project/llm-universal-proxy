@@ -1,10 +1,12 @@
 use std::ffi::OsString;
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use llm_universal_proxy::user_tools::config_wizard::{
-    init_non_interactive, parse_config_args, ApiKeySource, ConfigCommand, InitOptions,
+    init_non_interactive, parse_config_args, run_cli, ApiKeySource, ConfigCommand, InitOptions,
     ProviderInterface,
 };
 use llm_universal_proxy::user_tools::env_file::parse_env_file_str;
@@ -36,6 +38,31 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+struct EnvGuard {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: impl AsRef<Path>) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value.as_ref());
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        if let Some(value) = &self.previous {
+            std::env::set_var(self.key, value);
+        } else {
+            std::env::remove_var(self.key);
+        }
     }
 }
 
@@ -108,6 +135,44 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
     .expect_err("existing config should not be overwritten without --force");
     assert!(overwrite.contains("--force"));
     assert!(!overwrite.contains("new-secret"));
+}
+
+#[test]
+fn interactive_config_wizard_creates_config_instead_of_printing_usage_only() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("interactive-config");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+
+    let mut stdin = Cursor::new(
+        b"https://api.minimaxi.com/v1\nMiniMax-M2.7-highspeed\nprovider-secret-from-prompt\n"
+            .to_vec(),
+    );
+    let mut stdout = Vec::new();
+
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("interactive config should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Wrote llmup config"));
+    assert!(output.contains("Next: run llmup-codex or llmup-claude."));
+    assert!(!output.contains("Usage:"));
+    assert!(!output.contains("provider-secret-from-prompt"));
+
+    let config_yaml =
+        fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
+    assert!(config_yaml.contains("api_root: https://api.minimaxi.com/v1"));
+    assert!(config_yaml.contains("format: openai-completion"));
+    assert!(config_yaml.contains("default: DEFAULT:MiniMax-M2.7-highspeed"));
+    assert!(!config_yaml.contains("provider-secret-from-prompt"));
+
+    let secrets = fs::read_to_string(llmup_home.join("secrets.env")).expect("read secrets");
+    assert!(secrets.contains("LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret-from-prompt"));
 }
 
 #[test]

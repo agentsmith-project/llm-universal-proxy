@@ -113,6 +113,46 @@ fn installed_entrypoint_help_and_version_do_not_require_native_clients() {
     }
 }
 
+#[test]
+fn installed_config_entrypoint_without_args_runs_interactive_setup() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_llm-universal-proxy"));
+    let temp = TempDir::new("entrypoint-interactive-config");
+    let llmup_config = temp.path().join("llmup-config");
+    let llmup_home = temp.path().join(".llmup");
+    link_or_copy(&bin, &llmup_config);
+
+    let mut child = Command::new(&llmup_config)
+        .env("HOME", temp.path())
+        .env("LLMUP_HOME", &llmup_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn llmup-config interactive");
+    child
+        .stdin
+        .as_mut()
+        .expect("interactive stdin")
+        .write_all(
+            b"https://api.minimaxi.com/v1\nMiniMax-M2.7-highspeed\nprovider-secret-from-prompt\n",
+        )
+        .expect("write interactive answers");
+    let output = child.wait_with_output().expect("wait interactive config");
+    assert!(
+        output.status.success(),
+        "interactive config failed stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Wrote llmup config"));
+    assert!(!stdout.contains("Usage:"));
+    assert!(!stdout.contains("provider-secret-from-prompt"));
+    assert!(llmup_home.join("config.yaml").exists());
+    assert!(llmup_home.join("secrets.env").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn codex_managed_launcher_runs_fake_client_with_injection_isolation_and_proxy_lifecycle() {

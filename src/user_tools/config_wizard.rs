@@ -90,6 +90,9 @@ Usage:
   llmup-config --version
 
 Configure llmup for local Codex CLI and Claude Code launchers.
+
+Run without arguments to create the local config used by llmup-codex and
+llmup-claude. The default setup is for OpenAI-compatible providers.
 ";
 
 pub fn parse_config_args(
@@ -139,9 +142,7 @@ pub fn run_cli(
             Ok(0)
         }
         ConfigCommand::Interactive => {
-            stdout
-                .write_all(CONFIG_HELP.as_bytes())
-                .map_err(|error| format!("failed to write help: {error}"))?;
+            run_interactive(stdin, stdout)?;
             Ok(0)
         }
         ConfigCommand::Init(init) => {
@@ -173,6 +174,137 @@ pub fn run_cli(
             Ok(0)
         }
     }
+}
+
+fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), String> {
+    let home = home_dir_from_env()?;
+    let llmup_home = env_path_or_default("LLMUP_HOME", home.join(".llmup"));
+    let config_path = llmup_home.join("config.yaml");
+    let secrets_path = llmup_home.join("secrets.env");
+    let mut force = false;
+
+    writeln!(
+        stdout,
+        "llmup local setup\n\nThis creates a local proxy config for llmup-codex and llmup-claude.\nThe default is an OpenAI-compatible provider."
+    )
+    .map_err(|error| format!("failed to write prompt: {error}"))?;
+
+    if config_path.exists() || secrets_path.exists() {
+        writeln!(
+            stdout,
+            "\nExisting llmup config found:\n  config: {}\n  secrets: {}",
+            config_path.display(),
+            secrets_path.display()
+        )
+        .map_err(|error| format!("failed to write existing config summary: {error}"))?;
+        let answer = prompt_optional_line(
+            stdin,
+            stdout,
+            "Press Enter to keep it, or type reconfigure to replace it: ",
+        )?;
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "" | "keep" | "k" | "no" | "n" => {
+                writeln!(
+                    stdout,
+                    "Keeping existing config.\nNext: run llmup-codex or llmup-claude."
+                )
+                .map_err(|error| format!("failed to write summary: {error}"))?;
+                return Ok(());
+            }
+            "reconfigure" | "replace" | "r" | "yes" | "y" => {
+                force = true;
+            }
+            other => {
+                return Err(format!(
+                    "unknown choice `{other}`; rerun llmup-config and press Enter or type reconfigure"
+                ));
+            }
+        }
+    }
+
+    let model_service_url = prompt_required_line(
+        stdin,
+        stdout,
+        "\nModel service API root, for example https://api.minimaxi.com/v1: ",
+        "model service API root",
+    )?;
+    let model_name = prompt_required_line(
+        stdin,
+        stdout,
+        "Model name, for example MiniMax-M2.7-highspeed: ",
+        "model name",
+    )?;
+    let api_key = prompt_required_line(
+        stdin,
+        stdout,
+        "Provider API key (saved locally; not printed again): ",
+        "provider API key",
+    )?;
+
+    let result = init_non_interactive(
+        InitOptions {
+            llmup_home,
+            codex_home: env_path_or_default("LLMUP_CODEX_HOME", home.join(".llmup-codex")),
+            claude_config_dir: env_path_or_default(
+                "LLMUP_CLAUDE_CONFIG_DIR",
+                home.join(".llmup-claude"),
+            ),
+            interface: ProviderInterface::OpenAi,
+            model_service_url,
+            model_name,
+            model_alias: "default".to_string(),
+            force,
+        },
+        &api_key,
+    )?;
+    stdout
+        .write_all(result.summary.as_bytes())
+        .map_err(|error| format!("failed to write summary: {error}"))
+}
+
+fn prompt_required_line(
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    prompt: &str,
+    field_name: &str,
+) -> Result<String, String> {
+    let value = prompt_optional_line(stdin, stdout, prompt)?;
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{field_name} must not be empty"));
+    }
+    Ok(value.to_string())
+}
+
+fn prompt_optional_line(
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    prompt: &str,
+) -> Result<String, String> {
+    stdout
+        .write_all(prompt.as_bytes())
+        .map_err(|error| format!("failed to write prompt: {error}"))?;
+    stdout
+        .flush()
+        .map_err(|error| format!("failed to flush prompt: {error}"))?;
+    read_line(stdin)
+}
+
+fn read_line(stdin: &mut dyn Read) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    let mut one = [0_u8; 1];
+    loop {
+        match stdin.read(&mut one) {
+            Ok(0) => break,
+            Ok(_) if one[0] == b'\n' => break,
+            Ok(_) => bytes.push(one[0]),
+            Err(error) => return Err(format!("failed to read input: {error}")),
+        }
+    }
+    if bytes.ends_with(b"\r") {
+        bytes.pop();
+    }
+    String::from_utf8(bytes).map_err(|_| "interactive input must be valid UTF-8".to_string())
 }
 
 pub fn init_non_interactive(options: InitOptions, api_key: &str) -> Result<InitResult, String> {
