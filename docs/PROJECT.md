@@ -10,6 +10,8 @@ changelog.
 ## Source Tree
 
 ```text
+install.sh
+
 src/
   config.rs
   config/model_surface.rs
@@ -43,6 +45,11 @@ src/
     web_dashboard/
   streaming/
   translate/
+  user_tools/
+    agent_launcher.rs
+    config_wizard.rs
+    env_file.rs
+    mod.rs
 
 tests/
   common/
@@ -127,12 +134,24 @@ docs/
 | `src/streaming/openai_sink.rs` | Client-facing stream emission helpers |
 | `src/streaming/state.rs` | Cross-frame stream state and fatal rejection tracking |
 
-## CLI And Release Harnesses
+## User Tool Product Entrypoints
+
+`src/user_tools/*` and `install.sh` are user product entrypoint maintenance points.
 
 | Path | Contributor entrypoint |
 | --- | --- |
-| `scripts/interactive_cli.py` | Interactive CLI wrapper implementation for Codex CLI and Claude Code |
-| `scripts/run_codex_proxy.sh` / `scripts/run_claude_proxy.sh` | Thin wrapper launchers that resolve `interactive_cli.py` relative to the script dir |
+| `src/user_tools/config_wizard.rs` | Product entrypoints for `llmup-config`: interactive setup, hidden automation init, generated config, and checks |
+| `src/user_tools/agent_launcher.rs` | Product entrypoints for `llmup-codex` and `llmup-claude`: launcher arg routing, no-proxy mode, proxy lifecycle, env isolation, native client execution |
+| `src/user_tools/env_file.rs` | Safe env-file parser/writer shared by the user tools |
+| `src/user_tools/mod.rs` | User-tool module boundary |
+| `install.sh` | Release installer product entrypoint that installs `llm-universal-proxy` and creates `llmup-config`, `llmup-codex`, and `llmup-claude` |
+
+## Legacy/Test Harnesses And Release Gates
+
+| Path | Contributor entrypoint |
+| --- | --- |
+| `scripts/interactive_cli.py` | legacy/test harness for scripted Codex CLI and Claude Code checks; not user product launchers |
+| `scripts/run_codex_proxy.sh` / `scripts/run_claude_proxy.sh` | legacy/test harness shell entrypoints that resolve `interactive_cli.py` relative to the script dir; not user product launchers |
 | `scripts/fixtures/cli_matrix/default_proxy_test_matrix.yaml` | Provider-neutral preset matrix fixture using `preset-openai-compatible` and `preset-anthropic-compatible` |
 | `scripts/real_cli_matrix.py` | Deterministic real CLI matrix harness and verifier logic |
 | `scripts/real_endpoint_matrix.py` | Endpoint matrix harness for mock, perf, real-provider, and `compatible-provider-smoke` modes |
@@ -158,7 +177,8 @@ The protected release compatible-provider smoke lives in
 | Model surface or CLI capability flags | `src/config/model_surface.rs`, `src/server/models.rs`, `scripts/interactive_cli.py`, `tests/test_default_matrix_surface_contract.py` |
 | Protocol portability | `src/translate/assessment.rs`, `src/translate/internal/`, `docs/protocol-compatibility-matrix.md`, `docs/protocol-baselines/` |
 | Streaming/SSE behavior | `src/streaming/stream.rs`, `src/streaming/wire.rs`, `src/streaming/state.rs`, `src/streaming/tests/` |
-| Interactive CLI wrapper behavior | `scripts/interactive_cli.py`, wrapper shell scripts, `tests/test_interactive_cli.py` |
+| User install/config/agent launcher behavior | `src/user_tools/`, `install.sh`, `tests/user_tools_config.rs`, `tests/user_tools_launcher.rs`, `tests/user_tools_entrypoints.rs`, `docs/clients.md` |
+| Legacy interactive harness behavior | `scripts/interactive_cli.py`, wrapper shell scripts, `tests/test_interactive_cli.py` |
 | Endpoint matrix or release compatible-provider smoke | `scripts/real_endpoint_matrix.py`, `tests/test_real_endpoint_matrix.py`, `tests/test_release_gates.py`, `.github/workflows/release.yml` |
 
 ## Test Map
@@ -172,6 +192,9 @@ The protected release compatible-provider smoke lives in
 | `src/streaming/tests/` | Parser, sink/source, and stream edge cases |
 | `src/translate/internal/tests/` | Provider translation internals and regression coverage |
 | `tests/test_interactive_cli.py` | Interactive CLI wrapper contract, provider-neutral presets, wrapper scripts, hermetic scripted interactive Codex wrapper gate |
+| `tests/user_tools_config.rs` | `llmup-config` user-tool config generation, summaries, env file handling, and checks |
+| `tests/user_tools_launcher.rs` | `llmup-codex` / `llmup-claude` launcher routing, env isolation, runtime config, no-proxy behavior |
+| `tests/user_tools_entrypoints.rs` | Installed entrypoint dispatch, installer aliases, help/version, and fake client full-flow checks |
 | `tests/test_cli_matrix_contracts.py` | CLI contract verifier behavior for public tool names and debug-trace matching |
 | `tests/test_real_cli_matrix.py` | Real CLI matrix harness behavior |
 | `tests/test_real_endpoint_matrix.py` | Endpoint matrix case construction, modes, reports, provider-neutral compatible smoke |
@@ -187,8 +210,8 @@ The protected release compatible-provider smoke lives in
 | `docs/PRD.md` | Product and behavior requirements |
 | `docs/DESIGN.md` | Architecture snapshot and execution-chain design notes |
 | `docs/PROJECT.md` | Current repository and maintenance map |
-| `docs/clients.md` | CLI/client wiring and wrapper/manual endpoint expectations |
-| `docs/configuration.md` | Config syntax, auth policies, model aliases, model surface fields |
+| `docs/clients.md` | Launcher-managed user tool behavior, native client boundary, and no-proxy escape hatch |
+| `docs/configuration.md` | Advanced static YAML/server reference, auth policies, model aliases, model surface fields |
 | `docs/container.md` | Container build/smoke/release path and release gate summary |
 | `docs/ga-readiness-review.md` | GA posture, remaining evidence, and release-gate checklist |
 | `docs/protocol-compatibility-matrix.md` | Field-level portability, warn-and-omit, reject policy |
@@ -202,4 +225,5 @@ When the implementation changes, update the document that matches the change:
 - Update `docs/PROJECT.md` when module paths, tests, scripts, or contributor entrypoints change.
 - Update `docs/protocol-compatibility-matrix.md` when protocol portability, portability warning, or fail-closed behavior changes.
 - Update `docs/clients.md`, `README.md`, or `README_CN.md` when user-visible setup or client behavior changes.
+- Update `docs/PROJECT.md` when `src/user_tools/*`, `install.sh`, or legacy/test harness entrypoints change.
 - Update release/container docs when `.github/workflows/release.yml`, release gate names, or artifact names change.

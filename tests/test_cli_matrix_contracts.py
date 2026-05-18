@@ -459,10 +459,18 @@ class CliMatrixContractTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("client_name", message)
 
-    def test_clients_guide_uses_live_surface_truth_for_codex_wrapper(self):
+    def test_clients_guide_keeps_codex_launcher_surface_boundary_fixed(self):
         text = self.read_text("docs/clients.md")
 
-        self.assertIn("live `llmup.surface` metadata", text)
+        self.assertIn("fixed minimal provider injection", text)
+        self.assertIn("does not read live `llmup.surface` metadata", text)
+        self.assertIn("native Codex client does not see live surface metadata", text)
+        self.assertIn("proxy configuration and server-side conversion", text)
+        self.assertNotIn(
+            "launcher-generated provider hints use live `llmup.surface` metadata",
+            text,
+        )
+        self.assertNotIn("native client sees the capability shape", text)
         self.assertNotIn("temporary model metadata", text)
 
     def test_prd_and_plan_describe_current_real_cli_contract_scope(self):

@@ -136,6 +136,83 @@ fn managed_injection_is_fixed_and_does_not_scan_native_model_or_provider_flags()
 }
 
 #[test]
+fn no_proxy_sets_client_homes_without_proxy_key_base_url_or_model_injection() {
+    let homes = LauncherHomes {
+        llmup_home: PathBuf::from("/tmp/llmup"),
+        codex_home: PathBuf::from("/tmp/llmup-codex"),
+        claude_config_dir: PathBuf::from("/tmp/llmup-claude"),
+    };
+    let parent = BTreeMap::from([
+        (OsString::from("HOME"), OsString::from("/real-home")),
+        (
+            OsString::from("OPENAI_API_KEY"),
+            OsString::from("parent-openai-key"),
+        ),
+        (
+            OsString::from("ANTHROPIC_API_KEY"),
+            OsString::from("parent-anthropic-key"),
+        ),
+        (
+            OsString::from("ANTHROPIC_BEDROCK_TOKEN"),
+            OsString::from("parent-bedrock-token"),
+        ),
+    ]);
+
+    let codex_argv = build_client_argv(
+        AgentKind::Codex,
+        ProxyMode::NoProxy,
+        &os_vec(&["--help", "--model", "native"]),
+    );
+    assert_eq!(codex_argv, os_vec(&["--help", "--model", "native"]));
+
+    let codex_env =
+        build_client_environment(AgentKind::Codex, parent.clone(), ProxyMode::NoProxy, &homes)
+            .expect("codex no-proxy env should build");
+    assert_eq!(
+        codex_env.get(&OsString::from("CODEX_HOME")),
+        Some(&homes.codex_home.clone().into_os_string())
+    );
+    assert_eq!(
+        codex_env.get(&OsString::from("OPENAI_API_KEY")),
+        Some(&OsString::from("parent-openai-key"))
+    );
+    assert!(!codex_env.contains_key(&OsString::from("OPENAI_BASE_URL")));
+    assert_eq!(
+        codex_env.get(&OsString::from("HOME")),
+        Some(&OsString::from("/real-home"))
+    );
+
+    let claude_argv = build_client_argv(
+        AgentKind::Claude,
+        ProxyMode::NoProxy,
+        &os_vec(&["auth", "--help"]),
+    );
+    assert_eq!(claude_argv, os_vec(&["auth", "--help"]));
+
+    let claude_env =
+        build_client_environment(AgentKind::Claude, parent, ProxyMode::NoProxy, &homes)
+            .expect("claude no-proxy env should build");
+    assert_eq!(
+        claude_env.get(&OsString::from("CLAUDE_CONFIG_DIR")),
+        Some(&homes.claude_config_dir.clone().into_os_string())
+    );
+    assert_eq!(
+        claude_env.get(&OsString::from("ANTHROPIC_API_KEY")),
+        Some(&OsString::from("parent-anthropic-key"))
+    );
+    assert_eq!(
+        claude_env.get(&OsString::from("ANTHROPIC_BEDROCK_TOKEN")),
+        Some(&OsString::from("parent-bedrock-token"))
+    );
+    assert!(!claude_env.contains_key(&OsString::from("ANTHROPIC_BASE_URL")));
+    assert!(!claude_env.contains_key(&OsString::from("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB")));
+    assert_eq!(
+        claude_env.get(&OsString::from("HOME")),
+        Some(&OsString::from("/real-home"))
+    );
+}
+
+#[test]
 fn client_environment_removes_secret_env_names_and_overrides_provider_keys() {
     let secrets = parse_env_file_str(
         r#"
@@ -233,6 +310,91 @@ LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret
     );
     assert!(!claude_env.contains_key(&OsString::from("ANTHROPIC_BEDROCK_TOKEN")));
     assert!(!claude_env.contains_key(&OsString::from("CLAUDE_CODE_USE_VERTEX")));
+}
+
+#[test]
+fn claude_managed_environment_scrubs_provider_routing_and_auth_helpers() {
+    let homes = LauncherHomes {
+        llmup_home: PathBuf::from("/tmp/llmup"),
+        codex_home: PathBuf::from("/tmp/llmup-codex"),
+        claude_config_dir: PathBuf::from("/tmp/llmup-claude"),
+    };
+    let secrets = parse_env_file_str(
+        r#"
+LLM_UNIVERSAL_PROXY_KEY=local-proxy-key
+LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret
+"#,
+    )
+    .expect("secrets should parse");
+
+    let scrubbed = [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_WORKSPACE_ID",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GCLOUD_PROJECT",
+        "GOOGLE_CLOUD_PROJECT",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+        "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+        "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+        "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+        "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+        "ANTHROPIC_BEDROCK_TOKEN",
+        "ANTHROPIC_VERTEX_PROJECT",
+        "ANTHROPIC_FOUNDRY_ENDPOINT",
+        "ANTHROPIC_AWS_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+    ];
+    let mut parent = BTreeMap::from([
+        (
+            OsString::from("ANTHROPIC_API_KEY"),
+            OsString::from("parent-anthropic-key"),
+        ),
+        (
+            OsString::from("ANTHROPIC_BASE_URL"),
+            OsString::from("https://parent.example"),
+        ),
+        (OsString::from("KEEP_ME"), OsString::from("yes")),
+    ]);
+    for key in scrubbed {
+        parent.insert(OsString::from(key), OsString::from(format!("{key}-value")));
+    }
+
+    let env = build_client_environment(
+        AgentKind::Claude,
+        parent,
+        ProxyMode::Managed {
+            port: 19004,
+            proxy_key: "local-proxy-key".to_string(),
+            secrets,
+        },
+        &homes,
+    )
+    .expect("claude env should build");
+
+    for key in scrubbed {
+        assert!(
+            !env.contains_key(&OsString::from(key)),
+            "{key} should be scrubbed"
+        );
+    }
+    assert_eq!(
+        env.get(&OsString::from("ANTHROPIC_API_KEY")),
+        Some(&OsString::from("local-proxy-key"))
+    );
+    assert_eq!(
+        env.get(&OsString::from("ANTHROPIC_BASE_URL")),
+        Some(&OsString::from("http://127.0.0.1:19004/anthropic"))
+    );
+    assert_eq!(
+        env.get(&OsString::from("KEEP_ME")),
+        Some(&OsString::from("yes"))
+    );
 }
 
 #[test]

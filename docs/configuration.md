@@ -1,96 +1,13 @@
 # Configuration Guide
 
-For most deployments, a static YAML file passed through `--config` is the simplest way to run `llmup`. For Codex CLI and Claude Code, the recommended user-entry path is a wrapper-managed config source that is rendered into static YAML before the proxy starts.
+Ordinary user path: `install.sh` -> `llmup-config` -> `llmup-codex` or `llmup-claude`.
 
-Start from [examples/quickstart-provider-neutral.yaml](../examples/quickstart-provider-neutral.yaml) for the provider-neutral wrapper path. It exposes two stable local aliases:
+Use that path when you want launcher-managed Codex CLI or Claude Code setup without writing YAML. This page is the advanced static YAML and server reference. It is for operators and developers who run `llm-universal-proxy --config` directly, generate checked-in server config, or need the full field-level config contract.
 
-- `preset-openai-compatible`
-- `preset-anthropic-compatible`
-
-MiniMax is only a replaceable OpenAI-compatible example, not a GA-required provider and not the main preset naming scheme. The historical concrete sample lives at [examples/quickstart-openai-minimax.yaml](../examples/quickstart-openai-minimax.yaml) for users who want to replace provider-neutral placeholders with named upstreams.
-
-If you need to update config without restarting the process, see [Admin and Dynamic Config](./admin-dynamic-config.md).
-
-## Quick Start
-
-The provider-neutral quickstart config source is:
-
-```yaml
-listen: 127.0.0.1:8080
-upstream_timeout_secs: 120
-
-upstreams:
-  PRESET-ANTHROPIC-COMPATIBLE:
-    api_root: PRESET_ANTHROPIC_ENDPOINT_BASE_URL
-    format: anthropic
-    provider_key_env: PRESET_ENDPOINT_API_KEY
-    limits:
-      context_window: 200000
-      max_output_tokens: 128000
-    surface_defaults:
-      modalities:
-        input: ["text"]
-        output: ["text"]
-      tools:
-        supports_search: false
-        supports_view_image: false
-        apply_patch_transport: freeform
-        supports_parallel_calls: false
-
-  PRESET-OPENAI-COMPATIBLE:
-    api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
-    format: openai-completion
-    provider_key_env: PRESET_ENDPOINT_API_KEY
-    limits:
-      context_window: 200000
-      max_output_tokens: 128000
-    surface_defaults:
-      modalities:
-        input: ["text"]
-        output: ["text"]
-      tools:
-        supports_search: false
-        supports_view_image: false
-        apply_patch_transport: freeform
-        supports_parallel_calls: false
-
-model_aliases:
-  preset-anthropic-compatible: "PRESET-ANTHROPIC-COMPATIBLE:PRESET_ENDPOINT_MODEL"
-  preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL"
-```
-
-The preset environment contract is:
-
-| Variable | Meaning |
-| --- | --- |
-| `PRESET_OPENAI_ENDPOINT_BASE_URL` | OpenAI-compatible API root, including the version segment such as `/v1` |
-| `PRESET_ANTHROPIC_ENDPOINT_BASE_URL` | Anthropic-compatible API root |
-| `PRESET_ENDPOINT_MODEL` | Provider model ID hydrated into `preset-openai-compatible` and `preset-anthropic-compatible` |
-| `PRESET_ENDPOINT_API_KEY` | Server-side provider credential referenced by both preset upstreams |
-
-Minimal wrapper-managed flow:
-
-```bash
-export PRESET_OPENAI_ENDPOINT_BASE_URL="https://openai-compatible.example/v1"
-export PRESET_ANTHROPIC_ENDPOINT_BASE_URL="https://anthropic-compatible.example/v1"
-export PRESET_ENDPOINT_MODEL="provider-model-id"
-export PRESET_ENDPOINT_API_KEY="provider-api-key"
-export LLM_UNIVERSAL_PROXY_AUTH_MODE=proxy_key
-export LLM_UNIVERSAL_PROXY_KEY="local-proxy-key"
-
-./scripts/run_codex_proxy.sh \
-  --config-source examples/quickstart-provider-neutral.yaml \
-  --workspace "$PWD" \
-  --model preset-openai-compatible
-```
+For launcher-managed user setup, see [Client Setup Guide](./clients.md). If you need to update config without restarting the process, see [Admin and Dynamic Config](./admin-dynamic-config.md).
 
 Reasoning effort such as `xhigh` stays on the client request; it is not part
 of the alias or upstream model name.
-
-`PRESET_*` placeholders are not general Rust config interpolation. They are a
-provider-neutral config-source convention consumed by the wrappers and real CLI
-matrix. If you start `llm-universal-proxy --config` directly, use concrete
-`api_root` URLs and concrete `UPSTREAM:MODEL` alias targets.
 
 ## Data Plane Security
 
@@ -336,22 +253,22 @@ Provider-specific static headers belong inside the upstream's `headers` field.
 
 `model_aliases` lets you present one stable local model name to clients even if the real upstream models change over time.
 
-The provider-neutral preset aliases are:
+Static aliases use concrete upstream names and concrete provider model IDs:
 
 ```yaml
 model_aliases:
-  preset-anthropic-compatible: "PRESET-ANTHROPIC-COMPATIBLE:PRESET_ENDPOINT_MODEL"
-  preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL"
+  coding-anthropic: "PROXY-KEY-ANTHROPIC-COMPATIBLE:provider-anthropic-model"
+  coding-openai: "PROXY-KEY-OPENAI-COMPATIBLE:provider-openai-model"
 ```
 
-Those are local names. They do not need to match provider model IDs. After wrapper hydration, both aliases resolve to the concrete `PRESET_ENDPOINT_MODEL` value.
+Those are local names. They do not need to match provider model IDs. If you start `llm-universal-proxy --config` directly, use concrete `UPSTREAM:MODEL` alias targets.
 
 If you want more explicit metadata, switch to the structured alias form:
 
 ```yaml
 model_aliases:
-  preset-openai-compatible:
-    target: PRESET-OPENAI-COMPATIBLE:provider-model-id
+  coding-openai:
+    target: PROXY-KEY-OPENAI-COMPATIBLE:provider-openai-model
     limits:
       context_window: 200000
       max_output_tokens: 128000
@@ -359,7 +276,7 @@ model_aliases:
 
 Model resolution rules:
 
-- if the client requests an alias such as `preset-openai-compatible`, the proxy resolves it through `model_aliases`
+- if the client requests an alias such as `coding-openai`, the proxy resolves it through `model_aliases`
 - if the client requests `UPSTREAM:MODEL`, the proxy routes directly to that named upstream and model
 - if multiple upstreams exist and the requested model is neither an alias nor an explicit `UPSTREAM:MODEL`, the proxy rejects the request instead of guessing
 

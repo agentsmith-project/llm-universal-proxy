@@ -11,6 +11,8 @@ It is built for maximum safe compatibility: when a feature can be translated saf
 
 ## Quick Start
 
+Install the native client you plan to use first. `llmup` does not install Codex CLI or Claude Code.
+
 Install the binary and the three user commands:
 
 ```bash

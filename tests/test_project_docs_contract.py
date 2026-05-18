@@ -39,6 +39,13 @@ class ProjectDocsContractTests(unittest.TestCase):
     def test_project_map_covers_ga_cli_and_release_gates(self):
         self.assert_doc_mentions(
             (
+                "`src/user_tools/config_wizard.rs`",
+                "`src/user_tools/agent_launcher.rs`",
+                "`src/user_tools/env_file.rs`",
+                "`install.sh`",
+                "Product entrypoints",
+                "legacy/test harness",
+                "not user product launchers",
                 "`scripts/interactive_cli.py`",
                 "`scripts/run_codex_proxy.sh`",
                 "`scripts/run_claude_proxy.sh`",

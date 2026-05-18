@@ -390,7 +390,14 @@ pub fn run_cli(
             }
         }
     }
-    Err(last_proxy_error.unwrap_or_else(|| "failed to start llmup proxy".to_string()))
+    let error = last_proxy_error.unwrap_or_else(|| "failed to start llmup proxy".to_string());
+    if let Some(port) = explicit_port {
+        Err(format!(
+            "failed to start llmup proxy on requested port {port}: {error}"
+        ))
+    } else {
+        Err(error)
+    }
 }
 
 pub fn resolve_launcher_homes() -> Result<LauncherHomes, String> {

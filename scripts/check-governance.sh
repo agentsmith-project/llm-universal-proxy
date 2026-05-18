@@ -146,12 +146,20 @@ check_user_tooling_doc_contract() {
             "--model my-claude-like-model" \
             "wrapper 默认会临时使用"
     done
+    check_contains "README.md" "does not install Codex CLI or Claude Code"
+    check_contains "README.md" "Install the native client you plan to use first"
+    check_contains "README_CN.md" "不会自动安装 Codex CLI 或 Claude Code"
+    check_contains "README_CN.md" "请先安装你要使用的原生客户端"
 
     check_contains_all "docs/clients.md" \
         "launcher-managed" \
         "llmup-config" \
         "llmup-codex" \
         "llmup-claude" \
+        "does not install Codex CLI or Claude Code" \
+        "llmup-codex --llmup-no-proxy -- <native args>" \
+        "llmup-claude --llmup-no-proxy -- <native args>" \
+        "The launcher does not auto-detect native subcommands" \
         "Advanced Usage"
     check_absent_all "docs/clients.md" \
         "OPENAI_API_KEY=dummy" \
@@ -165,6 +173,14 @@ check_user_tooling_doc_contract() {
         "provider_key:" \
         "model_aliases:" \
         "data_auth:"
+
+    check_contains_all "docs/configuration.md" \
+        "Ordinary user path:" \
+        "This page is the advanced static YAML and server reference."
+    check_absent_all "docs/configuration.md" \
+        "## Quick Start" \
+        "export PRESET_" \
+        "scripts/run_"
 
     check_contains_all "docs/advanced-usage.md" \
         "Manual Proxy Startup" \

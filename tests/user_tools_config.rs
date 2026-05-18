@@ -176,6 +176,107 @@ fn interactive_config_wizard_creates_config_instead_of_printing_usage_only() {
 }
 
 #[test]
+fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("existing-config-summary");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+
+    init_non_interactive(
+        InitOptions {
+            llmup_home: llmup_home.clone(),
+            codex_home: temp.path().join(".llmup-codex"),
+            claude_config_dir: temp.path().join(".llmup-claude"),
+            interface: ProviderInterface::OpenAi,
+            model_service_url: "https://api.minimaxi.com/v1".to_string(),
+            model_name: "MiniMax-M2.7-highspeed".to_string(),
+            model_alias: "default".to_string(),
+            force: false,
+        },
+        "provider-secret-existing",
+    )
+    .expect("seed config");
+
+    let mut stdin = Cursor::new(b"\n".to_vec());
+    let mut stdout = Vec::new();
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("existing config keep should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Existing llmup config found"));
+    assert!(output.contains(&format!(
+        "config: {}",
+        llmup_home.join("config.yaml").display()
+    )));
+    assert!(output.contains(&format!(
+        "secrets: {}",
+        llmup_home.join("secrets.env").display()
+    )));
+    assert!(output.contains("Alias: default -> DEFAULT:MiniMax-M2.7-highspeed"));
+    assert!(output.contains("Format: openai-completion"));
+    assert!(output.contains("Service URL: https://api.minimaxi.com/v1"));
+    assert!(output.contains("Provider API key configured: yes"));
+    assert!(output.contains("Press Enter to keep it, type reconfigure, or type doctor"));
+    assert!(output.contains("Keeping existing config."));
+    assert!(!output.contains("provider-secret-existing"));
+}
+
+#[test]
+fn config_doctor_warns_missing_clients_but_validates_files() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("config-doctor");
+    let llmup_home = temp.path().join(".llmup");
+    let empty_path = temp.path().join("empty-bin");
+    fs::create_dir_all(&empty_path).expect("create empty PATH dir");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let _path = EnvGuard::set("PATH", &empty_path);
+
+    init_non_interactive(
+        InitOptions {
+            llmup_home,
+            codex_home: temp.path().join(".llmup-codex"),
+            claude_config_dir: temp.path().join(".llmup-claude"),
+            interface: ProviderInterface::OpenAi,
+            model_service_url: "https://api.example.com/v1".to_string(),
+            model_name: "test-model".to_string(),
+            model_alias: "default".to_string(),
+            force: false,
+        },
+        "provider-secret-for-doctor",
+    )
+    .expect("seed config");
+
+    let parsed = parse_config_args(vec![OsString::from("doctor")]).expect("doctor parses");
+    assert_eq!(parsed, ConfigCommand::Doctor);
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(vec![OsString::from("doctor")], &mut stdin, &mut stdout)
+        .expect("doctor should succeed for valid config and secrets");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("llmup config doctor"));
+    assert!(output.contains("OK config YAML parses and validates"));
+    assert!(output.contains("OK secrets.env parses"));
+    assert!(output.contains("OK required secrets are configured"));
+    #[cfg(unix)]
+    assert!(output.contains("OK secrets permissions"));
+    assert!(output.contains("WARNING codex not found in PATH"));
+    assert!(output.contains("WARNING claude not found in PATH"));
+    assert!(!output.contains("provider-secret-for-doctor"));
+}
+
+#[test]
 fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
     let help = parse_config_args(vec![OsString::from("--help")]).expect("help parses");
     assert_eq!(help, ConfigCommand::Help);

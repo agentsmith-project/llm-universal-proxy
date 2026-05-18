@@ -5,13 +5,14 @@
 use axum::{
     body::Body,
     extract::{Json, Path, State},
-    http::{Method, StatusCode, Uri},
+    http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -745,6 +746,7 @@ async fn capture_anthropic_handler(
 pub struct CapturedMockRequest {
     pub method: String,
     pub path: String,
+    pub headers: BTreeMap<String, String>,
     pub body: Value,
 }
 
@@ -821,11 +823,13 @@ async fn asserting_openai_completion_handler(
     State(state): State<AssertingMockState>,
     method: Method,
     uri: Uri,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
     let request = CapturedMockRequest {
         method: method.to_string(),
         path: uri.path().to_string(),
+        headers: captured_headers(&headers),
         body,
     };
     state.captured.push(request.clone());
@@ -872,11 +876,13 @@ async fn asserting_openai_responses_handler(
     State(state): State<AssertingMockState>,
     method: Method,
     uri: Uri,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
     let request = CapturedMockRequest {
         method: method.to_string(),
         path: uri.path().to_string(),
+        headers: captured_headers(&headers),
         body,
     };
     state.captured.push(request.clone());
@@ -929,11 +935,13 @@ async fn asserting_anthropic_handler(
     State(state): State<AssertingMockState>,
     method: Method,
     uri: Uri,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
     let request = CapturedMockRequest {
         method: method.to_string(),
         path: uri.path().to_string(),
+        headers: captured_headers(&headers),
         body,
     };
     state.captured.push(request.clone());
@@ -963,4 +971,14 @@ fn assertion_failure_response(message: String) -> Response {
         }
     });
     (StatusCode::BAD_REQUEST, Json(resp)).into_response()
+}
+
+fn captured_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let value = value.to_str().ok()?;
+            Some((name.as_str().to_ascii_lowercase(), value.to_string()))
+        })
+        .collect()
 }

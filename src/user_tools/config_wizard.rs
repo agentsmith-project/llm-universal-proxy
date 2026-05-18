@@ -1,11 +1,14 @@
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use super::env_file::{read_env_file, EnvFile};
 use super::{env_path_or_default, home_dir_from_env};
+use crate::config::DataAuthMode;
 use crate::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +58,7 @@ pub struct InitCliOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigCommand {
     Interactive,
+    Doctor,
     Help,
     Version,
     Init(InitCliOptions),
@@ -86,6 +90,7 @@ llmup-config
 
 Usage:
   llmup-config
+  llmup-config doctor
   llmup-config --help
   llmup-config --version
 
@@ -93,6 +98,7 @@ Configure llmup for local Codex CLI and Claude Code launchers.
 
 Run without arguments to create the local config used by llmup-codex and
 llmup-claude. The default setup is for OpenAI-compatible providers.
+Run doctor to validate local config and secrets files without contacting providers.
 ";
 
 pub fn parse_config_args(
@@ -108,6 +114,9 @@ pub fn parse_config_args(
         }
         if args[0] == "--version" {
             return Ok(ConfigCommand::Version);
+        }
+        if args[0] == "doctor" || args[0] == "check" {
+            return Ok(ConfigCommand::Doctor);
         }
     }
 
@@ -145,6 +154,7 @@ pub fn run_cli(
             run_interactive(stdin, stdout)?;
             Ok(0)
         }
+        ConfigCommand::Doctor => run_doctor(stdout),
         ConfigCommand::Init(init) => {
             let api_key = match init.api_key_source {
                 ApiKeySource::Stdin => read_api_key_from_stdin(stdin)?,
@@ -190,17 +200,13 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
     .map_err(|error| format!("failed to write prompt: {error}"))?;
 
     if config_path.exists() || secrets_path.exists() {
-        writeln!(
-            stdout,
-            "\nExisting llmup config found:\n  config: {}\n  secrets: {}",
-            config_path.display(),
-            secrets_path.display()
-        )
-        .map_err(|error| format!("failed to write existing config summary: {error}"))?;
+        stdout
+            .write_all(existing_config_summary(&config_path, &secrets_path).as_bytes())
+            .map_err(|error| format!("failed to write existing config summary: {error}"))?;
         let answer = prompt_optional_line(
             stdin,
             stdout,
-            "Press Enter to keep it, or type reconfigure to replace it: ",
+            "Press Enter to keep it, type reconfigure, or type doctor: ",
         )?;
         match answer.trim().to_ascii_lowercase().as_str() {
             "" | "keep" | "k" | "no" | "n" => {
@@ -214,9 +220,16 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
             "reconfigure" | "replace" | "r" | "yes" | "y" => {
                 force = true;
             }
+            "doctor" | "check" | "d" => {
+                let status = write_doctor_report(&config_path, &secrets_path, stdout)?;
+                if status == 0 {
+                    return Ok(());
+                }
+                return Err("doctor found problems in the local llmup config".to_string());
+            }
             other => {
                 return Err(format!(
-                    "unknown choice `{other}`; rerun llmup-config and press Enter or type reconfigure"
+                    "unknown choice `{other}`; rerun llmup-config and press Enter, type reconfigure, or type doctor"
                 ));
             }
         }
@@ -376,6 +389,338 @@ pub fn init_non_interactive(options: InitOptions, api_key: &str) -> Result<InitR
         codex_home: options.codex_home,
         claude_config_dir: options.claude_config_dir,
         summary,
+    })
+}
+
+fn run_doctor(stdout: &mut dyn Write) -> Result<i32, String> {
+    let home = home_dir_from_env()?;
+    let llmup_home = env_path_or_default("LLMUP_HOME", home.join(".llmup"));
+    let config_path = llmup_home.join("config.yaml");
+    let secrets_path = llmup_home.join("secrets.env");
+    write_doctor_report(&config_path, &secrets_path, stdout)
+}
+
+fn write_doctor_report(
+    config_path: &Path,
+    secrets_path: &Path,
+    stdout: &mut dyn Write,
+) -> Result<i32, String> {
+    let (report, ok) = doctor_report(config_path, secrets_path);
+    stdout
+        .write_all(report.as_bytes())
+        .map_err(|error| format!("failed to write doctor report: {error}"))?;
+    Ok(if ok { 0 } else { 1 })
+}
+
+fn doctor_report(config_path: &Path, secrets_path: &Path) -> (String, bool) {
+    let mut ok = true;
+    let mut report = format!(
+        "llmup config doctor\n\nPaths:\n  config: {}\n  secrets: {}\n\n",
+        config_path.display(),
+        secrets_path.display()
+    );
+
+    let config = match load_valid_config(config_path) {
+        Ok(config) => {
+            report.push_str("OK config YAML parses and validates\n");
+            Some(config)
+        }
+        Err(error) => {
+            ok = false;
+            report.push_str(&format!("ERROR config YAML: {error}\n"));
+            None
+        }
+    };
+
+    let secrets = match read_env_file(secrets_path) {
+        Ok(secrets) => {
+            report.push_str("OK secrets.env parses\n");
+            Some(secrets)
+        }
+        Err(error) => {
+            ok = false;
+            report.push_str(&format!("ERROR secrets.env: {error}\n"));
+            None
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        match safe_secret_permissions(secrets_path) {
+            Ok(()) => report.push_str("OK secrets permissions are owner-only\n"),
+            Err(error) => {
+                ok = false;
+                report.push_str(&format!("ERROR secrets permissions: {error}\n"));
+            }
+        }
+    }
+
+    match (config.as_ref(), secrets.as_ref()) {
+        (Some(config), Some(secrets)) => {
+            let missing = required_secret_env_names(config)
+                .into_iter()
+                .filter(|name| secrets.required(name).is_err())
+                .collect::<Vec<_>>();
+            if missing.is_empty() {
+                report.push_str("OK required secrets are configured\n");
+            } else {
+                ok = false;
+                report.push_str(&format!(
+                    "ERROR required secrets missing or empty: {}\n",
+                    missing.join(", ")
+                ));
+            }
+        }
+        _ => report.push_str("SKIP required secrets check until config and secrets parse\n"),
+    }
+
+    for command in ["codex", "claude"] {
+        if command_in_path(command) {
+            report.push_str(&format!("OK {command} found in PATH\n"));
+        } else {
+            report.push_str(&format!(
+                "WARNING {command} not found in PATH; install it before using the matching launcher\n"
+            ));
+        }
+    }
+
+    if ok {
+        report.push_str("\nDoctor result: OK\n");
+    } else {
+        report.push_str("\nDoctor result: problems found\n");
+    }
+    (report, ok)
+}
+
+fn existing_config_summary(config_path: &Path, secrets_path: &Path) -> String {
+    let mut summary = format!(
+        "\nExisting llmup config found:\n  config: {}\n  secrets: {}\n",
+        config_path.display(),
+        secrets_path.display()
+    );
+
+    let config = match load_valid_config(config_path) {
+        Ok(config) => config,
+        Err(error) => {
+            summary.push_str(&format!("  Config status: invalid ({error})\n"));
+            return summary;
+        }
+    };
+
+    append_alias_summary(&mut summary, &config);
+    append_upstream_summary(&mut summary, &config);
+
+    match read_env_file(secrets_path) {
+        Ok(secrets) => {
+            let configured = if provider_api_key_configured(&config, Some(&secrets)) {
+                "yes"
+            } else {
+                "no"
+            };
+            summary.push_str(&format!("  Provider API key configured: {configured}\n"));
+        }
+        Err(error) => {
+            summary.push_str(&format!("  Secrets status: invalid ({error})\n"));
+            summary.push_str("  Provider API key configured: no\n");
+        }
+    }
+
+    summary
+}
+
+fn load_valid_config(path: &Path) -> Result<Config, String> {
+    let config = Config::from_yaml_path(path)?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn append_alias_summary(summary: &mut String, config: &Config) {
+    match config.model_aliases.len() {
+        0 => summary.push_str("  Alias: none configured\n"),
+        1 => {
+            let (alias, target) = config
+                .model_aliases
+                .iter()
+                .next()
+                .expect("one alias should exist");
+            summary.push_str(&format!(
+                "  Alias: {alias} -> {}:{}\n",
+                target.upstream_name, target.upstream_model
+            ));
+        }
+        _ => {
+            summary.push_str("  Aliases:\n");
+            for (alias, target) in &config.model_aliases {
+                summary.push_str(&format!(
+                    "    {alias} -> {}:{}\n",
+                    target.upstream_name, target.upstream_model
+                ));
+            }
+        }
+    }
+}
+
+fn append_upstream_summary(summary: &mut String, config: &Config) {
+    match config.upstreams.len() {
+        0 => summary.push_str("  Upstream: none configured\n"),
+        1 => {
+            let upstream = &config.upstreams[0];
+            let format = upstream
+                .fixed_upstream_format
+                .map(|format| format.to_string())
+                .unwrap_or_else(|| "auto".to_string());
+            summary.push_str(&format!("  Format: {format}\n"));
+            summary.push_str(&format!(
+                "  Service URL: {}\n",
+                redacted_service_url(&upstream.api_root)
+            ));
+        }
+        _ => {
+            summary.push_str("  Upstreams:\n");
+            for upstream in &config.upstreams {
+                let format = upstream
+                    .fixed_upstream_format
+                    .map(|format| format.to_string())
+                    .unwrap_or_else(|| "auto".to_string());
+                summary.push_str(&format!(
+                    "    {}: format {}, service URL {}\n",
+                    upstream.name,
+                    format,
+                    redacted_service_url(&upstream.api_root)
+                ));
+            }
+        }
+    }
+}
+
+fn provider_api_key_configured(config: &Config, secrets: Option<&EnvFile>) -> bool {
+    let mut has_inline_provider_key = false;
+    let mut provider_env_names = BTreeSet::new();
+    for upstream in &config.upstreams {
+        if let Some(name) = upstream.provider_key_env.as_deref() {
+            provider_env_names.insert(name.to_string());
+        }
+        if let Some(provider_key) = &upstream.provider_key {
+            if provider_key
+                .inline
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                has_inline_provider_key = true;
+            }
+            if let Some(name) = provider_key.env.as_deref() {
+                provider_env_names.insert(name.to_string());
+            }
+        }
+    }
+
+    if provider_env_names.is_empty() {
+        return has_inline_provider_key;
+    }
+
+    let Some(secrets) = secrets else {
+        return false;
+    };
+    provider_env_names
+        .iter()
+        .all(|name| secrets.required(name).is_ok())
+}
+
+fn required_secret_env_names(config: &Config) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    if let Some(data_auth) = &config.data_auth {
+        if matches!(data_auth.mode, DataAuthMode::ProxyKey) {
+            if let Some(proxy_key) = &data_auth.proxy_key {
+                if let Some(name) = proxy_key.env.as_deref() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    for upstream in &config.upstreams {
+        if let Some(name) = upstream.provider_key_env.as_deref() {
+            names.insert(name.to_string());
+        }
+        if let Some(provider_key) = &upstream.provider_key {
+            if let Some(name) = provider_key.env.as_deref() {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn redacted_service_url(value: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(value) else {
+        return "<invalid URL>".to_string();
+    };
+    if !parsed.username().is_empty() {
+        let _ = parsed.set_username("redacted");
+    }
+    if parsed.password().is_some() {
+        let _ = parsed.set_password(Some("redacted"));
+    }
+    if parsed.query().is_some() {
+        parsed.set_query(Some("redacted=true"));
+    }
+    if parsed.fragment().is_some() {
+        parsed.set_fragment(Some("redacted"));
+    }
+    parsed.to_string()
+}
+
+#[cfg(unix)]
+fn safe_secret_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = fs::metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode & 0o077 == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} is mode {:03o}; run chmod 600 {}",
+            path.display(),
+            mode,
+            path.display()
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn command_in_path(command: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| {
+        let candidate = dir.join(command);
+        fs::metadata(candidate)
+            .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(windows)]
+fn command_in_path(command: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let extensions = std::env::var_os("PATHEXT")
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+    std::env::split_paths(&paths).any(|dir| {
+        if dir.join(command).is_file() {
+            return true;
+        }
+        extensions
+            .split(';')
+            .any(|ext| dir.join(format!("{command}{ext}")).is_file())
     })
 }
 

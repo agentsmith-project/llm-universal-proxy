@@ -18,6 +18,10 @@ README_ENTRY_DOCS = (
     "README_CN.md",
 )
 ADVANCED_DOC = "docs/advanced-usage.md"
+CONFIG_DOC = "docs/configuration.md"
+USER_TOOLING_PLAN_DOC = (
+    "docs/engineering/pre-ga-user-tooling-install-config-agent-launch-plan.md"
+)
 ADVANCED_LINKS = (
     "docs/advanced-usage.md",
     "docs/clients.md",
@@ -147,6 +151,29 @@ class DocsHomepageContractTests(unittest.TestCase):
             ),
         )
 
+    def test_user_entry_docs_explain_native_clients_are_external(self):
+        self.assert_doc_mentions(
+            "README.md",
+            (
+                "`llmup` does not install Codex CLI or Claude Code.",
+                "Install the native client you plan to use first.",
+            ),
+        )
+        self.assert_doc_mentions(
+            "README_CN.md",
+            (
+                "`llmup` 不会自动安装 Codex CLI 或 Claude Code。",
+                "请先安装你要使用的原生客户端。",
+            ),
+        )
+        self.assert_doc_mentions(
+            "docs/clients.md",
+            (
+                "`llmup` does not install Codex CLI or Claude Code.",
+                "Install the native client you plan to use first.",
+            ),
+        )
+
     def test_readmes_keep_only_short_advanced_links(self):
         for relative_path in README_ENTRY_DOCS:
             text = self.read_text(relative_path)
@@ -196,6 +223,85 @@ class DocsHomepageContractTests(unittest.TestCase):
             "provider_key_env:",
             "Manual Wiring Without Wrappers",
             "```yaml",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
+
+    def test_clients_guide_keeps_codex_launcher_injection_fixed_not_live_surface_driven(
+        self,
+    ):
+        text = self.read_text("docs/clients.md")
+
+        for snippet in (
+            "fixed minimal provider injection",
+            "does not read live `llmup.surface` metadata",
+            "native Codex client does not see live surface metadata",
+            "Model identity, capability truth, and protocol shaping stay in the proxy configuration and server-side conversion path.",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, text)
+
+        for forbidden in (
+            "launcher-generated provider hints use live `llmup.surface` metadata",
+            "native client sees the capability shape",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
+
+    def test_clients_guide_documents_explicit_no_proxy_escape_hatch(self):
+        text = self.read_text("docs/clients.md")
+
+        for snippet in (
+            "login, native help, native configuration, or MCP management",
+            "`llmup-codex --llmup-no-proxy -- <native args>`",
+            "`llmup-claude --llmup-no-proxy -- <native args>`",
+            "The launcher does not auto-detect native subcommands.",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, text)
+
+    def test_configuration_doc_is_advanced_static_yaml_reference_not_quickstart(self):
+        text = self.read_text(CONFIG_DOC)
+
+        self.assert_in_order(
+            text,
+            (
+                "# Configuration Guide",
+                "Ordinary user path:",
+                "install.sh",
+                "llmup-config",
+                "llmup-codex",
+                "llmup-claude",
+                "This page is the advanced static YAML and server reference.",
+            ),
+        )
+        self.assertNotIn("## Quick Start", text)
+        self.assertNotIn("export PRESET_", text)
+        self.assertNotIn("scripts/run_", text)
+
+    def test_user_tooling_plan_keeps_provider_neutral_first_run_and_cli_smoke_caveats(self):
+        text = self.read_text(USER_TOOLING_PLAN_DOC)
+
+        for snippet in (
+            "首次配置示例必须保持 provider-neutral",
+            "MiniMax 只能作为可替换的 OpenAI-compatible 示例",
+            "模型服务地址，例如 `https://api.example.com/v1`",
+            "模型名，例如 `provider-model-id`",
+            "`llmup-codex --llmup-no-proxy -- <native args>`",
+            "`llmup-claude --llmup-no-proxy -- <native args>`",
+            "不要让 launcher 自动识别子命令",
+            "不读取 live `llmup.surface` metadata",
+            "模型、能力和协议转换真相仍由 proxy 配置和服务端转换承担",
+            "Codex 和 Claude Code 的固定 `InjectionPrelude + NativeArgv` 都必须由真实 CLI smoke 保护",
+            "如果不可行，优先改用位置无关的配置注入方式，不维护子命令表",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, text)
+
+        for forbidden in (
+            "$MINIMAX_API_KEY",
+            "https://api.minimaxi.com/v1",
+            "https://api.minimax.io/v1",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)

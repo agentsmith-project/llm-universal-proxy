@@ -5,11 +5,11 @@ This is the main docs entrypoint for `llmup`.
 Start here based on what you need:
 
 - [clients.md](./clients.md)
-  Launcher-managed Codex and Claude Code setup
+  Launcher-managed Codex and Claude Code setup for native clients you install separately
 - [advanced-usage.md](./advanced-usage.md)
   Manual proxy startup, multi-endpoint YAML, manual Codex/Claude wiring, auth modes, Gemini through Google's OpenAI-compatible endpoint, and links to admin/container docs
 - [configuration.md](./configuration.md)
-  Static YAML configuration, provider credential sources, full field reference, and upstream proxy support
+  Advanced static YAML and server reference, provider credential sources, full field reference, and upstream proxy support
 - [container.md](./container.md)
   GHCR image usage, Docker Compose example, container smoke, and release policy
 - [admin-dynamic-config.md](./admin-dynamic-config.md)
