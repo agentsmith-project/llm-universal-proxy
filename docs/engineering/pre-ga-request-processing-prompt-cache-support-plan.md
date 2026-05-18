@@ -552,7 +552,7 @@ Current status:
 3. No current prompt-cache handoff: broader IR/disposition refactors or additional mapping require separate scope review and must not add config, mode, additional automatic controls, or `llmup` cache behavior.
 4. Streaming extensions later: any streaming continuation capture is a later State Bridge extension, not the current prompt-cache handoff item.
 
-Guardrail: keep prompt-cache support limited to explicit provider-native request controls, controlled OpenAI-family stable-prefix key synthesis, and read-only usage telemetry. Do not add response cache, provider cache management, semantic cache, persistence, Conversations API emulation, or local retrieval.
+Guardrail: keep prompt-cache support limited to explicit provider-native request controls and read-only usage telemetry, plus controlled OpenAI-family stable-prefix key synthesis. Do not add response cache, provider cache management, semantic cache, persistence, Conversations API emulation, or local retrieval.
 
 Primary code areas:
 

@@ -7048,6 +7048,9 @@ async fn conversation_state_bridge_route_config_drift_fails_closed_before_dispat
 
 #[tokio::test]
 async fn conversation_state_bridge_model_less_continuation_respects_current_route_config() {
+    let _env_guard = ADMIN_TOKEN_ENV_LOCK.lock().await;
+    let _admin_token = ScopedEnvVar::remove("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN");
+
     let (mock_base, _mock, captured) = spawn_asserting_anthropic_mock(|_| Ok(())).await;
     let mut config =
         bridge_memory_proxy_config(&mock_base, UpstreamFormat::Anthropic, 60, 1024 * 1024);
@@ -10129,7 +10132,7 @@ async fn provider_cache_usage_usage_hook_omits_same_format_constructed_source_fi
     assert_eq!(usage["upstream_format"], "openai-completion");
     assert_eq!(usage["client_model"], alias_model);
     assert_eq!(usage["upstream_model"], upstream_model);
-    assert_llmup_external_contract(&usage["llmup"], "constructed", "none");
+    assert_llmup_external_contract(&usage["llmup"], "constructed", "synthesized");
     assert_eq!(usage["usage"]["cached_input_tokens"], 128);
     assert!(
         usage.get("provider_cache_usage").is_none(),
@@ -10251,7 +10254,7 @@ async fn exchange_hook_non_stream_success_uses_public_redacted_response_body_whe
         .unwrap();
     assert_eq!(exchange["client_model"], alias_model);
     assert_eq!(exchange["upstream_model"], upstream_model);
-    assert_llmup_external_contract(&exchange["llmup"], "constructed", "none");
+    assert_llmup_external_contract(&exchange["llmup"], "constructed", "synthesized");
     let hook_body = &exchange["response"]["body"];
     assert_eq!(hook_body, &public_body);
     assert_eq!(hook_body["model"], upstream_model);
@@ -10321,7 +10324,7 @@ async fn exchange_hook_stream_success_uses_redacted_sse_capture_when_transformat
         .unwrap();
     assert_eq!(exchange["client_model"], alias_model);
     assert_eq!(exchange["upstream_model"], upstream_model);
-    assert_llmup_external_contract(&exchange["llmup"], "constructed", "none");
+    assert_llmup_external_contract(&exchange["llmup"], "constructed", "synthesized");
     let hook_text = serde_json::to_string(exchange).unwrap();
     assert!(!hook_text.contains(provider_secret), "{hook_text}");
     assert!(!hook_text.contains(proxy_secret), "{hook_text}");

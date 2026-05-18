@@ -1203,7 +1203,7 @@ fn apply_anthropic_clear_tool_uses_edit(body: &mut Value, options: AnthropicTool
             interaction
                 .name
                 .as_deref()
-                .map_or(true, |name| !options.exclude_tools.contains(name.trim()))
+                .is_none_or(|name| !options.exclude_tools.contains(name.trim()))
         })
         .collect::<Vec<_>>();
     let clear_count = eligible.len().saturating_sub(options.keep_tool_uses);

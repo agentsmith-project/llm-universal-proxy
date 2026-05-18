@@ -1586,7 +1586,7 @@ async fn sse_event_field_redacts_known_secret_without_breaking_public_hook_or_de
     let exchange_payload = exchange_payloads.last().unwrap();
     assert_eq!(exchange_payload["client_model"], alias_model);
     assert_eq!(exchange_payload["upstream_model"], upstream_model);
-    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "none");
+    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "synthesized");
     let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(&payload_text, TEST_PROVIDER_KEY, "SSE exchange hook");
 
@@ -1677,7 +1677,7 @@ async fn sse_id_comment_retry_metadata_redacts_without_dropping_safe_metadata() 
     let exchange_payload = exchange_payloads.last().unwrap();
     assert_eq!(exchange_payload["client_model"], alias_model);
     assert_eq!(exchange_payload["upstream_model"], upstream_model);
-    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "none");
+    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "synthesized");
     let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(&payload_text, TEST_PROVIDER_KEY, "SSE metadata hook");
 

@@ -1765,7 +1765,6 @@ fn anthropic_request_has_complete_visible_history(body: &Value) -> bool {
                     };
                     if !pending_tool_use_ids.insert(tool_use_id.to_string()) {
                         tool_history_is_structural = false;
-                        return;
                     }
                 }
                 Some("tool_result") => {
@@ -2032,9 +2031,7 @@ fn validate_anthropic_clear_thinking_edit(
             "clear_thinking_20251015 contains unsupported field `{field}`"
         ));
     }
-    let Some(keep) = object.get("keep") else {
-        return None;
-    };
+    let keep = object.get("keep")?;
     match keep {
         Value::String(value) if value == "all" => None,
         Value::Object(keep_object) => {
@@ -2086,7 +2083,7 @@ fn validate_anthropic_clear_tool_uses_edit(
         if exclude_tools.iter().any(|tool| {
             tool.as_str()
                 .map(str::trim)
-                .map_or(true, |tool| tool.is_empty())
+                .is_none_or(|tool| tool.is_empty())
         }) {
             return Some(
                 "clear_tool_uses_20250919.exclude_tools entries must be non-empty strings"
@@ -2108,9 +2105,7 @@ fn validate_context_management_metric(
     path: &str,
     allowed_types: &[&str],
 ) -> Option<String> {
-    let Some(value) = value else {
-        return None;
-    };
+    let value = value?;
     let Some(object) = value.as_object() else {
         return Some(format!("{path} must be an object"));
     };
@@ -2495,8 +2490,7 @@ pub(crate) fn assess_request_translation(
                 .collect::<Vec<_>>()
                 .join(", ");
             assessment.warning(format!(
-                "Anthropic request controls {quoted} are not portable to {} and will be dropped",
-                target_label
+                "Anthropic request controls {quoted} are not portable to {target_label} and will be dropped"
             ));
         }
         if let Some(message) = anthropic_opaque_thinking_carrier_message(body, target_label) {
