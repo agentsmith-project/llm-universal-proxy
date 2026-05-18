@@ -4,7 +4,7 @@
 
 ## 背景
 
-当前中文快速开始已经把 `llmup` 讲成“本机中转站”，但实际使用路径仍然偏开发者：
+当前中文快速开始已经把项目讲成“本机中转站”，但实际使用路径仍然偏开发者：
 
 - 用户需要自己下载 release asset，自己放置二进制。
 - 用户需要手写 YAML 和本地密钥文件。
@@ -44,7 +44,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-
 - 用户不需要知道 `upstream`、`model_aliases`、`provider_key` 等内部概念。
 - 用户不需要手动下载二进制和配套脚本。
 - Codex/Claude Code 的会话和配置默认持久化在 llmup 专用目录里。
-- Codex/Claude Code 的原生命令行参数默认可透传。
+- `llmup-codex <args>` 像 `codex <args>` 一样使用；`llmup-claude <args>` 像 `claude <args>` 一样使用。llmup 只消费第一个 `--` 之前的 `--llmup-*` 控制参数，以及一个可选 routing delimiter `--`。
 - 现有高级用户仍然可以继续直接运行 `llm-universal-proxy --config ...`。
 
 ## 非目标
@@ -62,7 +62,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-
 
 ## 产品形态
 
-新增三个用户命令：
+公开用户命令只保留三个：
 
 | 命令 | 面向用户的含义 | 责任边界 |
 | --- | --- | --- |
@@ -77,20 +77,13 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-
 - `scripts/run_codex_proxy.sh`
 - `scripts/run_claude_proxy.sh`
 
-安装器也创建 `llmup` 入口。`llmup` 的行为必须明确：
-
-- `llmup` 无参数时显示极短下一步：先运行 `llmup-config`，再运行 `llmup-codex` 或 `llmup-claude`。
-- `llmup --help` 显示用户工具层帮助。
-- `llmup --version` 显示版本。
-- `llmup config ...` 等价于 `llmup-config ...`。
-- `llmup codex ...` 等价于 `llmup-codex ...`。
-- `llmup claude ...` 等价于 `llmup-claude ...`。
+第一版不提供独立 `llmup` 命令。它既不是必要用户动作，也容易让用户以为还有一套统一 agent shell 或二级子命令。用户只需要记住三个动作命令；高级用户继续使用 `llm-universal-proxy --config ...`。
 
 推荐实现为同一个 Rust 二进制的多入口分发：
 
 - release 里继续包含 `llm-universal-proxy`。
-- 安装器额外创建 `llmup`、`llmup-config`、`llmup-codex`、`llmup-claude` 到同一二进制的 symlink/hardlink。
-- 程序根据 `argv[0]` 分发，也支持显式子命令：`llm-universal-proxy config|codex|claude ...`。
+- 安装器额外创建 `llmup-config`、`llmup-codex`、`llmup-claude` 到同一二进制的 symlink/hardlink。
+- 程序根据 `argv[0]` 分发；第一版不设计 `llmup <subcommand>` 入口。
 
 这样可以避免继续把用户主入口绑在 Python 测试脚本上，也避免安装后还要求用户有 Python 运行环境。
 
@@ -130,20 +123,24 @@ CLAUDE_CONFIG_DIR="$LLMUP_CLAUDE_CONFIG_DIR"
 
 Claude Code 凭据隔离要按平台描述清楚：`CLAUDE_CONFIG_DIR` 覆盖 Claude Code 的配置目录、会话历史和插件目录；Linux/Windows 上凭据文件也随该目录移动；macOS 上部分登录凭据可能在系统 Keychain 中，不能把 `CLAUDE_CONFIG_DIR` 宣传为“完全隔离所有登录态”。
 
+`~/.llmup-codex` 和 `~/.llmup-claude` 是 llmup 管理的原生客户端 home，不是 llmup 自己的新会话系统。用户遇到 resume、settings、MCP、plugin、skills、memory、`CLAUDE.md` 等行为时，仍按 Codex CLI 或 Claude Code 原生心智理解。
+
 ## `llmup-config` 设计
 
-第一版命令：
+普通用户只需要记一个命令：
 
 ```bash
 llmup-config
-llmup-config init
-llmup-config doctor
-llmup-config show
 ```
 
-`llmup-config` 无参数时等价于 `llmup-config init`，但如果已经配置过，则进入“查看/修改/重新配置”的简单菜单。
+`llmup-config` 无参数时进入单一交互流程：
 
-`init` 只问最少问题，提示文案面向普通用户：
+- 第一次运行：创建配置、保存密钥、做一次基础检查，然后打印下一步命令。
+- 已配置过：显示脱敏摘要，并提供“直接完成 / 重新配置 / 运行检查”三个选择。
+
+第一版 README 和普通帮助不展示 `init`、`show`、`doctor` 三套子命令，避免用户产生“到底该运行哪个”的疑问。工程实现可以保留隐藏的非交互入口给 CI 和自动化测试使用，但它不是用户主路径。
+
+交互流程只问最少问题，提示文案面向普通用户：
 
 1. 你的模型服务接口像哪一种？
    - OpenAI 接口，默认推荐。不确定就直接回车。
@@ -189,7 +186,7 @@ upstreams:
       env: LLMUP_PROVIDER_DEFAULT_API_KEY
 ```
 
-`doctor` 检查：
+检查项：
 
 - `~/.llmup/config.yaml` 是否存在且可被 Rust 配置加载器解析。
 - `~/.llmup/secrets.env` 是否存在、权限是否安全、是否包含必要变量。
@@ -197,7 +194,7 @@ upstreams:
 - 代理能否用生成配置启动并通过 `/health`。
 - 本机端口冲突时是否可以自动换端口。
 
-`show` 只展示脱敏摘要：
+脱敏摘要只展示：
 
 - 配置文件路径。
 - 模型短名字。
@@ -206,7 +203,7 @@ upstreams:
 - API Key 是否已配置，永不打印明文。
 - 下一步命令：`llmup-codex` 或 `llmup-claude`。
 
-非交互初始化用于测试和高级自动化，必须避免把密钥直接写在命令行参数里：
+非交互初始化只用于测试和高级自动化，必须避免把密钥直接写在命令行参数里；README 第一版不展示这条路径：
 
 ```bash
 printf '%s\n' "$MINIMAX_API_KEY" | llmup-config init \
@@ -222,34 +219,44 @@ printf '%s\n' "$MINIMAX_API_KEY" | llmup-config init \
 
 ## Agent 启动器设计
 
-`llmup-codex` 和 `llmup-claude` 默认采用轻量监督模式：
+`llmup-codex` 和 `llmup-claude` 默认采用轻量监督模式，但不解析 Codex/Claude 的具体子命令语义。它们只做三件事：
 
-1. 识别这是不是 agent 会话命令。
-2. `llmup-codex --help`、`llmup-codex --version`、`llmup-claude --help`、`llmup-claude --version` 显示 llmup launcher 自己的帮助/版本，不要求本机已安装 Codex/Claude Code。
-3. 如果用户需要查看客户端自己的帮助，可以用 `llmup-codex -- --help` 或 `llmup-claude -- --help`。
-4. 如果是 `claude update`、`claude install`、`claude auth`、`claude mcp`、`claude doctor`、`codex login`、`codex logout`、`codex login status`、`codex update`、`codex mcp` 等客户端本地管理命令，不启动代理、不注入模型，只设置对应持久配置目录并原样执行。
-5. 对 agent 会话命令，读取 `~/.llmup/config.yaml` 和 `~/.llmup/secrets.env`。
-6. 自动选择本地端口，生成本次运行使用的完整 runtime YAML。
-7. 启动一个本次会话专用的 `llm-universal-proxy` 子进程。
-8. 等待 `/health` 成功，并确认子进程仍然存活。
-9. 设置客户端需要的 base URL、本地 proxy key、配置目录环境变量。
-10. 在用户原始工作目录启动 Codex CLI 或 Claude Code。
-11. Codex/Claude Code 退出后，停止本次启动的代理子进程，并返回客户端退出码。
+1. 解析 llmup 自己的控制参数，形成 `LauncherControl`。
+2. 把剩余参数作为 `NativeArgv`，不理解、不验证、不重排。
+3. 根据 `LauncherControl` 选择 managed proxy 或 native passthrough，然后启动原生 CLI。
+
+默认是 managed proxy 模式：
+
+1. 读取 `~/.llmup/config.yaml` 和 `~/.llmup/secrets.env`。
+2. 自动选择本地端口，生成本次运行使用的完整 runtime YAML。
+3. 启动一个本次会话专用的 `llm-universal-proxy` 子进程。
+4. 等待 `/health` 成功，并确认子进程仍然存活。
+5. 设置客户端需要的 base URL、本地 proxy key、配置目录环境变量。
+6. 为目标客户端生成固定 `InjectionPrelude`。
+7. 在用户原始工作目录执行：`client_binary + InjectionPrelude + NativeArgv`。
+8. Codex/Claude Code 退出后，停止本次启动的代理子进程，并返回客户端退出码。
+
+no-proxy native passthrough 模式只在用户显式传 `--llmup-native` 时启用：
+
+1. 不读取 provider key。
+2. 不启动 proxy。
+3. 不注入 base URL、API key 或默认模型。
+4. 只设置 llmup 专用客户端配置目录。
+5. 在用户原始工作目录执行：`client_binary + NativeArgv`。
 
 这保持了当前“一条命令启动代理和客户端”的低心智负担，同时不需要引入后台 daemon、pid registry、跨进程生命周期管理或系统服务。
 
-可选高级参数：
+第一版公开参数只保留最少集合：
 
 | 参数 | 含义 |
 | --- | --- |
-| `--llmup-home <path>` | 覆盖 `LLMUP_HOME` |
-| `--llmup-config <path>` | 使用指定 llmup YAML |
-| `--llmup-env-file <path>` | 使用指定密钥 env 文件 |
-| `--llmup-proxy-base <url>` | 连接已有代理，不启动本地子进程 |
-| `--llmup-port <port>` | 指定本地代理端口 |
-| `--llmup-keep-proxy` | 调试用，客户端退出后不停止代理 |
+| `--llmup-native` | 只用 llmup 专用客户端配置目录运行原生 CLI，不启动代理、不注入模型 |
+| `--llmup-help` | 显示 launcher 自己的帮助 |
+| `--llmup-version` | 显示 launcher / llmup 版本 |
 
-`--llmup-proxy-base` 连接已有代理时，启动器默认仍从 `secrets.env` 读取 `LLM_UNIVERSAL_PROXY_KEY` 作为客户端访问本地/外部代理的 key；这个模式不需要加载真实 provider key，也不启动或停止 proxy 进程。
+工程和测试可以保留隐藏参数，例如 `--llmup-port`、`--llmup-config`、`--llmup-env-file`，但第一版不写入 README，也不进入普通帮助。覆盖 home 目录优先使用 `LLMUP_HOME`、`LLMUP_CODEX_HOME`、`LLMUP_CLAUDE_CONFIG_DIR` 环境变量，不再额外设计 `--llmup-home`。
+
+`--llmup-proxy-base` 和 `--llmup-keep-proxy` 暂不进入第一版。它们会把“一条命令启动本次会话代理”的主心智拆成“连接外部代理 / 复用代理 / 保留代理”等多种模式，收益不足以抵消复杂度。高级用户继续直接运行 `llm-universal-proxy --config ...`。
 
 `--llmup-profile` 不进入第一版公开帮助。第一版只支持一个默认配置，避免制造“profile 已完整支持”的假心智；多 profile 后续单独设计。
 
@@ -273,12 +280,48 @@ runtime YAML 生成要求：
 - proxy 子进程加载 `secrets.env`，拿到真实 provider key 和本地 proxy key。
 - Codex/Claude 子进程不能继承真实 provider key；它们只拿本地 proxy key。
 - 客户端环境从当前 shell 复制，但必须移除 `secrets.env` 中的所有 key、常见 provider secret 变量和包含 `API_KEY`、`AUTH_TOKEN`、`SECRET`、`CREDENTIAL` 的 llmup/provider 相关变量，再显式写入本地 proxy key。
+- Claude Code 客户端环境还必须移除可能绕过 `ANTHROPIC_BASE_URL` 的 provider routing 和认证 helper 变量，再显式写入 llmup 的 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`。至少包括 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BEDROCK_*`、`ANTHROPIC_VERTEX_*`、`ANTHROPIC_FOUNDRY_*`、`ANTHROPIC_AWS_*`、`ANTHROPIC_WORKSPACE_ID`、`AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS`、`GCLOUD_PROJECT`、`GOOGLE_CLOUD_PROJECT`、`CLAUDE_CODE_USE_BEDROCK`、`CLAUDE_CODE_USE_VERTEX`、`CLAUDE_CODE_USE_FOUNDRY`、`CLAUDE_CODE_USE_MANTLE`、`CLAUDE_CODE_USE_ANTHROPIC_AWS`、`CLAUDE_CODE_SKIP_BEDROCK_AUTH`、`CLAUDE_CODE_SKIP_VERTEX_AUTH`、`CLAUDE_CODE_SKIP_FOUNDRY_AUTH`、`CLAUDE_CODE_SKIP_MANTLE_AUTH`、`CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH`。
 - Claude Code 默认设置 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`，减少工具子进程继承敏感环境变量。
-- 因为不改 `HOME`，dangerous/yolo 模式仍可能访问用户真实文件和凭据。检测到危险权限参数时，只在本次命令启动前提示一次风险。
+- 因为不改 `HOME`，dangerous/yolo 这类原生权限参数仍可能访问用户真实文件和凭据。llmup 不解析这些参数，用户需要按 Codex/Claude 原生文档自行理解风险。
 
-## 参数透传规则
+## 原生 CLI 薄包装契约
 
-核心规则：`--llmup-*` 是 llmup 自己的参数，其余参数默认原样交给 Codex CLI 或 Claude Code。
+`llmup-codex` / `llmup-claude` 不是新的 coding agent 客户端，而是带 llmup 本地代理能力的原生 CLI launcher。用户心智必须保持为“把原命令前缀换成 `llmup-codex` 或 `llmup-claude`”：
+
+- `llmup-codex <native-args>` 等价于 `codex <native-args>`，只额外做 llmup 代理启动、配置目录设置、provider/base URL/API key 注入和默认模型注入。
+- `llmup-claude <native-args>` 等价于 `claude <native-args>`，只额外做 llmup 代理启动、配置目录设置、base URL/API key 注入和默认模型注入。
+- 不提供 `llmup` 主入口，避免长出另一套 agent 管理语义。
+- launcher 只消费第一个 `--` 之前的 `--llmup-*` 控制参数，以及一个可选 routing delimiter `--`。其余参数属于原生 Codex/Claude CLI。
+- launcher 不验证、不归一化、不重排、不替用户解释原生 CLI 参数。未知参数、未知子命令、原生 help/version、原生管理命令都默认交给原生 CLI。
+- `--` 是结构化传参边界：它只告诉 llmup “后面全部是原生 argv”。第一个 `--` 不传给客户端；如果用户确实需要给客户端传一个字面量 `--`，使用 `-- --`。
+- 禁止发明跨客户端统一参数或语义，例如 `--llmup-resume`、`--llmup-model`、`--provider`、`--api-key`、统一 permission mode、统一 sandbox mode。`resume`、`--model`、`--permission-mode`、`--sandbox`、`--bare` 等都是原生客户端语义。
+- launcher 不默认注入原生行为参数：不默认加 Codex `-C`、sandbox、yolo 或 permission bypass；不默认加 Claude `--bare`、`--add-dir`、permission mode。工作目录使用用户启动命令时的 cwd，原生工作区/权限/最小模式参数由用户自己传。
+- 缺少 llmup 配置时，launcher 不自动进入配置向导，只给出清晰下一步：运行 `llmup-config`。配置教育属于 `llmup-config`，不是 agent launcher。
+- 用户要对自己传给 Codex/Claude 的原生参数负责。如果用户通过原生参数或原生配置覆盖模型、provider、base URL、权限、sandbox、最小模式等行为，llmup 不尝试理解或修复；需要 no-proxy 原生行为时使用 `--llmup-native`。
+- 终端默认属于 Codex/Claude。llmup 只在缺配置、缺客户端、proxy 启动失败、`--llmup-*` 参数错误等 preflight 场景输出；proxy stdout/stderr 默认写入 `~/.llmup/run/<session-id>/`，不刷屏。
+- stdin/stdout/stderr、TTY、窗口 resize、Ctrl-C、SIGINT/SIGTERM 和退出码都要尽量保持原生 CLI 体验。launcher 只负责清理自己启动的 proxy 子进程，并原样返回客户端退出码；信号语义无法完全保留时必须有测试记录。
+- README 和帮助文案不要复制 Codex/Claude 参数表，只说明 llmup 会消费第一个 `--` 之前的 `--llmup-*` 控制参数和可选 routing delimiter `--`，其余进入 `NativeArgv`，并链接官方文档。复制原生参数会快速过期，也会暗示 llmup 拥有这些语义。
+
+## 结构化传参模型
+
+核心规则：`llmup-*` launcher 不解析 Codex/Claude 子命令，只做结构化 argv routing。
+
+输入被拆成三块：
+
+```text
+LauncherControl  = 第一个 -- 之前的已知 --llmup-* 参数
+NativeArgv       = 所有非 --llmup-* 参数，加上第一个 -- 之后的全部参数
+InjectionPrelude = managed proxy 模式下由 client adapter 生成的固定注入参数
+```
+
+最终执行：
+
+```text
+managed: client_binary + InjectionPrelude + NativeArgv
+native:  client_binary + NativeArgv
+```
+
+`--` 的唯一作用是停止 llmup 参数解析。第一个 `--` 不进入 `NativeArgv`；它后面的内容全部进入 `NativeArgv`，包括 `--llmup-*`。
 
 示例：
 
@@ -286,37 +329,36 @@ runtime YAML 生成要求：
 llmup-codex resume --last
 llmup-codex --yolo
 llmup-codex --ask-for-approval never --sandbox workspace-write
-llmup-codex --llmup-port 19999 -- --yolo
+llmup-codex --llmup-native -- mcp list
+llmup-codex -- --help
 
 llmup-claude --resume
 llmup-claude --permission-mode bypassPermissions
 llmup-claude --dangerously-skip-permissions
-llmup-claude --llmup-port 19999 -- --resume my-session
+llmup-claude --llmup-native -- auth
+llmup-claude -- --resume my-session
 ```
 
 实现要求：
 
+- 第一阶段只抽取第一个 `--` 之前的已知 `--llmup-*` 及其值；抽取后的客户端参数必须以 `Vec<OsString>` 或等价结构保存，并通过 `Command.args(...)` 交给原生 CLI。禁止拼接 shell 字符串，禁止 UTF-8 重编码后再切分。
 - 保留用户参数顺序。
 - 不吞掉未知参数。
 - 不把 `--resume`、`resume`、`--yolo`、`--dangerously-*` 转成 llmup 中间语义。
 - 不再使用 `--dangerous-harness` 这类只服务测试脚本的产品参数。
-- `--` 后所有参数无条件视为客户端参数。
-- `--help` 和 `--version` 在 `--` 前表示 launcher 自己的帮助/版本；在 `--` 后表示客户端参数。
-- Codex/Claude 原生 `--model` 或 `-m` 由客户端接收；启动器可以扫描它来决定是否需要注入默认模型，但不能移除或重排。
-- 模型扫描必须覆盖 `--model x`、`--model=x`、`-m x`、Codex `-c model=...`、Codex `--config model=...`。
-- `--llmup-port=1234` 和 `--llmup-port 1234` 都要支持；缺值要报清楚错误。
+- 第一个 `--` 后所有参数无条件视为客户端参数，包括 `--llmup-*`、`--help` 和 `--version`；第一个 `--` 本身不传给客户端。
+- `--llmup-help` / `--llmup-version` 是 launcher 自己的帮助/版本，且不要求本机已安装 Codex/Claude Code。原生 `--help` / `-h` / `--version` / `-v` 必须交给客户端，`resume --help`、`doctor --help`、`-- --help` 也必须交给客户端。
+- 隐藏工程参数如果保留，例如 `--llmup-port=1234` 和 `--llmup-port 1234`，缺值要报清楚错误，但不能出现在第一版 README 和普通帮助里。
+- 第一个 `--` 之前的未知 `--llmup-*` 必须报清楚错误；非 `--llmup-*` 的未知参数必须透传。
 - `--` 后即使出现 `--llmup-*`，也必须作为客户端参数透传。
-- 如果用户没有提供模型参数，启动器注入配置里的默认模型短名字。
-- 非 agent 会话命令不注入模型。
-
-危险权限参数只做一次性提示，不拦截、不默认开启：
-
-- Codex：`--yolo`、`--dangerously-bypass-approvals-and-sandbox`
-- Claude Code：`--dangerously-skip-permissions`、`--allow-dangerously-skip-permissions`、`--permission-mode bypassPermissions`
+- managed proxy 模式总是生成固定 `InjectionPrelude`，不因为 `NativeArgv` 看起来像 help、本地管理命令、model override 或 provider override 而改变逻辑。
+- no-proxy native passthrough 模式总是不生成 `InjectionPrelude`。
 
 ## Codex 注入策略
 
-Codex 官方文档说明 CLI 参数和 `-c key=value` 会覆盖配置文件。`llmup-codex` 应利用这一点，只注入本次运行必需的 provider 设置。没有 Codex subcommand 时，命令形态为：
+Codex 官方文档说明 CLI 参数和 `-c key=value` 会覆盖本次 invocation 的配置。`llmup-codex` 应利用这一点，只注入本次运行必需的 provider 设置，不修改用户 `~/.codex/config.toml`。custom provider id 使用 `proxy`，不能占用官方或常见内置 id，例如 `openai`、`ollama`、`lmstudio`。
+
+managed proxy 模式下固定生成 `InjectionPrelude`：
 
 ```bash
 codex \
@@ -327,26 +369,10 @@ codex \
   -c model_providers.proxy.wire_api=\"responses\" \
   -c model_providers.proxy.supports_websockets=false \
   -m <default-model-if-user-did-not-set-one> \
-  <user-args...>
+  <NativeArgv...>
 ```
 
-Codex 有 subcommand 时，不能假设所有 global flags 放在 `codex` 后都能被该 subcommand 接收。实现必须维护一个已知 agent 会话 subcommand 表，并用真实 Codex CLI smoke 测试验证注入位置。已知会话命令包括：
-
-- `codex resume ...`
-- `codex exec ...`
-- `codex fork ...`
-
-这类命令的目标形态是：
-
-```bash
-codex resume \
-  -c model_provider=\"proxy\" \
-  -c model_providers.proxy.base_url=\"http://127.0.0.1:<port>/openai/v1\" \
-  -m <default-model-if-user-did-not-set-one> \
-  --last
-```
-
-`codex login`、`codex logout`、`codex login status`、`codex update`、`codex mcp` 这类本地管理命令不启动代理、不注入模型。`llmup-codex --help` 和 `llmup-codex --version` 是 launcher 本地帮助；客户端帮助通过 `llmup-codex -- --help` 透传。
+这条规则对所有 `NativeArgv` 一致，包括 `resume`、`exec`、`review`、`mcp`、`login`、`--help` 等。llmup 不区分哪些是 agent 会话命令，哪些是 Codex 本地管理命令。用户需要 no-proxy Codex 原生命令时使用 `--llmup-native`。
 
 同时设置：
 
@@ -356,6 +382,10 @@ CODEX_HOME="$LLMUP_CODEX_HOME"
 ```
 
 `OPENAI_BASE_URL` 可以作为兼容性冗余设置，但正确性必须依赖 `-c model_providers.proxy.base_url=...` 注入，而不是依赖环境变量。
+
+因为 `NativeArgv` 追加在 `InjectionPrelude` 之后，用户可以用 Codex 原生参数覆盖模型或其他行为；是否接受、如何合并、谁优先生效由 Codex CLI 自己决定。llmup 不做冲突检测。如果用户通过 `--oss`、`--local-provider`、`--profile`、`-c model_provider=...` 等原生参数绕过了 proxy，这是用户选择的 Codex 原生行为；需要完全不经过 llmup 注入时使用 `--llmup-native`。
+
+由于 Codex 对 option/subcommand 位置有自己的解析规则，真实 CLI smoke 必须覆盖最常见的 managed 命令形态，例如 `llmup-codex`、`llmup-codex resume --last`、`llmup-codex exec ...`。如果某个 Codex 版本不接受固定 `InjectionPrelude + NativeArgv`，实现不能引入子命令表作为 workaround，应优先改用位置无关的配置注入方式，例如 llmup 专用 `CODEX_HOME` 下的配置文件，或把该行为记录为当前版本限制。
 
 Codex model catalog 的生成仍可复用现有 real CLI matrix 里已经验证过的能力，但文件必须放在 llmup 专属运行目录或 Codex 专属目录下，不能覆盖用户自己的 `~/.codex`。
 
@@ -380,12 +410,14 @@ CLAUDE_CONFIG_DIR="$LLMUP_CLAUDE_CONFIG_DIR"
 ```bash
 claude \
   --model <default-model-if-user-did-not-set-one> \
-  <user-args...>
+  <NativeArgv...>
 ```
 
 不要默认加入 `--bare`。它是 Claude Code 的最小模式，会跳过 hooks、skills、plugins、MCP servers、auto memory、`CLAUDE.md` 自动发现，并跳过 OAuth/keychain reads。需要干净环境时，用户可以自己传 `--bare`；第一版不增加 `--llmup-bare`。
 
-`claude update`、`claude install`、`claude auth`、`claude mcp`、`claude doctor` 这类本地管理命令不启动代理、不注入模型。它们默认仍使用 `CLAUDE_CONFIG_DIR="$LLMUP_CLAUDE_CONFIG_DIR"`，让用户管理的是 llmup 专用 Claude Code 配置目录。`llmup-claude --help` 和 `llmup-claude --version` 是 launcher 本地帮助；客户端帮助通过 `llmup-claude -- --help` 透传。
+这条规则对所有 `NativeArgv` 一致，包括 `--resume`、`auth`、`mcp`、`doctor`、`--help` 等。llmup 不区分哪些是 agent 会话命令，哪些是 Claude Code 本地管理命令。用户需要 no-proxy Claude Code 原生命令时使用 `--llmup-native`。
+
+因为 `NativeArgv` 追加在 `InjectionPrelude` 之后，用户可以用 Claude Code 原生参数覆盖模型或其他行为；是否接受、如何合并、谁优先生效由 Claude Code 自己决定。llmup 不做冲突检测。
 
 ## 安装器设计
 
@@ -393,7 +425,7 @@ claude \
 
 - `install.sh`
 - 每个平台 archive 继续带 `.sha256`
-- archive 内包含 `llm-universal-proxy`，安装后创建 `llmup`、`llmup-config`、`llmup-codex`、`llmup-claude`
+- archive 内包含 `llm-universal-proxy`，安装后创建 `llmup-config`、`llmup-codex`、`llmup-claude`
 
 安装命令：
 
@@ -405,7 +437,6 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-universal-proxy/releases/download/v0.2.32/install.sh | sh
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-universal-proxy/releases/latest/download/install.sh | sh -s -- --asset-version 0.2.32
 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-universal-proxy/releases/latest/download/install.sh | sh -s -- --bin-dir "$HOME/bin"
 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-universal-proxy/releases/latest/download/install.sh | sh -s -- --no-modify-path
 ```
@@ -413,7 +444,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-
 版本语义必须写清楚：
 
 - `releases/download/vX.Y.Z/install.sh | sh` 是安装脚本和下载 asset 都固定到 `vX.Y.Z`。
-- `releases/latest/download/install.sh | sh -s -- --asset-version X.Y.Z` 是使用 latest 安装脚本去下载指定版本 asset，只 pin 二进制，不 pin 安装脚本本身。
+- 第一版不提供 `--asset-version`。固定版本只使用版本化 release URL，避免“脚本版本”和“二进制版本”分离带来的解释成本。
 - README 给普通用户展示 latest 路径；工程文档和 release notes 同时提供版本化路径。
 
 安装器要求：
@@ -447,7 +478,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-
 
 `src/main.rs` 调整为：
 
-- 先根据 `argv[0]` 或第一个子命令判断是否进入用户工具层。
+- 先根据 `argv[0]` 判断是否进入用户工具层。
 - 如果是旧服务端参数，保持当前 `--config` / `--admin-bootstrap` 行为。
 - 用户工具层的 parser 必须保留未知参数，以便传给 Codex/Claude。
 
@@ -460,7 +491,7 @@ release workflow 需要同步调整：
 - Unix archive 中仍包含主二进制，安装器负责创建 symlink/hardlink。
 - Windows archive 后续可复制多份或提供 `.cmd` launcher；第一版文档不承诺 Windows 原生安装。
 - release job 上传 `install.sh`。
-- build 或 release gate 增加安装器 smoke：在临时 `HOME` 和临时 `bin-dir` 运行安装脚本，再执行 `llmup --version`、`llmup-config --help`、`llmup-codex --help`、`llmup-claude --help`。
+- build 或 release gate 增加安装器 smoke：在临时 `HOME` 和临时 `bin-dir` 运行安装脚本，再执行 `llm-universal-proxy --version`、`llmup-config --help`、`llmup-config --version`、`llmup-codex --llmup-help`、`llmup-claude --llmup-help`。
 - CI 固定 toolchain/target，产物可校验；bit-for-bit reproducible builds 不作为本计划硬门槛。
 
 ## TDD 任务清单
@@ -470,32 +501,40 @@ release workflow 需要同步调整：
 Rust 单元/集成测试：
 
 - `llm-universal-proxy --config proxy.yaml` 旧行为不变。
-- `llm-universal-proxy config`、`llmup config`、`llmup codex`、`llmup claude`、`llmup-config`、`llmup-codex`、`llmup-claude` 分发正确。
+- `llmup-config`、`llmup-codex`、`llmup-claude` 分发正确；用户帮助快照中不得出现独立 `llmup` 入口或 `llmup <subcommand>` 用法。
 - `llmup-config init --non-interactive ...` 生成的 YAML 能被 `Config::from_yaml_str` 解析并 validate。
 - `llmup-config` 不覆盖已有配置，除非显式 `--force`。
 - `secrets.env` 写入权限为 `0600` 或平台等价。
-- `show` / `doctor` 不输出明文 API Key。
+- `llmup-config` 的脱敏摘要和检查输出不包含明文 API Key。
 - env file parser 支持安全的 `KEY=value` 子集，拒绝 shell 展开、命令替换和非法 key。
-- `doctor` 对未安装且未选择的客户端只给 warning，不把整体状态打成失败。
+- `llmup-config` 内置检查对未安装且未选择的客户端只给 warning，不把整体状态打成失败。
 - runtime YAML 生成保留完整 `data_auth`，覆盖 `listen`，不修改用户原始配置。
 
 Launcher 测试：
 
 - fake `codex` 接收到 `--resume`、`resume --last`、`--yolo`、`--ask-for-approval never` 等原始参数。
 - fake `claude` 接收到 `--resume`、`--permission-mode bypassPermissions`、`--dangerously-skip-permissions` 等原始参数。
-- `--llmup-*` 参数不传给客户端。
-- `--` 后参数全部传给客户端。
-- 用户传 `--model`、`--model=...`、`-m`、Codex `-c model=...`、Codex `--config model=...` 时不重复注入默认模型。
-- 用户未传模型时注入默认模型短名字。
+- fake client 逐参数记录 argv；未知参数、带空格路径、`--foo=x`、短参组合、多个 `--`、`--` 后的 `--llmup-port` 都逐参数保留。
+- 第一个 `--` 之前的已知 `--llmup-*` 参数进入 `LauncherControl`，不传给客户端。
+- 第一个 `--` 本身不传给客户端；之后的参数全部传给客户端，包括 `--llmup-*`。
+- `-- --` 会给客户端传入一个字面量 `--`。
+- 非 `--llmup-*` 未知参数透传；未知 `--llmup-*` 报清楚错误。
+- `--llmup-native` 不启动代理、不注入模型，但仍设置 `CODEX_HOME` / `CLAUDE_CONFIG_DIR`。
+- managed proxy 模式总是生成固定 `InjectionPrelude`，并放在 `NativeArgv` 前面。
+- `NativeArgv` 中出现 `--model`、`-m`、`--oss`、`--profile`、`auth`、`mcp`、`doctor`、`--help` 等原生参数时，launcher 不扫描、不移除、不报错、不改变注入策略。
+- no-proxy native passthrough 模式不生成 `InjectionPrelude`。
 - 连续两次运行使用同一个 `CODEX_HOME=~/.llmup-codex`。
 - 连续两次运行使用同一个 `CLAUDE_CONFIG_DIR=~/.llmup-claude`。
+- `HOME`、`XDG_*`、`TMPDIR` 默认保持父进程原值，不被 launcher 改写。
 - 客户端退出码被原样返回。
+- stdin/stdout/stderr、TTY、窗口 resize 默认透给客户端；proxy 日志默认写入运行目录，不污染客户端 TUI。
 - SIGINT/SIGTERM 时代理子进程被清理，客户端退出码/信号语义尽量保留。
-- `--llmup-proxy-base` 模式不启动本地代理、不停止外部代理。
-- `codex resume`、`codex exec`、`codex fork` 的注入位置通过真实 CLI smoke 覆盖。
-- launcher 自己的 `--help`、`--version` 不要求客户端存在；`claude update`、`claude install`、`claude auth`、`claude mcp`、`claude doctor`、`codex login`、`codex logout`、`codex login status`、`codex update`、`codex mcp` 不启动代理、不注入模型。
+- 隐藏工程参数不出现在普通帮助；`--llmup-proxy-base` 和 `--llmup-keep-proxy` 不作为第一版测试目标。
+- 真实 CLI smoke 验证固定 `InjectionPrelude + NativeArgv` 能被当前 Codex/Claude 接受，至少覆盖默认启动、Codex `resume --last`、Codex `exec ...`、Claude `--resume`、原生 `--help`。不为每个 Codex/Claude 子命令建兼容矩阵；如果固定前缀在常见命令上不可行，优先改用位置无关的配置注入方式。
+- launcher 自己的 `--llmup-help`、`--llmup-version` 不要求客户端存在；原生 `--help` 走 `NativeArgv`，是否需要 proxy 由 managed/native 模式统一决定。
 - 客户端子进程不继承真实 provider key，只收到本地 proxy key。
 - 父环境中的 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`MINIMAX_API_KEY`、`*_AUTH_TOKEN` 不覆盖 llmup 注入给客户端的本地 proxy key。
+- 父环境中的 Claude provider selector 和 gateway/auth helper 变量不会绕过 llmup：`CLAUDE_CODE_USE_BEDROCK`、`CLAUDE_CODE_USE_VERTEX`、`CLAUDE_CODE_USE_FOUNDRY`、`CLAUDE_CODE_USE_MANTLE`、`ANTHROPIC_BEDROCK_*`、`ANTHROPIC_VERTEX_*`、`ANTHROPIC_FOUNDRY_*`、`ANTHROPIC_AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS` 等被 scrub 后再显式注入 llmup 的 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`。
 
 安装器测试：
 
@@ -504,8 +543,8 @@ Launcher 测试：
 - checksum mismatch fail closed。
 - `--bin-dir` 和 `--no-modify-path` 生效。
 - shell profile marker 幂等。
-- 安装后 `llmup --help`、`llmup-config --help`、`llmup-codex --help`、`llmup-claude --help` smoke 通过，且不要求本机已安装 Codex/Claude Code。
-- 版本化 installer URL 固定安装脚本和 asset；latest installer 加 `--asset-version` 只固定 asset，并在输出中说明。
+- 安装后 `llm-universal-proxy --version`、`llmup-config --help`、`llmup-config --version`、`llmup-codex --llmup-help`、`llmup-claude --llmup-help` smoke 通过，且不要求本机已安装 Codex/Claude Code。
+- 版本化 installer URL 固定安装脚本和 asset；第一版不提供 `--asset-version`。
 - archive path traversal、已有 symlink 覆盖、路径含空格、unsupported OS/arch 都有 fail-closed 覆盖。
 
 文档测试：
@@ -518,32 +557,38 @@ Launcher 测试：
 
 面向用户：
 
-- 全新 macOS/Linux/WSL 环境里，用户可以通过在线脚本安装 llmup 和三个友好命令。
+- 全新 macOS/Linux/WSL 环境里，用户可以通过在线脚本安装主二进制和三个友好命令。
 - 用户运行 `llmup-config` 后，可以不手写 YAML、不 export 环境变量完成 MiniMax 这类 OpenAI-compatible 服务配置。
 - 用户运行 `llmup-codex` 后，Codex CLI 通过本地 llmup 使用配置的模型服务。
 - 用户运行 `llmup-claude` 后，Claude Code 通过本地 llmup 使用配置的模型服务。
 - `llmup-codex resume --last`、`llmup-codex --yolo`、`llmup-claude --resume`、`llmup-claude --dangerously-skip-permissions` 不被 llmup 拒绝或吞参。
+- 除第一个 `--` 之前的 `--llmup-*` 和可选 routing delimiter `--` 外，用户可以继续使用 Codex/Claude 官方文档里的原生命令、子命令和参数；llmup 不要求用户学习另一套 agent 参数。
+- 用户需要执行 no-proxy 原生命令时，例如登录、更新、MCP 管理、查看原生帮助，可以使用 `--llmup-native`。
 - Codex 和 Claude Code 的会话、配置、resume 数据跨进程保留。
-- `llmup --help`、`llmup config`、`llmup codex`、`llmup claude` 可用。
-- 本地管理命令例如 `llmup-claude update` 或 `llmup-codex mcp` 不会被代理启动和模型注入干扰。
+- `llmup-config`、`llmup-codex`、`llmup-claude` 可用；README 不提供独立 `llmup` 入口或第二套 `llmup <subcommand>` 路径。
+- `llmup-codex --llmup-help` / `llmup-claude --llmup-help` 显示 launcher 帮助；原生帮助属于用户传给 Codex/Claude 的 `NativeArgv`。
 
 面向工程：
 
 - 旧的服务端入口、YAML 配置格式和测试脚本不被破坏。
 - 新入口不依赖 Python。
-- 用户工具层只占用 `--llmup-*` 参数命名空间。
-- API Key 不出现在日志、doctor、show、错误信息或生成的 README 示例中。
+- 用户工具层只消费第一个 `--` 之前的 `--llmup-*` 控制参数和可选 routing delimiter `--`。
+- 参数透传有 argv golden tests 保护，确认只多出必要注入项，`NativeArgv` 顺序和内容不被重写。
+- API Key 不出现在日志、配置摘要、检查输出、错误信息或生成的 README 示例中。
 - release archive 和安装器产物可校验，release workflow 覆盖安装器 smoke。
 
 ## 风险与处理
 
 | 风险 | 处理 |
 | --- | --- |
-| Codex/Claude CLI 参数未来变化 | 默认透传未知参数，只解析 `--llmup-*` |
+| Codex/Claude CLI 参数未来变化 | 默认透传未知参数，只解析第一个 `--` 前的 `--llmup-*`，并用 `--` 作为可选 routing delimiter |
+| Codex/Claude 新增或改变子命令 | llmup 不维护子命令表；所有子命令都是 `NativeArgv`；需要 no-proxy 原生执行时用 `--llmup-native` |
+| launcher 慢慢变成假 Codex/Claude CLI | 薄包装契约写成硬约束；帮助和 README 只解释 llmup 差异，不复制原生 CLI 参数表 |
+| 用户用原生参数绕过 proxy 或改变模型/provider | 明确这是用户负责的原生 CLI 行为；llmup 不做冲突检测；需要 no-proxy 原生执行时用 `--llmup-native` |
 | 临时目录问题再次出现 | 产品 launcher 禁止使用 `TemporaryDirectory` 作为客户端配置目录 |
 | 改写 `HOME` 影响用户工具 | 默认不改 `HOME`，只设置 `CODEX_HOME` / `CLAUDE_CONFIG_DIR` |
 | provider key 泄露给客户端或工具子进程 | proxy 与客户端分开构造 env，客户端只拿本地 proxy key |
-| 用户误用危险权限 | 检测到危险参数时提示一次，但不代替用户决策 |
+| 用户误用危险权限 | 危险权限属于原生 CLI 行为；README 提醒用户阅读 Codex/Claude 原生文档，llmup 不解析或代替用户决策 |
 | API Key 明文落盘 | 第一版用 `0600` env 文件加全链路脱敏；系统 keychain 留作后续增强 |
 | 安装脚本供应链风险 | TLS、SHA-256 完整性校验、无 sudo 默认、版本化 installer URL、脚本可审查；签名作为后续增强 |
 | 后台代理生命周期变复杂 | 第一版不做 daemon，只做当前会话子进程监督 |
@@ -566,9 +611,12 @@ Launcher 测试：
 - uv 安装器参考：https://github.com/astral-sh/uv/blob/main/docs/getting-started/installation.md
 - Homebrew 安装器参考：https://docs.brew.sh/Installation.html
 - GitHub release asset 直链规则：https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases
+- rustup proxy/委托模型参考：https://rust-lang.github.io/rustup/concepts/proxies.html
+- uv `run` 参数分隔参考：https://docs.astral.sh/uv/reference/cli/#uv-run
 
 ## Team Review 结果
 
-- 产品/用户体验 review：要求把首次向导里的协议术语藏到工程映射里，明确安装后是 Codex/Claude 二选一启动，定义 `llmup` 本体行为，并避免公开第一版不完整的 profile 概念。本文已修订。
+- 产品/用户体验 review：要求把首次向导里的协议术语藏到工程映射里，明确安装后是 Codex/Claude 二选一启动，避免公开第一版不完整的 profile 概念。后续 KISS review 进一步确认第一版不需要独立 `llmup` 命令，本文已修订。
 - 代码架构 review：要求补齐 runtime YAML、端口重试、`data_auth` 保留、`--llmup-*` 解析、release workflow 和 installer gate。本文已修订。
 - 生态/安装器 review：要求收窄 SHA-256 的安全表述、补版本化 installer URL、补 Codex subcommand 注入规则、补 Claude macOS Keychain caveat 和客户端 env 隔离。本文已修订。
+- 薄包装契约追加 review：产品、CLI 架构和官方文档/生态实践 review 均确认 `llmup-codex` / `llmup-claude` 应设计为原生 CLI 薄包装。后续根据产品收敛要求，本文进一步简化为结构化 argv routing：只解析第一个 `--` 前的 `--llmup-*` 和可选 routing delimiter `--`，不维护 Codex/Claude 子命令表，不做 model/provider 冲突检测，managed 模式统一启动 proxy 并加固定 `InjectionPrelude`，no-proxy native passthrough 由 `--llmup-native` 显式选择。
