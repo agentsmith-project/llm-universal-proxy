@@ -1,5 +1,7 @@
 //! LLM Universal Proxy entrypoint.
 
+use std::ffi::OsString;
+
 #[derive(Debug, PartialEq, Eq)]
 struct CliArgs {
     config_path: Option<String>,
@@ -67,8 +69,74 @@ fn validate_admin_bootstrap_env() -> Result<(), String> {
     }
 }
 
+fn server_usage() -> &'static str {
+    "usage: llm-universal-proxy (--config <config.yaml> | --admin-bootstrap) [--dashboard]"
+}
+
+fn server_version() -> String {
+    format!(
+        "llm-universal-proxy {}",
+        option_env!("CARGO_PKG_VERSION").unwrap_or("unknown")
+    )
+}
+
 #[tokio::main]
 async fn main() {
+    let args_os = std::env::args_os().collect::<Vec<_>>();
+    if !matches!(std::env::var("LLMUP_FORCE_SERVER").as_deref(), Ok("1")) {
+        if let Some(program) = args_os.first() {
+            if let Some(entrypoint) =
+                llm_universal_proxy::user_tools::entrypoint_from_argv0(program)
+            {
+                let tool_args = args_os.into_iter().skip(1).collect::<Vec<OsString>>();
+                let result = match entrypoint {
+                    llm_universal_proxy::user_tools::UserToolEntrypoint::Config => {
+                        let mut stdin = std::io::stdin();
+                        let mut stdout = std::io::stdout();
+                        llm_universal_proxy::user_tools::config_wizard::run_cli(
+                            tool_args,
+                            &mut stdin,
+                            &mut stdout,
+                        )
+                    }
+                    llm_universal_proxy::user_tools::UserToolEntrypoint::Codex => {
+                        let mut stdout = std::io::stdout();
+                        llm_universal_proxy::user_tools::agent_launcher::run_cli(
+                            llm_universal_proxy::user_tools::agent_launcher::AgentKind::Codex,
+                            tool_args,
+                            &mut stdout,
+                        )
+                    }
+                    llm_universal_proxy::user_tools::UserToolEntrypoint::Claude => {
+                        let mut stdout = std::io::stdout();
+                        llm_universal_proxy::user_tools::agent_launcher::run_cli(
+                            llm_universal_proxy::user_tools::agent_launcher::AgentKind::Claude,
+                            tool_args,
+                            &mut stdout,
+                        )
+                    }
+                };
+                match result {
+                    Ok(code) => std::process::exit(code),
+                    Err(message) => {
+                        eprintln!("{message}");
+                        std::process::exit(2);
+                    }
+                }
+            }
+        }
+    }
+
+    let server_args = std::env::args().collect::<Vec<_>>();
+    if server_args.len() == 2 && matches!(server_args[1].as_str(), "--help" | "-h") {
+        println!("{}", server_usage());
+        return;
+    }
+    if server_args.len() == 2 && server_args[1] == "--version" {
+        println!("{}", server_version());
+        return;
+    }
+
     let args = match parse_args(std::env::args()) {
         Ok(args) => args,
         Err(message) => {

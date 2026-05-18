@@ -135,7 +135,7 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           strip ${{ matrix.artifact_name }} || true
-          tar -czvf ${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
+          COPYFILE_DISABLE=1 tar -czvf ${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
           shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.tar.gz.sha256
 
       - name: Package (Windows)
@@ -153,6 +153,73 @@ jobs:
             target/${{ matrix.target }}/release/*.tar.gz
             target/${{ matrix.target }}/release/*.zip
             target/${{ matrix.target }}/release/*.sha256
+
+  installer-smoke:
+    name: Installer Smoke
+    runs-on: ubuntu-latest
+    needs: [governance, test]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Read repo metadata
+        id: repo_meta
+        run: python scripts/repo_metadata.py github-output
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ steps.repo_meta.outputs.rust_toolchain }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --verbose
+
+      - name: Package installer smoke archive
+        run: |
+          mkdir -p artifacts/local-release
+          cp target/release/llm-universal-proxy artifacts/local-release/llm-universal-proxy
+          (
+            cd artifacts/local-release
+            COPYFILE_DISABLE=1 tar -czvf llm-universal-proxy-linux-x86_64.tar.gz llm-universal-proxy
+            shasum -a 256 llm-universal-proxy-linux-x86_64.tar.gz > llm-universal-proxy-linux-x86_64.tar.gz.sha256
+          )
+
+      - name: Prepare install.sh release asset
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p artifacts
+          python3 - <<'PY'
+          import os
+          import pathlib
+
+          release_tag = os.environ["RELEASE_TAG"]
+          source = pathlib.Path("install.sh").read_text(encoding="utf-8")
+          output = source.replace("__LLMUP_RELEASE_TAG__", release_tag, 1)
+          pathlib.Path("artifacts/install.sh").write_text(output, encoding="utf-8")
+          PY
+          chmod +x artifacts/install.sh
+
+      - name: Run installer smoke
+        run: |
+          HOME="$(mktemp -d)"
+          BIN_DIR="$HOME/bin with spaces"
+          LLMUP_INSTALL_BASE_URL="file://$PWD/artifacts/local-release" HOME="$HOME" sh artifacts/install.sh --bin-dir "$BIN_DIR" --no-modify-path
+          "$BIN_DIR"/llm-universal-proxy --help
+          "$BIN_DIR"/llm-universal-proxy --version
+          "$BIN_DIR"/llmup-config --help
+          "$BIN_DIR"/llmup-config --version
+          "$BIN_DIR"/llmup-codex --llmup-help
+          "$BIN_DIR"/llmup-codex --llmup-version
+          "$BIN_DIR"/llmup-claude --llmup-help
+          "$BIN_DIR"/llmup-claude --llmup-version
+
+      - name: Upload install.sh release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-sh
+          path: artifacts/install.sh
+          if-no-files-found: error
 
   test:
     name: Test
@@ -339,7 +406,7 @@ jobs:
   container:
     name: Publish GHCR Image
     runs-on: ubuntu-latest
-    needs: [governance, fmt, clippy, test, mock-endpoint-matrix, cli-wrapper-matrix, perf-gate, compatible-provider-smoke, supply-chain]
+    needs: [governance, fmt, clippy, test, mock-endpoint-matrix, cli-wrapper-matrix, installer-smoke, perf-gate, compatible-provider-smoke, supply-chain]
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
@@ -491,7 +558,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [governance, fmt, clippy, build, test, container, mock-endpoint-matrix, cli-wrapper-matrix, perf-gate, compatible-provider-smoke, supply-chain]
+    needs: [governance, fmt, clippy, build, test, container, mock-endpoint-matrix, cli-wrapper-matrix, installer-smoke, perf-gate, compatible-provider-smoke, supply-chain]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -506,6 +573,12 @@ jobs:
           path: artifacts
           pattern: llm-universal-proxy-*
 
+      - name: Download install.sh artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: install-sh
+          path: artifacts/install-sh
+
       - name: Display structure of downloaded files
         run: ls -laR artifacts/
 
@@ -514,6 +587,9 @@ jobs:
         with:
           body_path: CHANGELOG.md
           files: |
-            artifacts/**/*
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.sha256
+            artifacts/install-sh/install.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

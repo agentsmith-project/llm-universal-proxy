@@ -2,241 +2,64 @@
 
 [中文文档](./README_CN.md) · [Documentation](./docs/README.md)
 
-`llmup` is a single-binary LLM HTTP proxy. Put it between your client and your real model provider, and it gives you one stable local entrypoint even when the client protocol and upstream protocol do not match.
+`llmup` is a local proxy for model APIs and compatible endpoints. It lets Codex CLI and Claude Code talk to a provider through one local launcher path, while the real provider key stays on the proxy side.
 
-It is most useful when you want to:
-
-- use non-native models behind Codex CLI
-- route Codex CLI and Claude Code through one local proxy
-- expose stable local model aliases instead of vendor model IDs
+It is built for maximum safe compatibility: when a feature can be translated safely, the proxy does that work locally; when it cannot, requests fail closed before the upstream call instead of being guessed into a provider shape.
 
 > [!IMPORTANT]
-> `llmup` is designed for provider APIs and compatible endpoints. It is not a bridge into vendor first-party app subscriptions or bundled first-party CLI entitlements unless that vendor explicitly documents that kind of third-party access.
-
-![LLMUP dashboard](./docs/images/dashboard.png)
-
-The optional local dashboard helps you inspect routing, streaming, cancellation, upstream state, and hook activity while the proxy is running.
+> `llmup` works with provider APIs and compatible endpoints. It is not a bridge into vendor first-party app subscriptions or bundled first-party CLI entitlements unless that vendor explicitly documents that kind of third-party access.
 
 ## Quick Start
 
-The GA user-entry path is provider-neutral and starts with the CLI wrappers. The recommended config source is [examples/quickstart-provider-neutral.yaml](./examples/quickstart-provider-neutral.yaml), using these stable local aliases:
-
-- `preset-openai-compatible` for OpenAI-compatible providers
-- `preset-anthropic-compatible` for Anthropic-compatible providers
-
-MiniMax is only a replaceable OpenAI-compatible example, not a GA-required provider and not the mainline preset name. A concrete OpenAI + MiniMax sample remains in [examples/quickstart-openai-minimax.yaml](./examples/quickstart-openai-minimax.yaml) for users who want to replace the preset placeholders with named providers.
-
-The provider-neutral config source is:
-
-```yaml
-listen: 127.0.0.1:8080
-upstream_timeout_secs: 120
-
-upstreams:
-  PRESET-ANTHROPIC-COMPATIBLE:
-    api_root: PRESET_ANTHROPIC_ENDPOINT_BASE_URL
-    format: anthropic
-    provider_key_env: PRESET_ENDPOINT_API_KEY
-    limits:
-      context_window: 200000
-      max_output_tokens: 128000
-    surface_defaults:
-      modalities:
-        input: ["text"]
-        output: ["text"]
-      tools:
-        supports_search: false
-        supports_view_image: false
-        apply_patch_transport: freeform
-        supports_parallel_calls: false
-
-  PRESET-OPENAI-COMPATIBLE:
-    api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
-    format: openai-completion
-    provider_key_env: PRESET_ENDPOINT_API_KEY
-    limits:
-      context_window: 200000
-      max_output_tokens: 128000
-    surface_defaults:
-      modalities:
-        input: ["text"]
-        output: ["text"]
-      tools:
-        supports_search: false
-        supports_view_image: false
-        apply_patch_transport: freeform
-        supports_parallel_calls: false
-
-model_aliases:
-  preset-anthropic-compatible: "PRESET-ANTHROPIC-COMPATIBLE:PRESET_ENDPOINT_MODEL"
-  preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL"
-```
-
-Set the preset environment variables before starting a wrapper-managed session:
+Install the binary and the three user commands:
 
 ```bash
-git clone https://github.com/agentsmith-project/llm-universal-proxy.git
-cd llm-universal-proxy
-cargo build --locked --release
-
-export PRESET_OPENAI_ENDPOINT_BASE_URL="https://openai-compatible.example/v1"
-export PRESET_ANTHROPIC_ENDPOINT_BASE_URL="https://anthropic-compatible.example/v1"
-export PRESET_ENDPOINT_MODEL="provider-model-id"
-export PRESET_ENDPOINT_API_KEY="provider-api-key"
-export LLM_UNIVERSAL_PROXY_AUTH_MODE=proxy_key
-export LLM_UNIVERSAL_PROXY_KEY="local-proxy-key"
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-universal-proxy/releases/latest/download/install.sh | sh
 ```
 
-What those variables do:
+Configure your provider:
 
-| Variable | Used for |
-| --- | --- |
-| `PRESET_OPENAI_ENDPOINT_BASE_URL` | API root for the OpenAI-compatible upstream, including its version segment such as `/v1` |
-| `PRESET_ANTHROPIC_ENDPOINT_BASE_URL` | API root for the Anthropic-compatible upstream |
-| `PRESET_ENDPOINT_MODEL` | Provider model ID hydrated into both preset aliases |
-| `PRESET_ENDPOINT_API_KEY` | Env-sourced server-side provider credential used by both preset upstreams |
-| `LLM_UNIVERSAL_PROXY_AUTH_MODE` | Compatibility fallback for data-plane auth when static `data_auth` is omitted; use `proxy_key` when the proxy holds provider keys |
-| `LLM_UNIVERSAL_PROXY_KEY` | Proxy API key for clients in `proxy_key` mode; also used by the env fallback or by `data_auth.proxy_key.env` when configured |
+```bash
+llmup-config
+```
 
-The `PRESET_*` values are a wrapper/config-source contract. The wrappers hydrate them into a concrete runtime config before starting the proxy. If you run `llm-universal-proxy --config` directly, replace the placeholders with concrete URLs and model names first.
+Start the client you use:
 
-Prefer static `data_auth` in YAML for data-plane auth; `LLM_UNIVERSAL_PROXY_AUTH_MODE` and `LLM_UNIVERSAL_PROXY_KEY` are the environment fallback when `data_auth` is omitted. In `proxy_key` mode, each upstream provider credential can come from `provider_key.inline`, `provider_key.env`, or legacy `provider_key_env`; the preset source above uses the legacy env-name form so wrappers can hydrate it from `PRESET_ENDPOINT_API_KEY`.
+```bash
+llmup-codex
+```
 
-Reasoning effort such as `xhigh` is a client/request-side setting, not part of the model name. Keep the alias stable and set reasoning in the request or client config.
+or:
 
-## Compatibility Contract
+```bash
+llmup-claude
+```
+
+The real provider key is collected by `llmup-config` and kept in the local proxy configuration, not pasted into Codex or Claude Code. The launchers give the client a local proxy key and keep the upstream provider key on the proxy side.
+
+The launchers also manage the local proxy process, client base URL, default model alias, and llmup-owned Codex/Claude state directories.
+
+## Why There Is No `llmup` Command
+
+There is intentionally no standalone `llmup` command. `llmup-config`, `llmup-codex`, and `llmup-claude` are the user commands.
+
+That keeps the first-use path small: configure once, then launch the native client you already use. `llm-universal-proxy --config` remains the advanced server entrypoint.
+
+## Compatibility
 
 `llmup` gives clients a stable local protocol surface, not unlimited provider equivalence.
 
-- the product goal is maximum safe compatibility: preserve the richest safe portable representation, emit portability warnings when non-portable detail is omitted, and reject unsafe or non-portable semantics before upstream
-- when no cross-protocol request construction is needed, internal handling may keep provider-native bytes and fields unchanged if routing, auth, headers, and observability do not require body mutation or response normalization
-- when request or response construction is needed, `llmup` still maximizes safe preservation and may warn or reject non-portable provider-native features
-- fail-closed behavior is a hard portability boundary: requests that hit a hard portability boundary are rejected before upstream
-- native extensions and provider-owned lifecycle state require native upstream handling unless a documented shim says otherwise
-- Responses reasoning/compaction continuity may emit a portability warning and omit an opaque carrier only when visible summary text or visible transcript history remains; opaque-only reasoning and opaque-only compaction fail closed; provider-owned state is preserved only when same-wire-protocol internal handling can keep native semantics unchanged
-- the quickstart includes conservative text-only `surface_defaults`; turn on search, image, or parallel-tool flags only when that model surface really supports them
-- multimodal `surface.modalities.input` gates media types, not every source transport; HTTP(S) image/PDF URLs are distinct from provider or local URIs such as `gs://`, `s3://`, and `file://`
-- Gemini models remain usable through Google's OpenAI-compatible endpoint by configuring that upstream as `format: openai-completion`; native Gemini `generateContent` wire format is not an active proxy surface
-- typed media metadata must be internally consistent; conflicting MIME hints such as `mime_type` versus a `file_data` data URI are rejected before the upstream call
+- Maximum safe compatibility means preserving the richest safe portable representation and refusing unsafe conversions.
+- Provider-specific state, opaque reasoning carriers, and non-portable tool semantics may require native handling or fail closed before the upstream call.
+- Reasoning effort such as `xhigh` is still a client/request setting; it is not part of a model name.
 
-## Codex / Claude Code Basic Setup
+## Advanced
 
-For day-to-day usage, prefer the repo's wrapper scripts instead of hand-configuring each client. They handle local environment isolation, base URL injection, preset hydration, and client-specific metadata.
-
-The defaults in `scripts/interactive_cli.py` match the provider-neutral preset names:
-
-| Client | Default wrapper model |
-| --- | --- |
-| Codex CLI | `preset-openai-compatible` |
-| Claude Code | `preset-anthropic-compatible` |
-
-### Codex CLI
-
-```bash
-bash scripts/run_codex_proxy.sh \
-  --config-source examples/quickstart-provider-neutral.yaml \
-  --workspace "$PWD" \
-  --model preset-openai-compatible
-```
-
-### Claude Code
-
-```bash
-bash scripts/run_claude_proxy.sh \
-  --config-source examples/quickstart-provider-neutral.yaml \
-  --workspace "$PWD" \
-  --model preset-anthropic-compatible
-```
-
-Pass `--proxy-base http://127.0.0.1:8080` when you want to attach to a proxy you started separately. When `--proxy-base` is omitted, the wrapper renders the preset config, starts the proxy, waits for `/health`, launches the client, and stops the proxy when the session exits.
-
-Wrapper base URL and actual proxy endpoint are related but not identical.
-
-For Codex specifically, the wrapper currently fixes `wire_api="responses"`, so Codex uses the Responses route:
-
-| Client | Wrapper-configured base URL | Client appends | Proxy endpoint actually hit |
-| --- | --- | --- | --- |
-| Codex CLI | `OPENAI_BASE_URL=<proxy>/openai/v1` | `/responses` | `/openai/v1/responses` |
-| Claude Code | `ANTHROPIC_BASE_URL=<proxy>/anthropic` | `/v1/messages` | `/anthropic/v1/messages` |
-
-Codex especially benefits from the wrapper because it injects temporary model metadata for proxy-backed aliases. For more detail, see [docs/clients.md](./docs/clients.md).
-
-To use Gemini as a provider, configure Google's OpenAI-compatible endpoint as a normal OpenAI-compatible upstream:
-
-```yaml
-upstreams:
-  GOOGLE-OPENAI-COMPATIBLE:
-    api_root: https://generativelanguage.googleapis.com/v1beta/openai
-    format: openai-completion
-    provider_key_env: GEMINI_API_KEY
-model_aliases:
-  gemini-flash: GOOGLE-OPENAI-COMPATIBLE:gemini-2.0-flash
-```
-
-## Most Common Static Configuration
-
-The static YAML story is intentionally small:
-
-| Field | Purpose |
-| --- | --- |
-| `listen` | Proxy listen address |
-| `upstream_timeout_secs` | Upstream request timeout |
-| `data_auth` | Process-wide data-plane auth mode; if omitted, the proxy uses the environment fallback |
-| `upstreams` | Named upstream API roots, formats, and credential policy |
-| `model_aliases` | Stable local names mapped to `UPSTREAM:MODEL` |
-| `surface_defaults` / `surface` | Optional client-visible capability metadata for wrappers and model catalogs |
-| `proxy` | Optional default upstream egress proxy |
-| `hooks` | Optional usage / exchange export hooks |
-| `debug_trace` | Optional local debug trace |
-
-Practical rules:
-
-- `api_root` should be the provider API root and include its version segment, such as `.../v1` or `.../v1beta`
-- `format` pins the upstream protocol: `openai-responses`, `openai-completion`, or `anthropic`
-- aliases such as `preset-openai-compatible` and `preset-anthropic-compatible` are local names; they do not need to equal the upstream model ID
-- use structured aliases only when you want extra `limits` or `surface` metadata on top of `target: UPSTREAM:MODEL`
-- the provider-neutral `PRESET_*` placeholders are for wrapper-rendered config sources; direct static YAML should contain concrete URLs and model IDs
-- `data_auth` is a process-wide setting for all data-plane routes, not a per-upstream field; `provider_key.inline`, `provider_key.env`, and legacy `provider_key_env` choose per-upstream provider credential sources in `proxy_key` mode
-- if `data_auth` is omitted, `LLM_UNIVERSAL_PROXY_AUTH_MODE` and `LLM_UNIVERSAL_PROXY_KEY` provide the compatibility environment fallback
-
-For the full YAML reference and more examples, see [docs/configuration.md](./docs/configuration.md).
-
-## Container Image
-
-Release images are published at `ghcr.io/agentsmith-project/llm-universal-proxy`.
-The current published container release is `v0.2.30`; Cargo package version
-`0.2.31` is the next release identity, not a published container tag yet. For
-production, pin `ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.30` or the
-published digest instead of relying on `latest`. Container usage, Docker
-Compose, one-minute smoke verification, Admin Dashboard auth boundaries, and
-GHCR access for authenticated or public pulls are documented in
-[docs/container.md](./docs/container.md).
-
-## Dynamic Configuration Overview
-
-Static YAML is the default. If you need live updates, the proxy also exposes admin endpoints for reading runtime state, replacing namespace config, and rotating the global data-plane auth config without restarting the whole process. Namespace payloads use a runtime shape. Global `data_auth` is either static YAML, the environment fallback, or the Admin API `/admin/data-auth` state.
-
-Current admin endpoints:
-
-- `GET /admin/state`
-- `GET /admin/data-auth`
-- `PUT /admin/data-auth`
-- `GET /admin/namespaces/:namespace/state`
-- `POST /admin/namespaces/:namespace/config`
-
-That flow is documented in [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md).
-
-## Keep Reading
-
-- [docs/configuration.md](./docs/configuration.md): static config, alias patterns, YAML reference
-- [docs/clients.md](./docs/clients.md): Codex / Claude Code wrapper setup and base URL details
-- [docs/container.md](./docs/container.md): GHCR image usage, Docker Compose, container smoke, and release policy
-- [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md): admin API, live config, CAS updates
-- [docs/ga-readiness-review.md](./docs/ga-readiness-review.md): GA scope, release evidence, and compatibility boundaries
-- [docs/protocol-compatibility-matrix.md](./docs/protocol-compatibility-matrix.md): compatibility boundaries and portability summary
-- [docs/max-compat-design.md](./docs/max-compat-design.md): deeper maximum safe compatibility notes
-- [docs/DESIGN.md](./docs/DESIGN.md): current architecture map
-- [docs/README.md](./docs/README.md): docs index
+- [docs/clients.md](./docs/clients.md): launcher-managed Codex and Claude Code behavior
+- [docs/advanced-usage.md](./docs/advanced-usage.md): manual proxy startup, YAML, manual Codex/Claude wiring, and auth modes
+- [docs/container.md](./docs/container.md): container image usage
+- [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md): admin and dynamic config reference
+- [docs/ga-readiness-review.md](./docs/ga-readiness-review.md): GA scope and compatibility boundaries
 
 ## License
 

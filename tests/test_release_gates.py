@@ -3,13 +3,16 @@ import os
 import importlib.util
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+INSTALLER_SCRIPT = REPO_ROOT / "install.sh"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 GOVERNANCE_SCRIPT = REPO_ROOT / "scripts" / "check-governance.sh"
@@ -31,6 +34,7 @@ CODEX_SCRIPTED_INTERACTIVE_GATE_COMMAND = (
 REQUIRED_RELEASE_GATE_NEEDS = (
     "mock-endpoint-matrix",
     "cli-wrapper-matrix",
+    "installer-smoke",
     "perf-gate",
     "compatible-provider-smoke",
     "supply-chain",
@@ -59,6 +63,16 @@ RELEASE_PUBLISH_JOB_MARKERS = (
     "push: true",
     "packages: write",
     "action-gh-release",
+)
+INSTALLER_SMOKE_COMMANDS = (
+    "llm-universal-proxy --help",
+    "llm-universal-proxy --version",
+    "llmup-config --help",
+    "llmup-config --version",
+    "llmup-codex --llmup-help",
+    "llmup-codex --llmup-version",
+    "llmup-claude --llmup-help",
+    "llmup-claude --llmup-version",
 )
 
 
@@ -155,9 +169,87 @@ def published_timestamp_fields(manifest: dict) -> set[str]:
     return {"published_at", "released_at"} & set(manifest["published"])
 
 
+def sha256_file(path: pathlib.Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class ReleaseGateWorkflowContractTests(unittest.TestCase):
     def read_text(self, relative_path: str) -> str:
         return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+    def write_fake_release_asset(
+        self,
+        release_dir: pathlib.Path,
+        asset_name: str = "llm-universal-proxy-linux-x86_64.tar.gz",
+        *,
+        entry_name: str = "llm-universal-proxy",
+        executable_text: str | None = None,
+        checksum: str | None = None,
+    ) -> pathlib.Path:
+        payload_dir = release_dir / "payload"
+        payload_dir.mkdir(exist_ok=True)
+        binary = payload_dir / "llm-universal-proxy"
+        binary.write_text(
+            executable_text
+            or """#!/bin/sh
+set -eu
+name=${0##*/}
+arg=${1:-}
+case "$name:$arg" in
+  llm-universal-proxy:--help|llm-universal-proxy:--version|llmup-config:--help|llmup-config:--version|llmup-codex:--llmup-help|llmup-codex:--llmup-version|llmup-claude:--llmup-help|llmup-claude:--llmup-version)
+    printf '%s %s\\n' "$name" "$arg"
+    exit 0
+    ;;
+esac
+printf 'unexpected invocation: %s %s\\n' "$name" "$arg" >&2
+exit 64
+""",
+            encoding="utf-8",
+        )
+        binary.chmod(0o755)
+
+        archive = release_dir / asset_name
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(binary, arcname=entry_name)
+        (release_dir / f"{asset_name}.sha256").write_text(
+            f"{checksum or sha256_file(archive)}  {asset_name}\n",
+            encoding="utf-8",
+        )
+        shutil.rmtree(payload_dir)
+        return archive
+
+    def run_installer(
+        self,
+        tmp_path: pathlib.Path,
+        release_dir: pathlib.Path,
+        *args: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.update(
+            {
+                "HOME": str(tmp_path / "home"),
+                "LLMUP_INSTALL_BASE_URL": f"file://{release_dir}",
+                "LLMUP_INSTALL_UNAME_S": "Linux",
+                "LLMUP_INSTALL_UNAME_M": "x86_64",
+            }
+        )
+        if extra_env:
+            env.update(extra_env)
+        (tmp_path / "home").mkdir(exist_ok=True)
+        return subprocess.run(
+            ["sh", str(INSTALLER_SCRIPT), *args],
+            cwd=tmp_path,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
 
     def assert_has_compatible_provider_smoke_invocation(self, text: str):
         invocation_lines = compatible_provider_smoke_invocation_lines(text)
@@ -188,6 +280,10 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
             "CLI Wrapper Matrix",
             "python3 scripts/real_cli_matrix.py --test basic --skip-slow --list-matrix",
             CODEX_SCRIPTED_INTERACTIVE_GATE_COMMAND,
+            "Installer Smoke",
+            "Prepare install.sh release asset",
+            "Upload install.sh release asset",
+            "Run installer smoke",
             "Perf Gate",
             "python3 scripts/real_endpoint_matrix.py --mock --perf",
             "Supply Chain",
@@ -206,9 +302,230 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
         self.assertRegex(
             release,
             r"release:\n(?:.|\n)*needs: \[[^\]]*mock-endpoint-matrix[^\]]*"
-            r"cli-wrapper-matrix[^\]]*perf-gate[^\]]*compatible-provider-smoke[^\]]*"
+            r"cli-wrapper-matrix[^\]]*installer-smoke[^\]]*perf-gate[^\]]*compatible-provider-smoke[^\]]*"
             r"supply-chain[^\]]*\]",
         )
+
+    def test_installer_script_contract_is_posix_and_fail_closed(self):
+        self.assertTrue(INSTALLER_SCRIPT.exists(), "release asset source install.sh must exist")
+        installer = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+        for snippet in (
+            "#!/bin/sh",
+            "llm-universal-proxy-${asset_os}-${asset_arch}.tar.gz",
+            "LLMUP_INSTALL_BASE_URL",
+            "LLMUP_INSTALL_UNAME_S",
+            "LLMUP_INSTALL_UNAME_M",
+            "--bin-dir",
+            "--no-modify-path",
+            ".sha256",
+            "checksum mismatch",
+            "validate_archive",
+            "path traversal",
+            "absolute path",
+            "unexpected archive entry",
+            ".llmup-install-manifest",
+            "llmup-config",
+            "llmup-codex",
+            "llmup-claude",
+            "reopen your terminal",
+            "__LLMUP_RELEASE_TAG__",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, installer)
+
+        self.assertNotIn("sudo", installer)
+        subprocess.run(["sh", "-n", str(INSTALLER_SCRIPT)], check=True)
+
+    def test_installer_installs_fake_release_atomically_with_aliases_and_absolute_next_steps(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = pathlib.Path(tmpdir)
+            release_dir = tmp_path / "release assets"
+            release_dir.mkdir()
+            self.write_fake_release_asset(release_dir)
+            bin_dir = tmp_path / "bin with spaces"
+
+            result = self.run_installer(
+                tmp_path,
+                release_dir,
+                "--bin-dir",
+                str(bin_dir),
+                "--no-modify-path",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertTrue((bin_dir / "llm-universal-proxy").is_file())
+            for alias in ("llmup-config", "llmup-codex", "llmup-claude"):
+                with self.subTest(alias=alias):
+                    self.assertTrue((bin_dir / alias).exists())
+                    self.assertIn(str(bin_dir / alias), result.stdout)
+            self.assertFalse((bin_dir / "llmup").exists(), "installer must not create a standalone llmup command")
+            self.assertTrue((bin_dir / ".llmup-install-manifest").is_file())
+            self.assertFalse((tmp_path / "home" / ".profile").exists())
+
+            for command in INSTALLER_SMOKE_COMMANDS:
+                with self.subTest(command=command):
+                    parts = command.split()
+                    installed = bin_dir / parts[0]
+                    smoke = subprocess.run(
+                        [str(installed), *parts[1:]],
+                        text=True,
+                        capture_output=True,
+                    )
+                    self.assertEqual(smoke.returncode, 0, smoke.stderr + smoke.stdout)
+
+    def test_installer_rejects_checksum_mismatch_before_installing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = pathlib.Path(tmpdir)
+            release_dir = tmp_path / "release"
+            release_dir.mkdir()
+            self.write_fake_release_asset(release_dir, checksum="0" * 64)
+            bin_dir = tmp_path / "bin"
+
+            result = self.run_installer(
+                tmp_path,
+                release_dir,
+                "--bin-dir",
+                str(bin_dir),
+                "--no-modify-path",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("checksum mismatch", result.stderr + result.stdout)
+            self.assertFalse((bin_dir / "llm-universal-proxy").exists())
+
+    def test_installer_rejects_unsafe_archive_entries(self):
+        unsafe_entries = (
+            "/tmp/llm-universal-proxy",
+            "../llm-universal-proxy",
+            "nested/llm-universal-proxy",
+            "llmup",
+        )
+        for entry_name in unsafe_entries:
+            with self.subTest(entry=entry_name):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmp_path = pathlib.Path(tmpdir)
+                    release_dir = tmp_path / "release"
+                    release_dir.mkdir()
+                    self.write_fake_release_asset(release_dir, entry_name=entry_name)
+                    result = self.run_installer(
+                        tmp_path,
+                        release_dir,
+                        "--bin-dir",
+                        str(tmp_path / "bin"),
+                        "--no-modify-path",
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    output = result.stderr + result.stdout
+                    self.assertTrue(
+                        any(
+                            phrase in output
+                            for phrase in (
+                                "absolute path",
+                                "path traversal",
+                                "unexpected archive entry",
+                            )
+                        ),
+                        output,
+                    )
+
+    def test_installer_maps_supported_unix_platform_assets_and_rejects_unknown_arch(self):
+        cases = (
+            ("Linux", "x86_64", "llm-universal-proxy-linux-x86_64.tar.gz"),
+            ("Linux", "aarch64", "llm-universal-proxy-linux-aarch64.tar.gz"),
+            ("Linux", "arm64", "llm-universal-proxy-linux-aarch64.tar.gz"),
+            ("Darwin", "x86_64", "llm-universal-proxy-macos-x86_64.tar.gz"),
+            ("Darwin", "arm64", "llm-universal-proxy-macos-aarch64.tar.gz"),
+        )
+        for uname_s, uname_m, asset_name in cases:
+            with self.subTest(uname_s=uname_s, uname_m=uname_m):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmp_path = pathlib.Path(tmpdir)
+                    release_dir = tmp_path / "release"
+                    release_dir.mkdir()
+                    self.write_fake_release_asset(release_dir, asset_name=asset_name)
+                    result = self.run_installer(
+                        tmp_path,
+                        release_dir,
+                        "--bin-dir",
+                        str(tmp_path / "bin"),
+                        "--no-modify-path",
+                        extra_env={
+                            "LLMUP_INSTALL_UNAME_S": uname_s,
+                            "LLMUP_INSTALL_UNAME_M": uname_m,
+                        },
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = pathlib.Path(tmpdir)
+            release_dir = tmp_path / "release"
+            release_dir.mkdir()
+            result = self.run_installer(
+                tmp_path,
+                release_dir,
+                "--bin-dir",
+                str(tmp_path / "bin"),
+                "--no-modify-path",
+                extra_env={"LLMUP_INSTALL_UNAME_M": "sparc64"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unsupported architecture", result.stderr + result.stdout)
+
+    def test_installer_profile_marker_is_idempotent_unless_no_modify_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = pathlib.Path(tmpdir)
+            release_dir = tmp_path / "release"
+            release_dir.mkdir()
+            self.write_fake_release_asset(release_dir)
+            bin_dir = tmp_path / "home" / ".local" / "bin"
+
+            first = self.run_installer(tmp_path, release_dir)
+            second = self.run_installer(tmp_path, release_dir)
+
+            self.assertEqual(first.returncode, 0, first.stderr + first.stdout)
+            self.assertEqual(second.returncode, 0, second.stderr + second.stdout)
+            profile = tmp_path / "home" / ".profile"
+            text = profile.read_text(encoding="utf-8")
+            self.assertEqual(text.count(">>> llmup installer >>>"), 1)
+            self.assertIn(str(bin_dir / "llmup-config"), first.stdout)
+
+    def test_release_workflow_uploads_install_sh_asset_and_runs_installer_smoke(self):
+        release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        jobs = release_workflow_jobs()
+        installer_smoke = jobs.get("installer-smoke", "")
+        release_job = jobs.get("release", "")
+
+        self.assertTrue(installer_smoke, "release workflow must define installer-smoke")
+        for snippet in (
+            "Prepare install.sh release asset",
+            "artifacts/install.sh",
+            "__LLMUP_RELEASE_TAG__",
+            'replace("__LLMUP_RELEASE_TAG__", release_tag, 1)',
+            "${{ github.ref_name }}",
+            "Upload install.sh release asset",
+            "name: install-sh",
+            "path: artifacts/install.sh",
+            "Run installer smoke",
+            "LLMUP_INSTALL_BASE_URL",
+            "--bin-dir",
+            "--no-modify-path",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, installer_smoke)
+        for command in INSTALLER_SMOKE_COMMANDS:
+            with self.subTest(command=command):
+                self.assertIn(f'"$BIN_DIR"/{command}', installer_smoke)
+
+        self.assertIn("installer-smoke", job_needs(release_job))
+        self.assertIn("Download release artifacts", release_job)
+        self.assertIn("pattern: llm-universal-proxy-*", release_job)
+        self.assertIn("Download install.sh artifact", release_job)
+        self.assertIn("name: install-sh", release_job)
+        self.assertIn("path: artifacts/install-sh", release_job)
+        self.assertIn("artifacts/install-sh/install.sh", release_job)
+        self.assertIn("install.sh", release)
 
     def test_release_cli_wrapper_matrix_runs_structure_and_hermetic_interactive_gates(self):
         jobs = release_workflow_jobs()
@@ -539,6 +856,12 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
         for snippet in (
             "python3 scripts/real_endpoint_matrix.py --mock",
             "python3 scripts/real_cli_matrix.py --test basic --skip-slow --list-matrix",
+            "Installer Smoke",
+            "check_installer_release_contract",
+            "install.sh",
+            "LLMUP_INSTALL_BASE_URL",
+            "name: install-sh",
+            "artifacts/install-sh/install.sh",
             "python3 scripts/real_endpoint_matrix.py --mock --perf",
             "environment: release-compatible-provider",
             "COMPAT_PROVIDER_SECRET_ENVS",
@@ -574,6 +897,7 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
     def test_docs_record_local_and_protected_release_gates(self):
         ga_review = self.read_text("docs/ga-readiness-review.md")
         clients = self.read_text("docs/clients.md")
+        advanced_usage = self.read_text("docs/advanced-usage.md")
         container = self.read_text("docs/container.md")
 
         for snippet in (
@@ -592,10 +916,39 @@ class ReleaseGateWorkflowContractTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, ga_review)
 
-        self.assertIn("CLI wrapper matrix", clients)
-        self.assertIn("hermetic scripted interactive Codex wrapper gate", clients)
-        self.assertIn("not a full live multi-client/provider matrix", clients)
-        self.assertIn("MiniMax is only a replaceable OpenAI-compatible example", clients)
+        for snippet in (
+            "launcher-managed path",
+            "llmup-config",
+            "llmup-codex",
+            "llmup-claude",
+            "CODEX_HOME",
+            "CLAUDE_CONFIG_DIR",
+            "real provider secret out of the client process",
+            "Advanced Usage](./advanced-usage.md)",
+        ):
+            with self.subTest(client_doc_snippet=snippet):
+                self.assertIn(snippet, clients)
+        for snippet in (
+            "CLI wrapper matrix",
+            "hermetic scripted interactive Codex wrapper gate",
+            "not a full live multi-client/provider matrix",
+            "MiniMax is only a replaceable OpenAI-compatible example",
+            "scripts/run_codex_proxy.sh",
+            "scripts/run_claude_proxy.sh",
+        ):
+            with self.subTest(client_doc_forbidden_snippet=snippet):
+                self.assertNotIn(snippet, clients)
+
+        for snippet in (
+            "wire a client without the launchers",
+            "Manual Proxy Startup",
+            "Auth Modes",
+            "Manual Codex Wiring",
+            "Manual Claude Wiring",
+            "provider key belongs to the proxy",
+        ):
+            with self.subTest(advanced_doc_snippet=snippet):
+                self.assertIn(snippet, advanced_usage)
         self.assertIn("CLI wrapper matrix", container)
         self.assertIn("structure gate", container)
         self.assertIn("hermetic scripted interactive Codex wrapper gate", container)

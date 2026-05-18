@@ -4,10 +4,12 @@ This is the main docs entrypoint for `llmup`.
 
 Start here based on what you need:
 
-- [configuration.md](./configuration.md)
-  Static YAML configuration, static `data_auth`, provider credential sources, provider-neutral preset sources, full field reference, and upstream proxy support
 - [clients.md](./clients.md)
-  Codex, Claude Code, OpenAI-compatible client setup, and common client notes
+  Launcher-managed Codex and Claude Code setup
+- [advanced-usage.md](./advanced-usage.md)
+  Manual proxy startup, multi-endpoint YAML, manual Codex/Claude wiring, auth modes, Gemini through Google's OpenAI-compatible endpoint, and links to admin/container docs
+- [configuration.md](./configuration.md)
+  Static YAML configuration, provider credential sources, full field reference, and upstream proxy support
 - [container.md](./container.md)
   GHCR image usage, Docker Compose example, container smoke, and release policy
 - [admin-dynamic-config.md](./admin-dynamic-config.md)
@@ -18,10 +20,6 @@ Start here based on what you need:
   Pre-GA handoff plan for lightweight in-memory Responses continuation replay across protocol translation
 - [engineering/pre-ga-remove-native-gemini-format-plan.md](./engineering/pre-ga-remove-native-gemini-format-plan.md)
   Pre-GA handoff plan for removing native Google/Gemini wire-format support and using Gemini through OpenAI-compatible upstreams
-- [../examples/quickstart-provider-neutral.yaml](../examples/quickstart-provider-neutral.yaml)
-  Provider-neutral config source for the CLI-wrapper preset path
-- [../examples/quickstart-openai-minimax.yaml](../examples/quickstart-openai-minimax.yaml)
-  Historical concrete OpenAI + MiniMax example; MiniMax is not the GA-required provider path
 - [protocol-compatibility-matrix.md](./protocol-compatibility-matrix.md)
   Compatibility boundaries and portability summary
 - [max-compat-design.md](./max-compat-design.md)

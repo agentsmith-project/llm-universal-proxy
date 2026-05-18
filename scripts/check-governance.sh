@@ -102,68 +102,81 @@ check_absent() {
     fi
 }
 
-check_readme_container_release_semantics() {
+check_contains_all() {
     local file="$1"
-    local language="$2"
-    local readme_output
+    shift
+    local pattern
 
-    if ! readme_output="$(README_PATH="$file" README_LANGUAGE="$language" PUBLISHED_CONTAINER_RELEASE_TAG="$PUBLISHED_CONTAINER_RELEASE_TAG" NEXT_PACKAGE_VERSION="$NEXT_PACKAGE_VERSION" NEXT_RELEASE_TAG="$NEXT_RELEASE_TAG" python3 - <<'PY'
-import os
-import pathlib
-import re
-import sys
+    for pattern in "$@"; do
+        check_contains "$file" "$pattern"
+    done
+}
 
-path = pathlib.Path(os.environ["README_PATH"])
-language = os.environ["README_LANGUAGE"]
-published = os.environ["PUBLISHED_CONTAINER_RELEASE_TAG"]
-next_version = os.environ["NEXT_PACKAGE_VERSION"]
-next_tag = os.environ["NEXT_RELEASE_TAG"]
-text = " ".join(path.read_text(encoding="utf-8").split())
-failures = []
+check_absent_all() {
+    local file="$1"
+    shift
+    local pattern
 
-if language == "en":
-    required = (
-        f"The current published container release is `{published}`",
-        f"Cargo package version `{next_version}` is the next release identity, not a published container tag yet",
-    )
-    forbidden = (
-        (
-            rf"current published .*`{re.escape(next_tag)}`",
-            f"must not describe next release tag `{next_tag}` as the current published container release",
-        ),
-    )
-elif language == "zh":
-    required = (
-        f"当前已发布容器版本是 `{published}`",
-        f"Cargo package version `{next_version}` 是下一次 release identity，并不是已发布容器 tag",
-    )
-    forbidden = (
-        (
-            rf"当前已发布.*`{re.escape(next_tag)}`",
-            f"不能把下一次 release tag `{next_tag}` 写成当前已发布容器版本",
-        ),
-    )
-else:
-    print(f"unsupported README language contract: {language}", file=sys.stderr)
-    sys.exit(1)
+    for pattern in "$@"; do
+        check_absent "$file" "$pattern"
+    done
+}
 
-for snippet in required:
-    if snippet not in text:
-        failures.append(f"{path} is missing README container release semantics: {snippet}")
+check_user_tooling_doc_contract() {
+    local readme
 
-for pattern, message in forbidden:
-    if re.search(pattern, text, flags=re.IGNORECASE):
-        failures.append(f"{path} {message}")
+    for readme in "README.md" "README_CN.md"; do
+        check_contains_all "$readme" "install.sh" "llmup-config" "llmup-codex" "llmup-claude" "docs/advanced-usage.md"
+        check_absent_all "$readme" \
+            "llm-universal-proxy-macos-aarch64.tar.gz" \
+            ".local/bin/llm-universal-proxy" \
+            ".env.llmup.local" \
+            "scripts/run_codex_proxy.sh" \
+            "scripts/run_claude_proxy.sh" \
+            "--config-source" \
+            "--env-file" \
+            "--proxy-base" \
+            "--dangerous-harness" \
+            "provider_key_env:" \
+            "provider_key:" \
+            "model_aliases:" \
+            "data_auth:" \
+            "llmup-anthropic-like.yaml" \
+            "--model minimax" \
+            "--model my-claude-like-model" \
+            "wrapper 默认会临时使用"
+    done
 
-if failures:
-    print("\n".join(failures))
-    sys.exit(1)
-PY
-    )"; then
-        while IFS= read -r failure; do
-            [[ -n "$failure" ]] && FAILURES+=("$failure")
-        done <<< "$readme_output"
-    fi
+    check_contains_all "docs/clients.md" \
+        "launcher-managed" \
+        "llmup-config" \
+        "llmup-codex" \
+        "llmup-claude" \
+        "Advanced Usage"
+    check_absent_all "docs/clients.md" \
+        "OPENAI_API_KEY=dummy" \
+        "ANTHROPIC_API_KEY=dummy" \
+        "GEMINI_API_KEY=dummy" \
+        'OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY' \
+        'ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY' \
+        "client_provider_key" \
+        "llm-universal-proxy --config" \
+        "provider_key_env:" \
+        "provider_key:" \
+        "model_aliases:" \
+        "data_auth:"
+
+    check_contains_all "docs/advanced-usage.md" \
+        "Manual Proxy Startup" \
+        "Multi-Endpoint YAML" \
+        "Manual Codex Wiring" \
+        "Manual Claude Wiring" \
+        "llm-universal-proxy --config" \
+        'OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY' \
+        'ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY' \
+        "client_provider_key" \
+        "provider_key_env: GEMINI_API_KEY" \
+        "The provider key belongs to the proxy"
 }
 
 check_checkout_tag_visibility() {
@@ -449,6 +462,7 @@ import sys
 REQUIRED_RELEASE_GATE_NEEDS = (
     "mock-endpoint-matrix",
     "cli-wrapper-matrix",
+    "installer-smoke",
     "perf-gate",
     "compatible-provider-smoke",
     "supply-chain",
@@ -705,6 +719,56 @@ check_cli_wrapper_matrix_contract() {
     check_absent ".github/workflows/release.yml" "--mode real-provider-smoke"
 }
 
+check_installer_release_contract() {
+    check_contains "install.sh" "#!/bin/sh"
+    check_contains "install.sh" 'llm-universal-proxy-${asset_os}-${asset_arch}.tar.gz'
+    check_contains "install.sh" "LLMUP_INSTALL_BASE_URL"
+    check_contains "install.sh" "--bin-dir"
+    check_contains "install.sh" "--no-modify-path"
+    check_contains "install.sh" ".sha256"
+    check_contains "install.sh" "checksum mismatch"
+    check_contains "install.sh" "validate_archive"
+    check_contains "install.sh" "path traversal"
+    check_contains "install.sh" "absolute path"
+    check_contains "install.sh" "unexpected archive entry"
+    check_contains "install.sh" ".llmup-install-manifest"
+    check_contains "install.sh" "llmup-config"
+    check_contains "install.sh" "llmup-codex"
+    check_contains "install.sh" "llmup-claude"
+    check_contains "install.sh" "reopen your terminal"
+    check_contains "install.sh" "__LLMUP_RELEASE_TAG__"
+    check_absent "install.sh" "sudo"
+
+    if ! sh -n install.sh; then
+        FAILURES+=("install.sh must parse as POSIX sh")
+    fi
+
+    check_contains ".github/workflows/release.yml" "Installer Smoke"
+    check_contains ".github/workflows/release.yml" "Prepare install.sh release asset"
+    check_contains ".github/workflows/release.yml" "artifacts/install.sh"
+    check_contains ".github/workflows/release.yml" "__LLMUP_RELEASE_TAG__"
+    check_contains ".github/workflows/release.yml" 'replace("__LLMUP_RELEASE_TAG__", release_tag, 1)'
+    check_contains ".github/workflows/release.yml" '${{ github.ref_name }}'
+    check_contains ".github/workflows/release.yml" "Run installer smoke"
+    check_contains ".github/workflows/release.yml" "LLMUP_INSTALL_BASE_URL"
+    check_contains ".github/workflows/release.yml" "--bin-dir"
+    check_contains ".github/workflows/release.yml" "--no-modify-path"
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llm-universal-proxy --help'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llm-universal-proxy --version'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-config --help'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-config --version'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-codex --llmup-help'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-codex --llmup-version'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-claude --llmup-help'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-claude --llmup-version'
+    check_contains ".github/workflows/release.yml" "Upload install.sh release asset"
+    check_contains ".github/workflows/release.yml" "name: install-sh"
+    check_contains ".github/workflows/release.yml" "path: artifacts/install.sh"
+    check_contains ".github/workflows/release.yml" "Download install.sh artifact"
+    check_contains ".github/workflows/release.yml" "path: artifacts/install-sh"
+    check_contains ".github/workflows/release.yml" "artifacts/install-sh/install.sh"
+}
+
 if ! SECRET_SCAN_OUTPUT="$(scan_tracked_secret_risks)"; then
     while IFS= read -r failure; do
         [[ -n "$failure" ]] && FAILURES+=("$failure")
@@ -725,6 +789,7 @@ fi
 
 check_compatible_provider_smoke_invocation
 check_cli_wrapper_matrix_contract
+check_installer_release_contract
 
 check_checkout_tag_visibility
 check_governance_checkout_fetch_depth ".github/workflows/ci.yml"
@@ -836,6 +901,7 @@ check_contains ".github/workflows/release.yml" "Mock Endpoint Matrix"
 check_contains ".github/workflows/release.yml" "python3 scripts/real_endpoint_matrix.py --mock"
 check_contains ".github/workflows/release.yml" "CLI Wrapper Matrix"
 check_contains ".github/workflows/release.yml" "python3 scripts/real_cli_matrix.py --test basic --skip-slow --list-matrix"
+check_contains ".github/workflows/release.yml" "Installer Smoke"
 check_contains ".github/workflows/release.yml" "Perf Gate"
 check_contains ".github/workflows/release.yml" "python3 scripts/real_endpoint_matrix.py --mock --perf"
 check_contains ".github/workflows/release.yml" "Supply Chain"
@@ -880,28 +946,9 @@ check_contains ".github/workflows/release.yml" "path: artifacts/container-image.
 check_contains ".github/workflows/release.yml" "pattern: llm-universal-proxy-*"
 check_contains ".github/workflows/release.yml" "IMAGE=llm-universal-proxy:release-smoke bash scripts/test_container_smoke.sh"
 
+check_user_tooling_doc_contract
 check_contains "docs/README.md" "container.md"
 check_contains "README.md" "docs/container.md"
-check_contains "README_CN.md" "不用 Docker，也不用先学完整配置，先把本地二进制跑起来"
-check_contains "README_CN.md" "llm-universal-proxy-macos-aarch64.tar.gz"
-check_contains "README_CN.md" ".local/bin/llm-universal-proxy"
-check_contains "README_CN.md" ".env.llmup.local"
-check_contains "README_CN.md" "provider_key:"
-check_contains "README_CN.md" "env: MINIMAX_API_KEY"
-check_contains "README_CN.md" "https://api.minimax.io/v1"
-check_contains "README_CN.md" "https://api.minimaxi.com/v1"
-check_contains "README_CN.md" "--model minimax"
-check_contains "README_CN.md" "llmup-anthropic-like.yaml"
-check_contains "README_CN.md" "--model my-claude-like-model"
-check_contains "README_CN.md" 'wrapper 默认会临时使用 `18888` 端口'
-check_absent "README_CN.md" "preset-openai-compatible"
-check_absent "README_CN.md" "preset-anthropic-compatible"
-check_absent "README_CN.md" "## 容器镜像"
-check_absent "README_CN.md" "## 动态配置概要"
-check_contains "README.md" "${PUBLISHED_CONTAINER_RELEASE_TAG}"
-check_contains "README.md" "${NEXT_PACKAGE_VERSION}"
-check_readme_container_release_semantics "README.md" en
-check_absent "README.md" "${PUBLISHED_CONTAINER_IMAGE}:${NEXT_RELEASE_TAG}"
 check_contains "$CONTAINER_IMAGE_MANIFEST" '"published"'
 check_contains "$CONTAINER_IMAGE_MANIFEST" '"next_release"'
 check_contains "docs/container.md" "ghcr.io/agentsmith-project/llm-universal-proxy"
@@ -929,12 +976,6 @@ check_contains "docs/container.md" "LLM_UNIVERSAL_PROXY_KEY"
 check_contains "docs/container.md" "provider_key_env"
 check_contains "docs/container.md" "Do not mount the local quickstart config unchanged for container service mode"
 check_contains "docs/container.md" "Do not use the unedited example config for real provider requests"
-check_absent "docs/clients.md" "OPENAI_API_KEY=dummy"
-check_absent "docs/clients.md" "ANTHROPIC_API_KEY=dummy"
-check_absent "docs/clients.md" "GEMINI_API_KEY=dummy"
-check_contains "docs/clients.md" 'OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY'
-check_contains "docs/clients.md" 'ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY'
-check_contains "docs/clients.md" 'client_provider_key` mode, set these SDK keys to the real provider key'
 check_contains "docs/admin-dynamic-config.md" "do not introduce a separate service key"
 check_absent "docs/admin-dynamic-config.md" "fallback credential"
 check_absent "docs/admin-dynamic-config.md" "fallback_credential"

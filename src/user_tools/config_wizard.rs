@@ -1,0 +1,485 @@
+use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::path::PathBuf;
+
+use uuid::Uuid;
+
+use super::{env_path_or_default, home_dir_from_env};
+use crate::Config;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderInterface {
+    OpenAi,
+    Anthropic,
+    OpenAiResponses,
+}
+
+impl ProviderInterface {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "openai" | "openai-completion" => Ok(Self::OpenAi),
+            "anthropic" | "claude" => Ok(Self::Anthropic),
+            "openai-responses" | "responses" => Ok(Self::OpenAiResponses),
+            other => Err(format!(
+                "unsupported --interface `{other}`; use openai, anthropic, or openai-responses"
+            )),
+        }
+    }
+
+    fn config_format(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai-completion",
+            Self::Anthropic => "anthropic",
+            Self::OpenAiResponses => "openai-responses",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiKeySource {
+    Stdin,
+    Env(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitCliOptions {
+    pub interface: ProviderInterface,
+    pub model_service_url: String,
+    pub model_name: String,
+    pub model_alias: String,
+    pub force: bool,
+    pub api_key_source: ApiKeySource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigCommand {
+    Interactive,
+    Help,
+    Version,
+    Init(InitCliOptions),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitOptions {
+    pub llmup_home: PathBuf,
+    pub codex_home: PathBuf,
+    pub claude_config_dir: PathBuf,
+    pub interface: ProviderInterface,
+    pub model_service_url: String,
+    pub model_name: String,
+    pub model_alias: String,
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitResult {
+    pub config_path: PathBuf,
+    pub secrets_path: PathBuf,
+    pub codex_home: PathBuf,
+    pub claude_config_dir: PathBuf,
+    pub summary: String,
+}
+
+const CONFIG_HELP: &str = "\
+llmup-config
+
+Usage:
+  llmup-config
+  llmup-config --help
+  llmup-config --version
+
+Configure llmup for local Codex CLI and Claude Code launchers.
+";
+
+pub fn parse_config_args(
+    args: impl IntoIterator<Item = OsString>,
+) -> Result<ConfigCommand, String> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    if args.is_empty() {
+        return Ok(ConfigCommand::Interactive);
+    }
+    if args.len() == 1 {
+        if args[0] == "--help" || args[0] == "-h" {
+            return Ok(ConfigCommand::Help);
+        }
+        if args[0] == "--version" {
+            return Ok(ConfigCommand::Version);
+        }
+    }
+
+    let Some(first) = args.first().and_then(|item| item.to_str()) else {
+        return Err("llmup-config arguments must be valid UTF-8".to_string());
+    };
+    if first != "init" {
+        return Err(format!("unknown llmup-config command `{first}`"));
+    }
+    parse_hidden_init_args(&args[1..]).map(ConfigCommand::Init)
+}
+
+pub fn run_cli(
+    args: impl IntoIterator<Item = OsString>,
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+) -> Result<i32, String> {
+    match parse_config_args(args)? {
+        ConfigCommand::Help => {
+            stdout
+                .write_all(CONFIG_HELP.as_bytes())
+                .map_err(|error| format!("failed to write help: {error}"))?;
+            Ok(0)
+        }
+        ConfigCommand::Version => {
+            writeln!(
+                stdout,
+                "llmup {}",
+                option_env!("CARGO_PKG_VERSION").unwrap_or("unknown")
+            )
+            .map_err(|error| format!("failed to write version: {error}"))?;
+            Ok(0)
+        }
+        ConfigCommand::Interactive => {
+            stdout
+                .write_all(CONFIG_HELP.as_bytes())
+                .map_err(|error| format!("failed to write help: {error}"))?;
+            Ok(0)
+        }
+        ConfigCommand::Init(init) => {
+            let api_key = match init.api_key_source {
+                ApiKeySource::Stdin => read_api_key_from_stdin(stdin)?,
+                ApiKeySource::Env(name) => std::env::var(&name).map_err(|error| {
+                    format!("failed to read API key from environment variable `{name}`: {error}")
+                })?,
+            };
+            let home = home_dir_from_env()?;
+            let llmup_home = env_path_or_default("LLMUP_HOME", home.join(".llmup"));
+            let options = InitOptions {
+                codex_home: env_path_or_default("LLMUP_CODEX_HOME", home.join(".llmup-codex")),
+                claude_config_dir: env_path_or_default(
+                    "LLMUP_CLAUDE_CONFIG_DIR",
+                    home.join(".llmup-claude"),
+                ),
+                llmup_home,
+                interface: init.interface,
+                model_service_url: init.model_service_url,
+                model_name: init.model_name,
+                model_alias: init.model_alias,
+                force: init.force,
+            };
+            let result = init_non_interactive(options, &api_key)?;
+            stdout
+                .write_all(result.summary.as_bytes())
+                .map_err(|error| format!("failed to write summary: {error}"))?;
+            Ok(0)
+        }
+    }
+}
+
+pub fn init_non_interactive(options: InitOptions, api_key: &str) -> Result<InitResult, String> {
+    validate_plain_yaml_scalar("model-service-url", &options.model_service_url)?;
+    validate_plain_yaml_scalar("model-name", &options.model_name)?;
+    validate_alias(&options.model_alias)?;
+    if api_key.trim().is_empty() {
+        return Err("API key must not be empty".to_string());
+    }
+
+    let config_path = options.llmup_home.join("config.yaml");
+    let secrets_path = options.llmup_home.join("secrets.env");
+    if !options.force {
+        if config_path.exists() {
+            return Err(format!(
+                "{} already exists; rerun hidden init with --force to replace it",
+                config_path.display()
+            ));
+        }
+        if secrets_path.exists() {
+            return Err(format!(
+                "{} already exists; rerun hidden init with --force to replace it",
+                secrets_path.display()
+            ));
+        }
+    }
+
+    fs::create_dir_all(&options.llmup_home).map_err(|error| {
+        format!(
+            "failed to create llmup home {}: {error}",
+            options.llmup_home.display()
+        )
+    })?;
+    fs::create_dir_all(&options.codex_home).map_err(|error| {
+        format!(
+            "failed to create Codex home {}: {error}",
+            options.codex_home.display()
+        )
+    })?;
+    fs::create_dir_all(&options.claude_config_dir).map_err(|error| {
+        format!(
+            "failed to create Claude config dir {}: {error}",
+            options.claude_config_dir.display()
+        )
+    })?;
+
+    let config_yaml = generated_config_yaml(&options);
+    let parsed = Config::from_yaml_str(&config_yaml)?;
+    parsed.validate()?;
+
+    let proxy_key = format!("llmup-local-{}", Uuid::new_v4().simple());
+    let secrets =
+        format!("LLM_UNIVERSAL_PROXY_KEY={proxy_key}\nLLMUP_PROVIDER_DEFAULT_API_KEY={api_key}\n");
+    super::env_file::parse_env_file_str(&secrets)?;
+
+    write_text_file(&config_path, &config_yaml, options.force)?;
+    write_secret_file(&secrets_path, &secrets, options.force)?;
+
+    let summary = format!(
+        "Wrote llmup config: {}\nWrote local secrets: {}\nModel alias: {}\nNext: run llmup-codex or llmup-claude.\n",
+        config_path.display(),
+        secrets_path.display(),
+        options.model_alias
+    );
+
+    Ok(InitResult {
+        config_path,
+        secrets_path,
+        codex_home: options.codex_home,
+        claude_config_dir: options.claude_config_dir,
+        summary,
+    })
+}
+
+fn parse_hidden_init_args(args: &[OsString]) -> Result<InitCliOptions, String> {
+    let mut non_interactive = false;
+    let mut interface = ProviderInterface::OpenAi;
+    let mut model_service_url = None;
+    let mut model_name = None;
+    let mut model_alias = "default".to_string();
+    let mut force = false;
+    let mut api_key_source = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index]
+            .to_str()
+            .ok_or_else(|| "llmup-config init arguments must be valid UTF-8".to_string())?;
+        match arg {
+            "--non-interactive" => {
+                non_interactive = true;
+                index += 1;
+            }
+            "--force" => {
+                force = true;
+                index += 1;
+            }
+            "--api-key-stdin" => {
+                set_api_key_source(&mut api_key_source, ApiKeySource::Stdin)?;
+                index += 1;
+            }
+            "--api-key" => {
+                return Err(
+                    "--api-key <value> is not supported; use --api-key-stdin or --api-key-env"
+                        .to_string(),
+                );
+            }
+            value if value.starts_with("--api-key=") => {
+                return Err(
+                    "--api-key=<value> is not supported; use --api-key-stdin or --api-key-env"
+                        .to_string(),
+                );
+            }
+            _ => {
+                if let Some(value) = inline_value(arg, "--interface") {
+                    interface = ProviderInterface::parse(value)?;
+                    index += 1;
+                } else if arg == "--interface" {
+                    let value = take_utf8_value(args, &mut index, "--interface")?;
+                    interface = ProviderInterface::parse(&value)?;
+                } else if let Some(value) = inline_value(arg, "--model-service-url") {
+                    model_service_url = Some(value.to_string());
+                    index += 1;
+                } else if arg == "--model-service-url" {
+                    model_service_url =
+                        Some(take_utf8_value(args, &mut index, "--model-service-url")?);
+                } else if let Some(value) = inline_value(arg, "--model-name") {
+                    model_name = Some(value.to_string());
+                    index += 1;
+                } else if arg == "--model-name" {
+                    model_name = Some(take_utf8_value(args, &mut index, "--model-name")?);
+                } else if let Some(value) = inline_value(arg, "--model-alias") {
+                    model_alias = value.to_string();
+                    index += 1;
+                } else if arg == "--model-alias" {
+                    model_alias = take_utf8_value(args, &mut index, "--model-alias")?;
+                } else if let Some(value) = inline_value(arg, "--api-key-env") {
+                    set_api_key_source(&mut api_key_source, ApiKeySource::Env(value.to_string()))?;
+                    index += 1;
+                } else if arg == "--api-key-env" {
+                    let value = take_utf8_value(args, &mut index, "--api-key-env")?;
+                    set_api_key_source(&mut api_key_source, ApiKeySource::Env(value))?;
+                } else {
+                    return Err(format!("unknown llmup-config init argument `{arg}`"));
+                }
+            }
+        }
+    }
+
+    if !non_interactive {
+        return Err("hidden init requires --non-interactive".to_string());
+    }
+
+    Ok(InitCliOptions {
+        interface,
+        model_service_url: model_service_url
+            .ok_or_else(|| "--model-service-url is required".to_string())?,
+        model_name: model_name.ok_or_else(|| "--model-name is required".to_string())?,
+        model_alias,
+        force,
+        api_key_source: api_key_source
+            .ok_or_else(|| "--api-key-stdin or --api-key-env is required".to_string())?,
+    })
+}
+
+fn set_api_key_source(
+    target: &mut Option<ApiKeySource>,
+    source: ApiKeySource,
+) -> Result<(), String> {
+    if target.replace(source).is_some() {
+        return Err("choose only one of --api-key-stdin or --api-key-env".to_string());
+    }
+    Ok(())
+}
+
+fn inline_value<'a>(arg: &'a str, flag: &str) -> Option<&'a str> {
+    arg.strip_prefix(flag)?.strip_prefix('=')
+}
+
+fn take_utf8_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String, String> {
+    *index += 1;
+    let value = args
+        .get(*index)
+        .ok_or_else(|| format!("missing value for {flag}"))?
+        .to_str()
+        .ok_or_else(|| format!("{flag} value must be valid UTF-8"))?
+        .to_string();
+    *index += 1;
+    Ok(value)
+}
+
+fn read_api_key_from_stdin(stdin: &mut dyn Read) -> Result<String, String> {
+    let mut input = String::new();
+    stdin
+        .read_to_string(&mut input)
+        .map_err(|error| format!("failed to read API key from stdin: {error}"))?;
+    while input.ends_with('\n') || input.ends_with('\r') {
+        input.pop();
+    }
+    if input.trim().is_empty() {
+        return Err("API key read from stdin must not be empty".to_string());
+    }
+    Ok(input)
+}
+
+fn generated_config_yaml(options: &InitOptions) -> String {
+    format!(
+        "\
+listen: 127.0.0.1:8080
+upstream_timeout_secs: 120
+
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+
+upstreams:
+  DEFAULT:
+    api_root: {api_root}
+    format: {format}
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+    surface_defaults:
+      modalities:
+        input: [\"text\"]
+        output: [\"text\"]
+      tools:
+        supports_search: false
+        supports_view_image: false
+        apply_patch_transport: freeform
+        supports_parallel_calls: false
+
+model_aliases:
+  {alias}: DEFAULT:{model}
+",
+        api_root = options.model_service_url,
+        format = options.interface.config_format(),
+        alias = options.model_alias,
+        model = options.model_name
+    )
+}
+
+fn validate_plain_yaml_scalar(name: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("{name} must not be empty"));
+    }
+    if value.trim() != value || value.contains('\n') || value.contains('\r') {
+        return Err(format!("{name} must be a single non-whitespace line"));
+    }
+    if value.contains('#') {
+        return Err(format!("{name} must not contain YAML comment syntax"));
+    }
+    Ok(())
+}
+
+fn validate_alias(value: &str) -> Result<(), String> {
+    validate_plain_yaml_scalar("model-alias", value)?;
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    {
+        return Err(
+            "model-alias may only contain ASCII letters, digits, underscore, dash, and dot"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn write_text_file(path: &PathBuf, contents: &str, force: bool) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true);
+    if force {
+        options.truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn write_secret_file(path: &PathBuf, contents: &str, force: bool) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true);
+    if force {
+        options.truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("failed to chmod {}: {error}", path.display()))?;
+    }
+    Ok(())
+}

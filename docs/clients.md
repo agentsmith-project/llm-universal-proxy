@@ -1,184 +1,46 @@
 # Client Setup Guide
 
-This guide explains how to connect Codex CLI and Claude Code to `llmup`.
+This guide covers the launcher-managed path for Codex CLI and Claude Code.
 
-Use the wrapper scripts first. They are the least fragile path because they isolate local client state, hydrate provider-neutral preset variables, inject the correct base URL, and add client-specific metadata where needed.
-
-The quickstart config source used throughout this guide is [examples/quickstart-provider-neutral.yaml](../examples/quickstart-provider-neutral.yaml). Its stable aliases are:
-
-- `preset-openai-compatible` for OpenAI-compatible providers
-- `preset-anthropic-compatible` for Anthropic-compatible providers
-
-MiniMax is only a replaceable OpenAI-compatible example when a user chooses it, not a GA-required provider and not the main CLI-wrapper preset path. Release/GA live evidence should use provider-neutral compatible configuration rather than treating any named provider as required.
-
-## Preset Environment
-
-Before running a managed wrapper session, export:
+Start from the same user flow as the homepage:
 
 ```bash
-export PRESET_OPENAI_ENDPOINT_BASE_URL="https://openai-compatible.example/v1"
-export PRESET_ANTHROPIC_ENDPOINT_BASE_URL="https://anthropic-compatible.example/v1"
-export PRESET_ENDPOINT_MODEL="provider-model-id"
-export PRESET_ENDPOINT_API_KEY="provider-api-key"
+llmup-config
 ```
 
-`PRESET_OPENAI_ENDPOINT_BASE_URL` is the OpenAI-compatible API root, `PRESET_ANTHROPIC_ENDPOINT_BASE_URL` is the Anthropic-compatible API root, `PRESET_ENDPOINT_MODEL` is the real provider model ID hydrated into both preset aliases, and `PRESET_ENDPOINT_API_KEY` is the server-side provider credential. These placeholders are rendered by the wrapper before proxy startup; a directly loaded static YAML file should use concrete URL and model values.
-
-## Recommended Path: Start With the Wrapper Scripts
-
-Use the wrapper scripts in `scripts/`:
-
-- `scripts/run_codex_proxy.sh`
-- `scripts/run_claude_proxy.sh`
-
-Each wrapper supports two modes:
-
-- connect to an already running proxy with `--proxy-base`
-- let the wrapper start and stop the proxy for you by omitting `--proxy-base`
-
-If you already have a proxy process running, pass `--proxy-base`. If you omit it, the wrapper starts the proxy, waits for `/health`, launches the client, and stops the proxy when the session exits.
-
-Wrapper commands are safe by default: they do not pass no-sandbox, `yolo`, or permission-bypass flags. Disposable local harness runs that intentionally need client-specific bypass behavior must opt in with `--dangerous-harness`.
-
-## Basic Client Commands
-
-### Codex CLI
-
-Managed mode, where the wrapper renders the preset config and starts the proxy:
+Then choose the client you use:
 
 ```bash
-./scripts/run_codex_proxy.sh \
-  --config-source examples/quickstart-provider-neutral.yaml \
-  --workspace "$PWD" \
-  --model preset-openai-compatible
+llmup-codex
+# or
+llmup-claude
 ```
 
-Connect Codex to an already running proxy:
+Run the launcher for the client you want. `llmup-codex` behaves like Codex CLI with llmup proxy setup added. `llmup-claude` behaves like Claude Code with llmup proxy setup added.
 
-```bash
-./scripts/run_codex_proxy.sh \
-  --proxy-base http://127.0.0.1:8080 \
-  --config-source examples/quickstart-provider-neutral.yaml \
-  --workspace "$PWD" \
-  --model preset-openai-compatible
-```
+## What The Launchers Manage
 
-Codex benefits the most from the wrapper because it fetches live `llmup.surface` metadata from the proxy model catalog and writes the temporary catalog payload from that runtime truth, instead of relying on legacy hard-coded Codex assumptions or the unknown-model fallback path.
+The launchers own the repetitive local wiring:
 
-For throwaway harness work only, `--dangerous-harness` allows the wrapper to pass Codex's bypass flag. Leave it off for normal use.
+- start and stop the local proxy for the session
+- inject the client base URL and local proxy key
+- keep the real provider secret out of the client process
+- set the default llmup model alias
+- keep native Codex or Claude Code arguments available for the real client
+- keep client state in llmup-owned directories
 
-### Claude Code
+Codex state is kept under `~/.llmup-codex` by default and exposed to Codex through `CODEX_HOME`. Claude Code state is kept under `~/.llmup-claude` by default and exposed through `CLAUDE_CONFIG_DIR`.
 
-```bash
-./scripts/run_claude_proxy.sh \
-  --config-source examples/quickstart-provider-neutral.yaml \
-  --workspace "$PWD" \
-  --model preset-anthropic-compatible
-```
+The original home directory is not rewritten by default, so tools that run inside Codex or Claude Code can still find normal git, SSH, package-manager, and language-tool caches.
 
-Attach to an existing proxy:
+## Native Arguments
 
-```bash
-./scripts/run_claude_proxy.sh \
-  --proxy-base http://127.0.0.1:8080 \
-  --config-source examples/quickstart-provider-neutral.yaml \
-  --workspace "$PWD" \
-  --model preset-anthropic-compatible
-```
+After llmup consumes its own launcher controls, remaining arguments are passed through to the native client. That means common Codex and Claude Code workflows such as resume, help, MCP management, profiles, permission modes, or one-off model overrides stay native client behavior.
 
-For throwaway harness work only, `--dangerous-harness` allows the wrapper to pass Claude's permission-skip flag. Leave it off for normal use.
+Use `llmup-codex --llmup-help` or `llmup-claude --llmup-help` for launcher-specific help. Native client help remains owned by Codex CLI or Claude Code.
 
-## Client Base URL vs Server Route
+## Auth Boundary
 
-The wrapper configures the client base URL, and the client appends its own protocol path on top.
+`llmup-config` stores provider credentials for the proxy. The launchers give Codex or Claude Code only the local proxy credential needed to call the proxy. This keeps the provider key on the proxy side instead of putting it into the client environment.
 
-That distinction matters because the values you set in client env vars are not the same string as the server route that eventually receives the request.
-
-For Codex specifically, the wrapper currently fixes `wire_api="responses"`. That means Codex is wired to the Responses surface here, not to Chat Completions.
-
-| Client | Wrapper-configured base URL | What the client appends | Server route that receives the request |
-| --- | --- | --- | --- |
-| Codex CLI | `OPENAI_BASE_URL=<proxy>/openai/v1` | `/responses` | `/openai/v1/responses` |
-| Claude Code | `ANTHROPIC_BASE_URL=<proxy>/anthropic` | `/v1/messages` | `/anthropic/v1/messages` |
-
-That is why the homepage no longer presents one flat endpoint table for manual client setup. For Codex and Claude, the wrapper-level base URL and the server-side route live at different layers.
-
-## Reasoning And Continuity Boundaries
-
-Reasoning effort such as `xhigh` is still a request-side or client-side setting. Keep that out of the alias name.
-
-Responses reasoning/compaction continuity is intentionally bounded for cross-provider routes: maximum safe compatibility may emit a portability warning and omit an opaque carrier only when visible summary text or visible transcript history remains. Opaque-only reasoning and opaque-only compaction fail closed as a hard portability boundary, and provider-owned state is preserved only when same-wire-protocol handling can remain byte-preserving internally.
-
-## Manual Wiring Without Wrappers
-
-Wrappers are still recommended, but the underlying client contracts are straightforward if you prefer to wire things by hand.
-
-The release CLI wrapper matrix currently gates the wrapper surface in two deterministic parts: a structure gate that expands the tracked basic matrix for Codex CLI and Claude Code, plus a hermetic scripted interactive Codex wrapper gate. That gate executes `scripts/run_codex_proxy.sh` with a fake Codex binary and fake local proxy for two stdin turns. This is not a full live multi-client/provider matrix; real live client evidence remains final GA/operator validation when those CLIs and provider credentials are available.
-
-Prefer static `data_auth` for the proxy key; `LLM_UNIVERSAL_PROXY_AUTH_MODE` and `LLM_UNIVERSAL_PROXY_KEY` remain the compatibility environment fallback when `data_auth` is omitted. In `proxy_key` mode, set each client SDK key below to `$LLM_UNIVERSAL_PROXY_KEY`; configure the upstream provider credential server-side with `provider_key.inline`, `provider_key.env`, or legacy `provider_key_env`. In `client_provider_key` mode, set these SDK keys to the real provider key for the selected upstream.
-
-### Codex
-
-Set:
-
-- `OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY`
-- `OPENAI_BASE_URL=<proxy>/openai/v1`
-
-If you configure Codex's custom provider manually with `-c`, bind that provider to the same key:
-
-- `model_provider="proxy"`
-- `model_providers.proxy.name="Proxy"`
-- `model_providers.proxy.env_key="OPENAI_API_KEY"`
-- `model_providers.proxy.base_url="<proxy>/openai/v1"`
-- `model_providers.proxy.wire_api="responses"`
-- `model_providers.proxy.supports_websockets=false`
-
-Codex then calls the OpenAI-style surface, typically `POST /openai/v1/responses`.
-
-### Claude Code
-
-Set:
-
-- `ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY`
-- `ANTHROPIC_BASE_URL=<proxy>/anthropic`
-
-Claude then appends `/v1/messages`, which lands on `POST /anthropic/v1/messages`.
-
-### Gemini Models
-
-Gemini remains usable as a provider brand through Google's OpenAI-compatible endpoint. Configure it as an OpenAI-compatible upstream and use Codex or any OpenAI-compatible client surface:
-
-```yaml
-upstreams:
-  GOOGLE-OPENAI-COMPATIBLE:
-    api_root: https://generativelanguage.googleapis.com/v1beta/openai
-    format: openai-completion
-    provider_key_env: GEMINI_API_KEY
-model_aliases:
-  gemini-flash: GOOGLE-OPENAI-COMPATIBLE:gemini-2.0-flash
-```
-
-Native Gemini CLI wiring and the `/google/v1beta/*` proxy surface are retired; `format: google` and `format: gemini` fail closed at config load.
-
-## Picking Model Names
-
-Clients can use either:
-
-- a stable alias from `model_aliases`, such as `preset-openai-compatible` or `preset-anthropic-compatible`
-- an explicit upstream-qualified name such as `PRESET-OPENAI-COMPATIBLE:provider-model-id`
-
-Aliases are the better default for day-to-day client use because they decouple the client from provider-specific model IDs.
-
-## A Good First Setup
-
-If you are new to the project, use this order:
-
-1. start from [examples/quickstart-provider-neutral.yaml](../examples/quickstart-provider-neutral.yaml)
-2. export the four `PRESET_*` variables
-3. attach Codex with `--model preset-openai-compatible`, or Claude Code with `--model preset-anthropic-compatible`
-4. confirm the wrapper-managed session works
-5. replace the preset endpoints with a concrete provider config only after the provider-neutral path is healthy
-
-For the YAML side, see [Configuration Guide](./configuration.md).
-
-For runtime updates and admin views, see [Admin and Dynamic Config](./admin-dynamic-config.md).
+For manual auth modes, explicit base URLs, direct proxy startup, multi-endpoint YAML, Gemini through Google's OpenAI-compatible endpoint, or container/admin links, use [Advanced Usage](./advanced-usage.md).

@@ -782,39 +782,110 @@ os.execv(real_git, [real_git, *args])
             + "\n".join(violations),
         )
 
-    def test_governance_blocks_dummy_sdk_keys_and_stale_fallback_credential_docs(self):
+    def test_user_entry_docs_do_not_leak_advanced_setup_or_dummy_sdk_keys(self):
         script = GOVERNANCE_SCRIPT.read_text(encoding="utf-8")
-        clients_doc = (REPO_ROOT / "docs" / "clients.md").read_text(encoding="utf-8")
+        entry_readmes = {
+            "README.md": (REPO_ROOT / "README.md").read_text(encoding="utf-8"),
+            "README_CN.md": (REPO_ROOT / "README_CN.md").read_text(encoding="utf-8"),
+        }
+        clients_doc = (REPO_ROOT / "docs" / "clients.md").read_text(
+            encoding="utf-8"
+        )
+        user_entry_docs = {**entry_readmes, "docs/clients.md": clients_doc}
+        advanced_doc = (REPO_ROOT / "docs" / "advanced-usage.md").read_text(
+            encoding="utf-8"
+        )
         admin_doc = (REPO_ROOT / "docs" / "admin-dynamic-config.md").read_text(
             encoding="utf-8"
         )
 
         for snippet in (
-            'check_absent "docs/clients.md" "OPENAI_API_KEY=dummy"',
-            'check_absent "docs/clients.md" "ANTHROPIC_API_KEY=dummy"',
-            'check_absent "docs/clients.md" "GEMINI_API_KEY=dummy"',
+            "check_user_tooling_doc_contract",
+            'check_contains_all "$readme" "install.sh" "llmup-config" "llmup-codex" "llmup-claude" "docs/advanced-usage.md"',
+            'check_absent_all "$readme"',
+            'check_contains_all "docs/clients.md"',
+            'check_absent_all "docs/clients.md"',
+            'check_contains_all "docs/advanced-usage.md"',
             'check_absent "docs/admin-dynamic-config.md" "fallback credential"',
             'check_absent "docs/admin-dynamic-config.md" "fallback_credential"',
         ):
             with self.subTest(governance_snippet=snippet):
                 self.assertIn(snippet, script)
 
+        for stale_snippet in (
+            "check_readme_container_release_semantics",
+            'check_contains "README_CN.md" "llm-universal-proxy-macos-aarch64.tar.gz"',
+            'check_contains "README_CN.md" ".env.llmup.local"',
+            'check_contains "README.md" "${PUBLISHED_CONTAINER_RELEASE_TAG}"',
+            'check_contains "README.md" "${NEXT_PACKAGE_VERSION}"',
+            'check_contains "docs/clients.md" \'OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY\'',
+            "client_provider_key` mode, set these SDK keys",
+        ):
+            with self.subTest(stale_governance_snippet=stale_snippet):
+                self.assertNotIn(stale_snippet, script)
+
         for forbidden in (
             "OPENAI_API_KEY=dummy",
             "ANTHROPIC_API_KEY=dummy",
             "GEMINI_API_KEY=dummy",
+            "git clone",
+            "cargo build",
+            "llm-universal-proxy-macos-aarch64.tar.gz",
+            ".local/bin/llm-universal-proxy",
+            ".env.llmup.local",
+            "scripts/run_codex_proxy.sh",
+            "scripts/run_claude_proxy.sh",
+            "--config-source",
+            "--env-file",
+            "--proxy-base",
+            "--dangerous-harness",
+            "provider_key_env:",
+            "provider_key:",
+            "model_aliases:",
+            "data_auth:",
         ):
-            with self.subTest(forbidden=forbidden):
+            for path, text in user_entry_docs.items():
+                with self.subTest(path=path, forbidden=forbidden):
+                    self.assertNotIn(forbidden, text)
+
+        for snippet in (
+            "llmup-config",
+            "llmup-codex",
+            "llmup-claude",
+            "advanced-usage.md",
+        ):
+            for path, text in user_entry_docs.items():
+                with self.subTest(path=path, user_snippet=snippet):
+                    self.assertIn(snippet, text)
+
+        for path, text in entry_readmes.items():
+            with self.subTest(path=path, user_snippet="install.sh"):
+                self.assertIn("install.sh", text)
+
+        self.assertIn("launcher-managed", clients_doc)
+        for forbidden in (
+            "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "client_provider_key",
+            "llm-universal-proxy --config",
+        ):
+            with self.subTest(path="docs/clients.md", forbidden=forbidden):
                 self.assertNotIn(forbidden, clients_doc)
 
         for snippet in (
+            "Manual Proxy Startup",
+            "Multi-Endpoint YAML",
+            "Manual Codex Wiring",
+            "Manual Claude Wiring",
+            "llm-universal-proxy --config",
             "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
             "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
-            "`client_provider_key` mode, set these SDK keys to the real provider key",
+            "In `client_provider_key` mode, the client SDK key is the real provider key",
             "provider_key_env: GEMINI_API_KEY",
+            "The provider key belongs to the proxy",
         ):
-            with self.subTest(clients_snippet=snippet):
-                self.assertIn(snippet, clients_doc)
+            with self.subTest(advanced_snippet=snippet):
+                self.assertIn(snippet, advanced_doc)
 
         for forbidden in ("fallback credential", "fallback_credential"):
             with self.subTest(forbidden=forbidden):

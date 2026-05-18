@@ -1,51 +1,46 @@
-import importlib.util
 import pathlib
 import re
-import sys
 import unittest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-REAL_CLI_MATRIX_PATH = REPO_ROOT / "scripts" / "real_cli_matrix.py"
-QUICKSTART_CONFIG_PATHS = (
-    "README.md",
-    "examples/quickstart-provider-neutral.yaml",
-)
-QUICKSTART_ALIASES = (
-    "preset-openai-compatible",
-    "preset-anthropic-compatible",
-)
-PRESET_ENV_KEYS = (
-    "PRESET_OPENAI_ENDPOINT_BASE_URL",
-    "PRESET_ANTHROPIC_ENDPOINT_BASE_URL",
-    "PRESET_ENDPOINT_MODEL",
-    "PRESET_ENDPOINT_API_KEY",
+INSTALLER_COMMAND = (
+    "curl --proto '=https' --tlsv1.2 -fsSL "
+    "https://github.com/agentsmith-project/llm-universal-proxy/releases/latest/download/install.sh | sh"
 )
 USER_ENTRY_DOCS = (
     "README.md",
-    "docs/configuration.md",
+    "README_CN.md",
     "docs/clients.md",
 )
-REASONING_COMPACTION_BOUNDARY_SNIPPETS = (
-    "maximum safe compatibility",
-    "visible summary",
-    "visible transcript",
-    "opaque-only reasoning",
-    "opaque-only compaction",
-    "hard portability boundary",
-    "provider-owned state",
+README_ENTRY_DOCS = (
+    "README.md",
+    "README_CN.md",
 )
-
-
-def load_real_cli_matrix():
-    spec = importlib.util.spec_from_file_location(
-        "real_cli_matrix_docs_homepage_contract",
-        REAL_CLI_MATRIX_PATH,
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+ADVANCED_DOC = "docs/advanced-usage.md"
+ADVANCED_LINKS = (
+    "docs/advanced-usage.md",
+    "docs/clients.md",
+    "docs/container.md",
+    "docs/admin-dynamic-config.md",
+)
+USER_ENTRY_FORBIDDEN_SNIPPETS = (
+    "git clone",
+    "cargo build",
+    "scripts/run_codex_proxy.sh",
+    "scripts/run_claude_proxy.sh",
+    "scripts/run_gemini_proxy.sh",
+    "scripts/run_",
+    "--config-source",
+    "--env-file",
+    "--proxy-base",
+    "--dangerous-harness",
+    "cat >",
+    "provider_key:",
+    "provider_key_env:",
+    "model_aliases:",
+    "data_auth:",
+)
 
 
 def normalized_whitespace(text: str) -> str:
@@ -64,371 +59,192 @@ class DocsHomepageContractTests(unittest.TestCase):
             self.assertGreater(
                 next_index,
                 cursor,
-                f"expected `{snippet}` after `{snippets[snippets.index(snippet) - 1]}`",
+                f"expected `{snippet}` after previous snippet",
             )
             cursor = next_index
 
-    def extract_quickstart_config(self, relative_path: str) -> str:
+    def assert_doc_mentions(self, relative_path: str, snippets: tuple[str, ...]) -> None:
         text = self.read_text(relative_path)
-        if relative_path.endswith(".yaml"):
-            return text
+        for snippet in snippets:
+            with self.subTest(path=relative_path, snippet=snippet):
+                self.assertIn(snippet, text)
 
-        match = re.search(
-            r"```yaml\n(?P<config>listen: 127\.0\.0\.1:8080\n.*?)\n```",
-            text,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(match, f"missing quickstart YAML block in {relative_path}")
-        return match.group("config")
-
-    def assert_cli_ready_surface_contract(self, config_text: str) -> None:
-        module = load_real_cli_matrix()
-        parsed = module.parse_proxy_source(config_text)
-
-        for alias in QUICKSTART_ALIASES:
-            with self.subTest(alias=alias):
-                alias_config = parsed.model_alias_configs.get(alias)
-                self.assertIsNotNone(alias_config, f"missing alias: {alias}")
-                upstream_name = module._target_upstream_name(alias_config.target)
-                self.assertIsNotNone(upstream_name, f"missing target upstream for {alias}")
-                surface = module._effective_surface_metadata(
-                    parsed.upstream_surface_defaults.get(upstream_name),
-                    alias_config.surface,
-                )
-                module._validate_live_surface_codex_requirements(
-                    surface,
-                    require_tool_flags=True,
-                )
-                self.assertEqual(surface.input_modalities, ("text",))
-                self.assertFalse(surface.supports_search)
-                self.assertFalse(surface.supports_view_image)
-                self.assertEqual(surface.apply_patch_transport, "freeform")
-                self.assertFalse(surface.supports_parallel_calls)
-
-    def assert_provider_neutral_preset_contract(self, config_text: str) -> None:
-        module = load_real_cli_matrix()
-        parsed = module.parse_proxy_source(config_text)
-
-        required_env = set(module.required_preset_endpoint_env_keys(parsed))
-        self.assertEqual(required_env, set(PRESET_ENV_KEYS))
-
-        self.assertEqual(
-            parsed.upstreams["PRESET-OPENAI-COMPATIBLE"]["api_root"],
-            "PRESET_OPENAI_ENDPOINT_BASE_URL",
-        )
-        self.assertEqual(
-            parsed.upstreams["PRESET-ANTHROPIC-COMPATIBLE"]["api_root"],
-            "PRESET_ANTHROPIC_ENDPOINT_BASE_URL",
-        )
-        self.assertEqual(
-            parsed.upstreams["PRESET-OPENAI-COMPATIBLE"]["provider_key_env"],
-            "PRESET_ENDPOINT_API_KEY",
-        )
-        self.assertEqual(
-            parsed.upstreams["PRESET-ANTHROPIC-COMPATIBLE"]["provider_key_env"],
-            "PRESET_ENDPOINT_API_KEY",
-        )
-        self.assertEqual(
-            parsed.model_aliases["preset-openai-compatible"],
-            "PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL",
-        )
-        self.assertEqual(
-            parsed.model_aliases["preset-anthropic-compatible"],
-            "PRESET-ANTHROPIC-COMPATIBLE:PRESET_ENDPOINT_MODEL",
-        )
-
-    def test_readmes_follow_product_homepage_section_order(self):
-        self.assert_in_order(
-            self.read_text("README.md"),
-            (
-                "## Quick Start",
-                "## Codex / Claude Code Basic Setup",
-                "## Most Common Static Configuration",
-                "## Dynamic Configuration Overview",
-            ),
-        )
-        self.assert_in_order(
-            self.read_text("README_CN.md"),
-            (
-                "## 你会得到什么",
-                "## 你需要准备什么",
-                "## 第一步：拿到本地程序",
-                "## 第二步：写一个 MiniMax 配置",
-                "## 第三步：启动 Codex CLI",
-                "## 第四步：启动 Claude Code",
-                "## 常见问题",
-            ),
-        )
-
-    def test_english_readme_keeps_provider_neutral_presets_the_homepage_story(self):
-        readme = self.read_text("README.md")
-
-        self.assertIn("examples/quickstart-provider-neutral.yaml", readme)
-        self.assertIn("preset-openai-compatible", readme)
-        self.assertIn("preset-anthropic-compatible", readme)
-        self.assertIn("PRESET_OPENAI_ENDPOINT_BASE_URL", readme)
-        self.assertIn("PRESET_ANTHROPIC_ENDPOINT_BASE_URL", readme)
-        self.assertIn("PRESET_ENDPOINT_MODEL", readme)
-        self.assertIn("PRESET_ENDPOINT_API_KEY", readme)
-        self.assertIn("--model preset-openai-compatible", readme)
-        self.assertIn("--model preset-anthropic-compatible", readme)
-        self.assertNotIn("gpt-5-4", readme)
-        self.assertNotIn("MiniMax-M2.7-highspeed", readme)
-        self.assertNotIn("proxy.yaml", readme)
-
-        self.assertNotIn("### Which endpoint should clients use?", readme)
-        self.assertNotIn("| Codex CLI | `/openai/v1` |", readme)
-
-        self.assertIn(
-            "Reasoning effort such as `xhigh` is a client/request-side setting, not part of the model name.",
-            readme,
-        )
-
-    def test_chinese_readme_is_user_first_binary_quickstart(self):
-        readme_cn = self.read_text("README_CN.md")
-
-        for snippet in (
-            "不用 Docker，也不用先学完整配置，先把本地二进制跑起来",
-            "MiniMax 只是一个例子",
-            "llmup-minimax.yaml",
-            ".env.llmup.local",
-            "provider_key:",
-            "env: MINIMAX_API_KEY",
-            "https://api.minimax.io/v1",
-            "https://api.minimaxi.com/v1",
-            'minimax: "MINIMAX:MiniMax-M2.7-highspeed"',
-            "--binary \"$PWD/.local/bin/llm-universal-proxy\"",
-            "--env-file .env.llmup.local",
-            "--model minimax",
-            "llmup-anthropic-like.yaml",
-            "--model my-claude-like-model",
-            "wrapper 默认会临时使用 `18888` 端口",
-        ):
-            with self.subTest(snippet=snippet):
-                self.assertIn(snippet, readme_cn)
-
-        for forbidden in (
-            "PRESET_OPENAI_ENDPOINT_BASE_URL",
-            "PRESET_ANTHROPIC_ENDPOINT_BASE_URL",
-            "PRESET_ENDPOINT_MODEL",
-            "PRESET_ENDPOINT_API_KEY",
-            "preset-openai-compatible",
-            "preset-anthropic-compatible",
-            "## 容器镜像",
-            "## 动态配置概要",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, readme_cn)
-
-        self.assertIn(
-            "少数服务独有能力如果无法安全转换，`llmup` 会在本地报错",
-            readme_cn,
-        )
-
-    def test_user_entry_docs_explain_minimax_as_replaceable_example_only(self):
+    def test_readmes_make_the_three_step_launcher_path_the_homepage_story(self):
         expectations = {
             "README.md": (
-                "MiniMax is only a replaceable OpenAI-compatible example",
-                "not a GA-required provider",
+                "## Quick Start",
+                INSTALLER_COMMAND,
+                "llmup-config",
+                "llmup-codex",
+                "llmup-claude",
+                "## Why There Is No `llmup` Command",
+                "## Advanced",
             ),
             "README_CN.md": (
-                "MiniMax 只是一个例子",
-                "你可以把地址、模型名、API Key 换成其他长得像 OpenAI 接口的服务",
-            ),
-            "docs/configuration.md": (
-                "MiniMax is only a replaceable OpenAI-compatible example",
-                "not a GA-required provider",
-            ),
-            "docs/clients.md": (
-                "MiniMax is only a replaceable OpenAI-compatible example",
-                "not a GA-required provider",
+                "## 三步开始",
+                INSTALLER_COMMAND,
+                "llmup-config",
+                "llmup-codex",
+                "llmup-claude",
+                "## 为什么没有独立的 `llmup` 命令",
+                "## 高级用法",
             ),
         }
 
         for relative_path, snippets in expectations.items():
             with self.subTest(path=relative_path):
-                text = self.read_text(relative_path)
-                for snippet in snippets:
-                    self.assertIn(snippet, text)
+                self.assert_in_order(self.read_text(relative_path), snippets)
 
-    def test_user_entry_docs_explain_reasoning_compaction_continuity_boundary(self):
+    def test_readmes_explain_no_standalone_llmup_command_is_intentional(self):
+        self.assert_doc_mentions(
+            "README.md",
+            (
+                "There is intentionally no standalone `llmup` command.",
+                "`llmup-config`, `llmup-codex`, and `llmup-claude` are the user commands.",
+                "`llm-universal-proxy --config` remains the advanced server entrypoint.",
+            ),
+        )
+        self.assert_doc_mentions(
+            "README_CN.md",
+            (
+                "第一版有意不提供独立的 `llmup` 主命令。",
+                "普通用户只需要记住 `llmup-config`、`llmup-codex` 和 `llmup-claude`。",
+                "`llm-universal-proxy --config` 仍然保留给高级服务端用法。",
+            ),
+        )
+
+    def test_user_entry_docs_do_not_leak_developer_or_manual_wiring_paths(self):
         for relative_path in USER_ENTRY_DOCS:
             text = self.read_text(relative_path)
-            for snippet in REASONING_COMPACTION_BOUNDARY_SNIPPETS:
-                with self.subTest(path=relative_path, snippet=snippet):
-                    self.assertIn(snippet.casefold(), text.casefold())
+            for forbidden in USER_ENTRY_FORBIDDEN_SNIPPETS:
+                with self.subTest(path=relative_path, forbidden=forbidden):
+                    self.assertNotIn(forbidden, text)
+            self.assertIsNone(
+                re.search(r"(?m)^\s*export\s+\w*(?:API|KEY)\w*=", text),
+                f"{relative_path} should not ask users to export API keys by hand",
+            )
 
-    def test_readmes_use_single_maximum_safe_compatibility_boundary(self):
-        readme = self.read_text("README.md")
-        readme_cn = self.read_text("README_CN.md")
-
-        self.assertNotIn("same-protocol paths stay native when possible", readme)
-        self.assertNotIn("同协议路径尽量保持 native " + "passthrough", readme_cn)
-        self.assertNotIn("route " + "mode", readme)
-        self.assertNotIn("route " + "mode", readme_cn)
-        self.assertNotIn("maximum safe compatibility strategy", readme)
-        self.assertNotIn("maximum safe compatibility strategy", readme_cn)
-
-        english_snippets = (
-            "the product goal is maximum safe compatibility",
-            "when no cross-protocol request construction is needed",
-            "internal handling may keep provider-native bytes and fields unchanged",
-            "when request or response construction is needed",
-            "fail-closed behavior is a hard portability boundary",
-            "requests that hit a hard portability boundary are rejected before upstream",
-        )
-        for snippet in english_snippets:
-            with self.subTest(language="README", snippet=snippet):
-                self.assertIn(snippet, readme)
-
-        chinese_user_snippets = (
-            "尽量转成模型服务能听懂的格式",
-            "少数服务独有能力如果无法安全转换",
-            "会在本地报错",
-        )
-        for snippet in chinese_user_snippets:
-            with self.subTest(language="README_CN", snippet=snippet):
-                self.assertIn(snippet, readme_cn)
-
-    def test_docs_index_and_readmes_link_ga_readiness_review(self):
-        for relative_path in ("README.md", "docs/README.md"):
-            with self.subTest(path=relative_path):
-                self.assertIn("docs/ga-readiness-review.md", self.read_text(relative_path))
-
-    def test_readmes_and_docs_index_surface_data_auth_admin_entrypoint(self):
-        expectations = {
-            "README.md": (
-                "`data_auth`",
-                "`GET /admin/data-auth`",
-                "`PUT /admin/data-auth`",
-            ),
-            "docs/README.md": (
-                "static `data_auth`",
-                "`/admin/data-auth`",
-            ),
-        }
-        for relative_path, snippets in expectations.items():
+    def test_user_entry_docs_keep_provider_secrets_in_the_config_tool_story(self):
+        for relative_path in README_ENTRY_DOCS:
             text = self.read_text(relative_path)
-            for snippet in snippets:
-                with self.subTest(path=relative_path, snippet=snippet):
-                    self.assertIn(snippet, text)
+            with self.subTest(path=relative_path):
+                self.assertIn("llmup-config", text)
+                self.assertNotIn("REPLACE_WITH_YOUR", text)
+                self.assertNotRegex(text, r"sk-(?:cp|ant|proj|live|test)-[A-Za-z0-9_-]+")
 
-    def test_clients_guide_matches_wrapper_base_urls_and_proxy_endpoints(self):
+        self.assert_doc_mentions(
+            "README.md",
+            (
+                "The real provider key is collected by `llmup-config` and kept in the local proxy configuration, not pasted into Codex or Claude Code.",
+                "The launchers give the client a local proxy key and keep the upstream provider key on the proxy side.",
+            ),
+        )
+        self.assert_doc_mentions(
+            "README_CN.md",
+            (
+                "真实模型服务 Key 由 `llmup-config` 保存到本机代理配置里，不需要粘到 Codex CLI 或 Claude Code 里。",
+                "launcher 只把本地代理密码交给客户端，真实 provider key 留在 proxy 侧。",
+            ),
+        )
+
+    def test_readmes_keep_only_short_advanced_links(self):
+        for relative_path in README_ENTRY_DOCS:
+            text = self.read_text(relative_path)
+            for link in ADVANCED_LINKS:
+                with self.subTest(path=relative_path, link=link):
+                    self.assertIn(link, text)
+            self.assertLess(
+                normalized_whitespace(text).count("llm-universal-proxy --config"),
+                2,
+                f"{relative_path} should only point to the advanced server entrypoint briefly",
+            )
+
+    def test_docs_index_points_to_launcher_and_advanced_user_docs(self):
+        self.assert_doc_mentions(
+            "docs/README.md",
+            (
+                "[clients.md](./clients.md)",
+                "[advanced-usage.md](./advanced-usage.md)",
+                "[container.md](./container.md)",
+                "[admin-dynamic-config.md](./admin-dynamic-config.md)",
+                "Launcher-managed Codex and Claude Code setup",
+                "Manual proxy startup, multi-endpoint YAML, manual Codex/Claude wiring",
+            ),
+        )
+
+    def test_clients_guide_is_launcher_managed_overview_not_manual_tutorial(self):
         text = self.read_text("docs/clients.md")
 
-        self.assertIn(
-            "The wrapper configures the client base URL, and the client appends its own protocol path on top.",
-            text,
-        )
-        self.assertIn("`OPENAI_BASE_URL=<proxy>/openai/v1`", text)
-        self.assertIn("`ANTHROPIC_BASE_URL=<proxy>/anthropic`", text)
-        self.assertIn("`/openai/v1/responses`", text)
-        self.assertIn("`/anthropic/v1/messages`", text)
-        self.assertIn("https://generativelanguage.googleapis.com/v1beta/openai", text)
-        self.assertIn("format: openai-completion", text)
-        self.assertNotIn("`GOOGLE_GEMINI_BASE_URL=<proxy>/google`", text)
-        self.assertNotIn("`/google/v1beta/models/...`", text)
-        self.assertNotIn("### Gemini CLI", text)
-        self.assertIn("`preset-openai-compatible`", text)
-        self.assertIn("`preset-anthropic-compatible`", text)
-        self.assertIn("examples/quickstart-provider-neutral.yaml", text)
-        self.assertIn('`wire_api="responses"`', text)
-        self.assertNotIn("/responses or /chat/completions", text)
-        self.assertNotIn("/openai/v1/chat/completions", text)
+        for snippet in (
+            "`llmup-codex`",
+            "`llmup-claude`",
+            "`~/.llmup-codex`",
+            "`~/.llmup-claude`",
+            "`CODEX_HOME`",
+            "`CLAUDE_CONFIG_DIR`",
+            "native Codex or Claude Code arguments",
+            "[Advanced Usage](./advanced-usage.md)",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, text)
 
-    def test_configuration_guide_reuses_provider_neutral_presets_and_example(self):
-        text = self.read_text("docs/configuration.md")
+        for forbidden in (
+            "OPENAI_BASE_URL=",
+            "ANTHROPIC_BASE_URL=",
+            "OPENAI_API_KEY=",
+            "ANTHROPIC_API_KEY=",
+            "provider_key_env:",
+            "Manual Wiring Without Wrappers",
+            "```yaml",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
 
-        self.assertIn("`preset-openai-compatible`", text)
-        self.assertIn("`preset-anthropic-compatible`", text)
-        for env_key in PRESET_ENV_KEYS:
-            with self.subTest(env_key=env_key):
-                self.assertIn(env_key, text)
-        self.assertIn(
-            "[examples/quickstart-provider-neutral.yaml](../examples/quickstart-provider-neutral.yaml)",
-            text,
-        )
-        self.assertIn(
-            normalized_whitespace(
-                "Reasoning effort such as `xhigh` stays on the client request; "
-                "it is not part of the alias or upstream model name."
+    def test_advanced_usage_contains_the_manual_user_contract(self):
+        text = self.read_text(ADVANCED_DOC)
+
+        for snippet in (
+            "llm-universal-proxy --config",
+            "Manual Proxy Startup",
+            "Multi-Endpoint YAML",
+            "Manual Codex Wiring",
+            "Manual Claude Wiring",
+            "The provider key belongs to the proxy, not to the client.",
+            "`data_auth.proxy_key` protects the local proxy",
+            "`client_provider_key`",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "format: openai-completion",
+            "[Admin and Dynamic Config](./admin-dynamic-config.md)",
+            "[Container Guide](./container.md)",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, text)
+
+        for forbidden in (
+            "GET /admin/state",
+            "POST /admin/namespaces/:namespace/config",
+            "PUT /admin/data-auth",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
+
+    def test_user_entry_docs_retain_bounded_compatibility_language(self):
+        self.assert_doc_mentions(
+            "README.md",
+            (
+                "maximum safe compatibility",
+                "fail closed before the upstream call",
+                "provider APIs and compatible endpoints",
             ),
-            normalized_whitespace(text),
         )
-
-    def test_provider_neutral_quickstart_example_matches_cli_matrix_contract(self):
-        text = self.read_text("examples/quickstart-provider-neutral.yaml")
-
-        self.assertIn("PRESET-OPENAI-COMPATIBLE:", text)
-        self.assertIn("PRESET-ANTHROPIC-COMPATIBLE:", text)
-        for env_key in PRESET_ENV_KEYS:
-            with self.subTest(env_key=env_key):
-                self.assertIn(env_key, text)
-        self.assertIn(
-            'preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL"',
-            text,
+        self.assert_doc_mentions(
+            "README_CN.md",
+            (
+                "最大安全兼容",
+                "先在本地失败",
+                "模型 API 或兼容 endpoint",
+            ),
         )
-        self.assertIn(
-            'preset-anthropic-compatible: "PRESET-ANTHROPIC-COMPATIBLE:PRESET_ENDPOINT_MODEL"',
-            text,
-        )
-        self.assertNotIn("MINIMAX_OPENAI", text)
-        self.assertNotIn("MiniMax-M2", text)
-        self.assertNotIn("gpt-5-4", text)
-
-    def test_recommended_quickstart_config_has_cli_ready_surface_fields(self):
-        for relative_path in QUICKSTART_CONFIG_PATHS:
-            with self.subTest(path=relative_path):
-                self.assert_cli_ready_surface_contract(
-                    self.extract_quickstart_config(relative_path)
-                )
-                self.assert_provider_neutral_preset_contract(
-                    self.extract_quickstart_config(relative_path)
-                )
-
-    def test_provider_neutral_quickstart_hydrates_with_preset_env(self):
-        module = load_real_cli_matrix()
-        parsed = module.parse_proxy_source(
-            self.read_text("examples/quickstart-provider-neutral.yaml")
-        )
-
-        runtime_config = module.build_runtime_config_text(
-            parsed,
-            {
-                "PRESET_OPENAI_ENDPOINT_BASE_URL": "https://openai-compatible.example/v1",
-                "PRESET_ANTHROPIC_ENDPOINT_BASE_URL": "https://anthropic-compatible.example/v1",
-                "PRESET_ENDPOINT_MODEL": "provider-configured-model",
-                "PRESET_ENDPOINT_API_KEY": "proxy-only-secret",
-            },
-            listen_host="127.0.0.1",
-            listen_port=18080,
-            trace_path=pathlib.Path("/tmp/llmup-docs-contract-trace.jsonl"),
-        )
-
-        self.assertIn("api_root: https://openai-compatible.example/v1", runtime_config)
-        self.assertIn("api_root: https://anthropic-compatible.example/v1", runtime_config)
-        self.assertIn(
-            'preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:provider-configured-model"',
-            runtime_config,
-        )
-        self.assertIn(
-            'preset-anthropic-compatible: "PRESET-ANTHROPIC-COMPATIBLE:provider-configured-model"',
-            runtime_config,
-        )
-        runtime_body = "\n".join(
-            line for line in runtime_config.splitlines() if not line.lstrip().startswith("#")
-        )
-        self.assertNotIn("api_root: PRESET_", runtime_body)
-        self.assertNotIn("PRESET_ENDPOINT_MODEL", runtime_body)
-        self.assertNotIn("proxy-only-secret", runtime_config)
-
-    def test_openai_minimax_example_is_not_the_recommended_ga_preset(self):
-        text = self.read_text("examples/quickstart-openai-minimax.yaml")
-
-        self.assertIn("MiniMax is a replaceable OpenAI-compatible example", text)
-        self.assertNotIn("preset-openai-compatible", text)
-        self.assertNotIn("preset-anthropic-compatible", text)
-        self.assertNotIn("gpt-5-4", text)
 
 
 if __name__ == "__main__":

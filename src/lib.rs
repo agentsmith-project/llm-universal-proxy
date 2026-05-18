@@ -22,6 +22,7 @@ pub mod streaming;
 pub mod telemetry;
 pub mod translate;
 pub mod upstream;
+pub mod user_tools;
 
 pub use config::Config;
 pub use server::{
