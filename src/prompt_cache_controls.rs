@@ -1043,13 +1043,11 @@ mod tests {
             "messages": [{ "role": "system", "content": "Stable." }],
             "prompt_cache_key": "caller-explicit-key"
         });
-        assert!(
-            synthesize_openai_family_prompt_cache_key(
-                prompt_cache_synthesis_context(UpstreamFormat::OpenAiCompletion),
-                &mut explicit,
-            )
-            .is_none()
-        );
+        assert!(synthesize_openai_family_prompt_cache_key(
+            prompt_cache_synthesis_context(UpstreamFormat::OpenAiCompletion),
+            &mut explicit,
+        )
+        .is_none());
         assert_eq!(explicit["prompt_cache_key"], "caller-explicit-key");
 
         for field in ["previous_response_id", "conversation", "prompt"] {
@@ -1088,8 +1086,8 @@ mod tests {
     }
 
     #[test]
-    fn provider_prompt_cache_analysis_orders_mapped_before_dropped_and_projects_mixed_to_explicit_mapping()
-     {
+    fn provider_prompt_cache_analysis_orders_mapped_before_dropped_and_projects_mixed_to_explicit_mapping(
+    ) {
         let body = json!({
             "model": "claude-3",
             "messages": [{ "role": "user", "content": "Hi" }],

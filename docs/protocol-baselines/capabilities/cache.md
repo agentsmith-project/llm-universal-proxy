@@ -2,7 +2,7 @@
 
 - Layer: capability-diff
 - Status: active
-- Last refreshed: 2026-05-16
+- Last refreshed: 2026-05-18
 - Scope: prompt caching, cache handles, cache accounting, and non-portable cache semantics
 
 ## Summary
@@ -17,6 +17,13 @@ All major providers now expose some form of cache-aware generation, but the cont
 Google OpenAI-compatible Gemini is handled as the OpenAI Chat wire protocol in
 the active proxy surface. Native Gemini cache behavior is retained only in the
 retired historical Google Gemini baseline; it is not an active proxy capability.
+
+`llmup` does not implement response/result cache, semantic cache, provider cache
+resource management, or a cross-provider cache abstraction. Its active behavior
+is provider prompt-cache request-control handling: pass through native fields
+where the target can honor them, explicitly map supported target-provider fields,
+or fail closed / drop with a portability warning when semantics are unknown or
+provider-owned state cannot be reconstructed.
 
 ## Provider comparison
 
@@ -38,7 +45,8 @@ retired historical Google Gemini baseline; it is not an active proxy capability.
 ## Implementation stance
 
 1. Preserve cache knobs through same-wire native preservation only when no body mutation or response normalization is required and the same protocol can preserve native semantics.
-2. During translation, treat provider prompt-cache support as explicit target-provider request-control mapping, not as `llmup` caching. OpenAI cache keys and Anthropic breakpoints have different billing and lifetime effects.
-3. Normalize cache usage for reporting, but keep provider-native fields available when the client understands them.
-4. Document each cache warn-and-omit behavior explicitly, especially when omitting Anthropic `cache_control`.
-5. Provider-cache auto-injection is out of scope; explicit mapping must be trace-visible.
+2. During translation, treat provider prompt-cache support as target-provider request-control pass-through / map / drop behavior, not as `llmup` caching. OpenAI cache keys and Anthropic breakpoints have different billing and lifetime effects.
+3. OpenAI-family `prompt_cache_key` may be synthesized only from a controlled, canonical stable static prefix after the target request shape is known. Do not synthesize retention, provider-owned state, Anthropic breakpoints, or keys from natural-language meaning, dynamic user text, request IDs, credentials, `previous_response_id`, `conversation`, or `resp_llmup_*`.
+4. Normalize cache usage for reporting, but keep provider-native fields available when the client understands them.
+5. Document each cache warn-and-omit behavior explicitly, especially when omitting Anthropic `cache_control` or unknown provider-side cache/state handles.
+6. Prompt-cache synthesis and mapping must be trace-visible without leaking sensitive values: traces may expose disposition, target fields, reasons, and redacted/fingerprinted synthesized-key metadata, not the full key or prompt text.

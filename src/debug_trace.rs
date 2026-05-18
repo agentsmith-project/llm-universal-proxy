@@ -1,22 +1,22 @@
-use std::fs::{OpenOptions, create_dir_all};
+use std::fs::{create_dir_all, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use futures_util::Stream;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tracing::warn;
 
 use crate::config::DebugTraceConfig;
 use crate::formats::UpstreamFormat;
 use crate::prompt_cache_controls::{
-    ProviderPromptCacheRequestControlComponent, analyze_provider_prompt_cache_request_control,
-    synthesized_prompt_cache_key_debug_fingerprint, synthesized_prompt_cache_key_present,
+    analyze_provider_prompt_cache_request_control, synthesized_prompt_cache_key_debug_fingerprint,
+    synthesized_prompt_cache_key_present, ProviderPromptCacheRequestControlComponent,
 };
 use crate::request_processing::{PromptCacheRequestControl, RequestProcessingInfo};
 use crate::stream_observation::StreamObservationTransform;
@@ -1853,10 +1853,8 @@ mod tests {
         assert!(reasoning.starts_with("reasoning tr"));
         assert!(reasoning.contains("chars"));
         assert!(tool_calls.len() <= 2);
-        assert!(
-            tool_calls
-                .iter()
-                .any(|value| { value.get("type").and_then(Value::as_str) == Some("truncated") })
-        );
+        assert!(tool_calls
+            .iter()
+            .any(|value| { value.get("type").and_then(Value::as_str) == Some("truncated") }));
     }
 }

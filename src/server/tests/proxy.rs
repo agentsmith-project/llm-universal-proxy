@@ -171,13 +171,29 @@ fn json_contains_key(value: &Value, key: &str) -> bool {
     }
 }
 
-fn assert_cache_control_portability_warning_headers(response: &Response<Body>) {
-    let warnings = response
+fn portability_warning_headers(response: &Response<Body>) -> Vec<String> {
+    response
         .headers()
         .get_all("x-llmup-portability-warning")
         .iter()
         .filter_map(|value| value.to_str().ok())
-        .collect::<Vec<_>>();
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn assert_portability_warning_headers_contain(response: &Response<Body>, expected: &[&str]) {
+    let warnings = portability_warning_headers(response);
+    assert!(response.headers().get("x-proxy-compat-warning").is_none());
+    for expected in expected {
+        assert!(
+            warnings.iter().any(|warning| warning.contains(expected)),
+            "expected warning containing {expected}, warnings = {warnings:?}"
+        );
+    }
+}
+
+fn assert_cache_control_portability_warning_headers(response: &Response<Body>) {
+    let warnings = portability_warning_headers(response);
     assert!(response.headers().get("x-proxy-compat-warning").is_none());
     assert!(
         warnings
@@ -499,8 +515,8 @@ async fn spawn_openai_completion_raw_mock(
     (format!("http://{addr}"), requests, server)
 }
 
-async fn spawn_openai_completion_prompt_cache_echo_error_mock()
--> (String, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>) {
+async fn spawn_openai_completion_prompt_cache_echo_error_mock(
+) -> (String, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>) {
     #[derive(Clone)]
     struct MockState {
         requests: Arc<Mutex<Vec<Value>>>,
@@ -1230,8 +1246,8 @@ fn anthropic_commentary_then_tool_use_events() -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_from_response_and_logs()
- {
+async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_from_response_and_logs(
+) {
     let _env_guard = SECRET_REDACTION_ENV_LOCK.lock().await;
     let _provider_env =
         ScopedEnvVar::set(PROVIDER_ENV_REDACTION_ENV, PROVIDER_ENV_REDACTION_SECRET);
@@ -2145,8 +2161,8 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_map
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn debug_trace_records_prompt_cache_components_for_openai_to_anthropic_mixed_mapping_and_drop()
- {
+async fn debug_trace_records_prompt_cache_components_for_openai_to_anthropic_mixed_mapping_and_drop(
+) {
     let server_response_body = serde_json::json!({
         "id": "msg_mixed_cache_mapping",
         "type": "message",
@@ -2376,8 +2392,8 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mappin
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn debug_trace_records_prompt_cache_components_for_anthropic_to_openai_mixed_mapping_and_drop()
- {
+async fn debug_trace_records_prompt_cache_components_for_anthropic_to_openai_mixed_mapping_and_drop(
+) {
     let server_response_body = serde_json::json!({
         "id": "chatcmpl_mixed_openai_cache_mapping",
         "object": "chat.completion",
@@ -2805,9 +2821,7 @@ async fn anthropic_claude_code_second_round_thinking_context_management_reaches_
             "model": "preset-openai-compatible",
             "max_tokens": 64,
             "thinking": { "type": "enabled", "budget_tokens": 1024 },
-            "context_management": {
-                "edits": [{ "type": "clear_thinking_20251015" }]
-            },
+            "context_management": { "type": "auto" },
             "messages": [
                 {
                     "role": "user",
@@ -2860,6 +2874,10 @@ async fn anthropic_claude_code_second_round_thinking_context_management_reaches_
     .await;
 
     let status = response.status();
+    assert_portability_warning_headers_contain(
+        &response,
+        &["thinking", "context_management", "signature"],
+    );
     let body_text = response_text(response).await;
     assert_ne!(status, StatusCode::BAD_REQUEST, "body = {body_text}");
     assert_eq!(status, StatusCode::OK, "body = {body_text}");
@@ -2940,8 +2958,174 @@ async fn anthropic_claude_code_second_round_thinking_context_management_reaches_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn debug_trace_records_prompt_cache_disposition_for_synthesized_openai_key_and_dropped_anthropic_cache_control()
- {
+async fn anthropic_claude_code_second_round_thinking_context_management_reaches_openai_responses() {
+    let server_response_body = serde_json::json!({
+        "id": "resp_claude_code_second_round",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": "ok" }]
+        }],
+        "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_responses_mock(server_response_body).await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiResponses);
+    {
+        let mut runtime = state.runtime.write().await;
+        let namespace = runtime
+            .namespaces
+            .get_mut(DEFAULT_NAMESPACE)
+            .expect("default namespace");
+        namespace.config.model_aliases.insert(
+            "preset-openai-compatible".to_string(),
+            crate::config::ModelAlias {
+                upstream_name: "primary".to_string(),
+                upstream_model: "gpt-4o-mini".to_string(),
+                limits: None,
+                surface: None,
+            },
+        );
+    }
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/anthropic/v1/messages".to_string(),
+        serde_json::json!({
+            "model": "preset-openai-compatible",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 1024 },
+            "context_management": { "type": "auto" },
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "hi" }]
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I should answer briefly and keep visible context.",
+                            "signature": "claude-code-prior-visible-thinking-signature"
+                        },
+                        { "type": "text", "text": "Hi there." },
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_lookup_context_1",
+                            "name": "lookup_context",
+                            "input": { "query": "current task status" }
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_lookup_context_1",
+                        "content": "tool says ready"
+                    }]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "text": "Please answer the current request."
+                    }]
+                }
+            ],
+            "stream": false
+        }),
+        "preset-openai-compatible".to_string(),
+        crate::formats::UpstreamFormat::Anthropic,
+        None,
+    )
+    .await;
+
+    let status = response.status();
+    assert_portability_warning_headers_contain(
+        &response,
+        &["thinking", "context_management", "signature"],
+    );
+    let body_text = response_text(response).await;
+    assert_eq!(status, StatusCode::OK, "body = {body_text}");
+
+    let recorded = requests.lock().await;
+    assert_eq!(recorded.len(), 1, "requests = {recorded:?}");
+    let upstream_body = &recorded[0];
+    assert!(
+        upstream_body.get("thinking").is_none(),
+        "OpenAI Responses body must not receive top-level Anthropic thinking: {upstream_body:?}"
+    );
+    assert!(
+        upstream_body.get("context_management").is_none(),
+        "OpenAI Responses body must not receive Anthropic context_management: {upstream_body:?}"
+    );
+    assert!(
+        !json_contains_key(upstream_body, "signature"),
+        "OpenAI Responses body must not receive Anthropic signed-thinking carrier fields: {upstream_body:?}"
+    );
+    let input = upstream_body["input"]
+        .as_array()
+        .expect("OpenAI Responses input array");
+    assert!(
+        input.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("user")
+                && item
+                    .to_string()
+                    .contains("Please answer the current request.")
+        }),
+        "OpenAI Responses body must retain the current user request: {upstream_body:?}"
+    );
+    let reasoning_item = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
+        .expect("OpenAI Responses reasoning item");
+    assert_eq!(
+        reasoning_item["summary"],
+        serde_json::json!([{
+            "type": "summary_text",
+            "text": "I should answer briefly and keep visible context."
+        }])
+    );
+    assert!(
+        reasoning_item.get("encrypted_content").is_none(),
+        "request-side signed thinking should degrade to unsigned Responses reasoning summary: {upstream_body:?}"
+    );
+    let function_call = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
+        .expect("OpenAI Responses function_call item");
+    assert_eq!(function_call["call_id"], "toolu_lookup_context_1");
+    assert_eq!(function_call["name"], "lookup_context");
+    let tool_arguments: Value =
+        serde_json::from_str(function_call["arguments"].as_str().unwrap_or(""))
+            .expect("OpenAI Responses function_call arguments JSON");
+    assert_eq!(
+        tool_arguments,
+        serde_json::json!({ "query": "current task status" })
+    );
+    let function_call_output = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .expect("OpenAI Responses function_call_output item");
+    assert_eq!(function_call_output["call_id"], "toolu_lookup_context_1");
+    assert_eq!(function_call_output["output"], "tool says ready");
+
+    upstream_server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn debug_trace_records_prompt_cache_disposition_for_synthesized_openai_key_and_dropped_anthropic_cache_control(
+) {
     let server_response_body = serde_json::json!({
         "id": "chatcmpl_synthesized_cache_control",
         "object": "chat.completion",
@@ -3076,8 +3260,8 @@ async fn debug_trace_records_prompt_cache_disposition_for_synthesized_openai_key
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn debug_trace_records_prompt_cache_detail_for_dropped_openai_key_to_anthropic_without_cache_control()
- {
+async fn debug_trace_records_prompt_cache_detail_for_dropped_openai_key_to_anthropic_without_cache_control(
+) {
     let server_response_body = serde_json::json!({
         "id": "msg_dropped_openai_prompt_cache_key",
         "type": "message",
@@ -3861,11 +4045,9 @@ fn classify_request_boundary_keeps_portability_warning_path() {
     let RequestBoundaryDecision::AllowWithWarnings(warnings) = decision else {
         panic!("expected warning path, got {decision:?}");
     };
-    assert!(
-        warnings
-            .iter()
-            .any(|warning| warning.contains("non-function Responses tools"))
-    );
+    assert!(warnings
+        .iter()
+        .any(|warning| warning.contains("non-function Responses tools")));
 }
 
 fn request_processing_input<'a>(
@@ -3949,8 +4131,8 @@ fn assert_prompt_cache_request_control_detail_absent_from_hook_payload(hook_payl
 }
 
 #[test]
-fn request_processing_provider_prompt_cache_request_control_serializes_only_supported_contract_states()
- {
+fn request_processing_provider_prompt_cache_request_control_serializes_only_supported_contract_states(
+) {
     use crate::request_processing::PromptCacheRequestControl as Control;
 
     let states = [
@@ -4465,8 +4647,8 @@ fn classify_request_processing_preserves_openai_family_prompt_cache_across_trans
 }
 
 #[test]
-fn classify_request_processing_marks_openai_to_anthropic_explicit_cache_control_extension_as_mapped()
- {
+fn classify_request_processing_marks_openai_to_anthropic_explicit_cache_control_extension_as_mapped(
+) {
     let chat_body = serde_json::json!({
         "model": "claude-3",
         "messages": [{ "role": "user", "content": "Hi" }],
@@ -4541,8 +4723,8 @@ fn classify_request_processing_marks_anthropic_to_openai_explicit_prompt_cache_e
 }
 
 #[test]
-fn classify_request_processing_does_not_mark_anthropic_to_openai_prompt_cache_retention_extension_as_mapped()
- {
+fn classify_request_processing_does_not_mark_anthropic_to_openai_prompt_cache_retention_extension_as_mapped(
+) {
     let anthropic_body = serde_json::json!({
         "model": "claude-3",
         "messages": [{ "role": "user", "content": "Hi" }],
@@ -5550,8 +5732,8 @@ async fn live_responses_grammar_custom_tool_bridge_to_openai_uses_default_bridge
 }
 
 #[tokio::test]
-async fn live_responses_grammar_custom_tool_bridge_to_openai_default_allows_with_warning_and_stable_names()
- {
+async fn live_responses_grammar_custom_tool_bridge_to_openai_default_allows_with_warning_and_stable_names(
+) {
     let response_body = serde_json::json!({
         "id": "chatcmpl_1",
         "object": "chat.completion",
@@ -5767,8 +5949,8 @@ async fn live_responses_grammar_custom_tool_bridge_to_anthropic_uses_default_bri
 }
 
 #[tokio::test]
-async fn live_responses_grammar_custom_tool_bridge_to_anthropic_default_allows_with_warning_and_stable_names()
- {
+async fn live_responses_grammar_custom_tool_bridge_to_anthropic_default_allows_with_warning_and_stable_names(
+) {
     let response_body = serde_json::json!({
         "id": "msg_1",
         "type": "message",

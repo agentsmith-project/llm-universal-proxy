@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde_json::Value;
 
@@ -1662,14 +1662,16 @@ fn anthropic_top_level_request_control_assessments(
         });
     }
 
-    if let Some(context_management) = body.get("context_management") {
-        assessments.push(if anthropic_context_management_requires_native_state(context_management) {
+    if let Some(context_management) = body.get("context_management").filter(|context_management| {
+        !matches!(context_management, Value::Null | Value::Bool(false))
+    }) {
+        assessments.push(if let Some(reason) =
+            anthropic_context_management_fail_closed_reason(context_management, target_label)
+        {
             AnthropicRequestControlAssessment {
                 field: "context_management",
                 disposition: AnthropicRequestControlDisposition::FailClosed,
-                reason: format!(
-                    "Anthropic context_management depends on provider-owned state/resource semantics and cannot be translated to {target_label}"
-                ),
+                reason,
             }
         } else if has_complete_visible_history {
             AnthropicRequestControlAssessment {
@@ -1734,7 +1736,7 @@ fn anthropic_request_has_complete_visible_history(body: &Value) -> bool {
 
     let mut has_visible_user_context =
         anthropic_content_has_visible_user_context(body.get("system"));
-    let mut pending_tool_use_ids = BTreeMap::new();
+    let mut pending_tool_use_ids = BTreeSet::new();
 
     for message in messages {
         let role = message.get("role").and_then(Value::as_str);
@@ -1761,9 +1763,10 @@ fn anthropic_request_has_complete_visible_history(body: &Value) -> bool {
                         tool_history_is_structural = false;
                         return;
                     };
-                    *pending_tool_use_ids
-                        .entry(tool_use_id.to_string())
-                        .or_insert(0usize) += 1;
+                    if !pending_tool_use_ids.insert(tool_use_id.to_string()) {
+                        tool_history_is_structural = false;
+                        return;
+                    }
                 }
                 Some("tool_result") => {
                     let Some(tool_use_id) = block
@@ -1775,16 +1778,8 @@ fn anthropic_request_has_complete_visible_history(body: &Value) -> bool {
                         tool_history_is_structural = false;
                         return;
                     };
-                    match pending_tool_use_ids.get_mut(tool_use_id) {
-                        Some(count) if *count > 1 => {
-                            *count -= 1;
-                        }
-                        Some(_) => {
-                            pending_tool_use_ids.remove(tool_use_id);
-                        }
-                        None => {
-                            tool_history_is_structural = false;
-                        }
+                    if !pending_tool_use_ids.remove(tool_use_id) {
+                        tool_history_is_structural = false;
                     }
                 }
                 _ => {}
@@ -1913,53 +1908,240 @@ fn anthropic_container_string_requires_provider_runtime(value: &str) -> bool {
         || normalized.contains("state")
 }
 
-fn anthropic_context_management_requires_native_state(context_management: &Value) -> bool {
+fn anthropic_context_management_fail_closed_reason(
+    context_management: &Value,
+    target_label: &str,
+) -> Option<String> {
+    anthropic_context_management_schema_error(context_management).map(|reason| {
+        format!("Anthropic context_management {reason} and cannot be translated to {target_label}")
+    })
+}
+
+fn anthropic_context_management_schema_error(context_management: &Value) -> Option<String> {
     match context_management {
-        Value::Object(object) => object.iter().any(|(key, value)| {
-            if value.is_null() || value.as_bool() == Some(false) {
-                return false;
+        Value::Null => None,
+        Value::Bool(false) => None,
+        Value::Object(object) => {
+            if let Some(provider_field) = object
+                .keys()
+                .find(|key| anthropic_context_management_provider_owned_field(key))
+            {
+                return Some(format!(
+                    "contains provider-owned state field `{provider_field}`"
+                ));
             }
-            anthropic_context_management_key_requires_native_state(key)
-                || anthropic_context_management_requires_native_state(value)
-        }),
-        Value::Array(items) => items
-            .iter()
-            .any(anthropic_context_management_requires_native_state),
-        Value::String(value) => anthropic_context_management_string_requires_native_state(value),
-        _ => false,
+
+            if let Some(context_type) = object.get("type") {
+                let Some(context_type) = context_type.as_str() else {
+                    return Some(
+                        "field `type` must be the legacy string `auto` or omitted when using `edits`"
+                            .to_string(),
+                    );
+                };
+                if context_type == "auto" {
+                    if object.len() == 1 {
+                        return None;
+                    }
+                    return Some(
+                        "legacy no-op `type:auto` does not support additional fields".to_string(),
+                    );
+                }
+                return Some(format!("uses unsupported legacy type `{context_type}`"));
+            }
+
+            let Some(edits) = object.get("edits") else {
+                if let Some(unknown_field) = object.keys().next() {
+                    return Some(format!("contains unsupported field `{unknown_field}`"));
+                }
+                return Some("must use known legacy `type:auto` or an `edits` array".to_string());
+            };
+            if object.len() != 1 {
+                let unknown_field = object
+                    .keys()
+                    .find(|key| key.as_str() != "edits")
+                    .map(String::as_str)
+                    .unwrap_or("unknown");
+                return Some(format!(
+                    "contains unsupported field `{unknown_field}` alongside `edits`"
+                ));
+            }
+            let Some(edits) = edits.as_array() else {
+                return Some("field `edits` must be an array".to_string());
+            };
+            validate_anthropic_context_management_edits(edits)
+        }
+        _ => Some("must be an object, null, or false".to_string()),
     }
 }
 
-fn anthropic_context_management_key_requires_native_state(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase().replace('-', "_");
-    normalized == "id"
-        || normalized == "handle"
-        || normalized.contains("container")
-        || normalized.contains("conversation")
-        || normalized.contains("previous_response")
-        || normalized.contains("compact")
-        || normalized.contains("compaction")
-        || normalized.contains("resource")
-        || normalized.contains("hosted")
-        || normalized.contains("prompt")
-        || normalized.contains("opaque")
-        || normalized.contains("encrypted")
-        || normalized.contains("state")
+fn anthropic_context_management_provider_owned_field(key: &str) -> bool {
+    matches!(
+        key,
+        "applied_edits"
+            | "original_input_tokens"
+            | "cleared_input_tokens"
+            | "cleared_tool_uses"
+            | "cleared_thinking_turns"
+            | "id"
+            | "handle"
+            | "state"
+            | "opaque_state"
+            | "encrypted_content"
+    )
 }
 
-fn anthropic_context_management_string_requires_native_state(value: &str) -> bool {
-    let normalized = value.to_ascii_lowercase().replace('-', "_");
-    normalized.contains("container")
-        || normalized.contains("conversation")
-        || normalized.contains("previous_response")
-        || normalized.contains("compact")
-        || normalized.contains("compaction")
-        || normalized.contains("resource")
-        || normalized.contains("hosted")
-        || normalized.contains("prompt")
-        || normalized.contains("opaque")
-        || normalized.contains("encrypted")
-        || normalized.contains("state")
+fn validate_anthropic_context_management_edits(edits: &[Value]) -> Option<String> {
+    for (index, edit) in edits.iter().enumerate() {
+        let Some(object) = edit.as_object() else {
+            return Some(format!("edit at index {index} must be an object"));
+        };
+        let Some(edit_type) = object.get("type").and_then(Value::as_str) else {
+            return Some(format!(
+                "edit at index {index} requires a string `type` field"
+            ));
+        };
+        match edit_type {
+            "clear_thinking_20251015" => {
+                if index != 0 {
+                    return Some(
+                        "`clear_thinking_20251015` must be the first context edit".to_string(),
+                    );
+                }
+                if let Some(message) = validate_anthropic_clear_thinking_edit(object) {
+                    return Some(message);
+                }
+            }
+            "clear_tool_uses_20250919" => {
+                if let Some(message) = validate_anthropic_clear_tool_uses_edit(object) {
+                    return Some(message);
+                }
+            }
+            _ => {
+                return Some(format!("contains unsupported edit type `{edit_type}`"));
+            }
+        }
+    }
+    None
+}
+
+fn validate_anthropic_clear_thinking_edit(
+    object: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    if let Some(field) = first_unknown_field(object, &["type", "keep"]) {
+        return Some(format!(
+            "clear_thinking_20251015 contains unsupported field `{field}`"
+        ));
+    }
+    let Some(keep) = object.get("keep") else {
+        return None;
+    };
+    match keep {
+        Value::String(value) if value == "all" => None,
+        Value::Object(keep_object) => {
+            if let Some(field) = first_unknown_field(keep_object, &["type", "value"]) {
+                return Some(format!(
+                    "clear_thinking_20251015.keep contains unsupported field `{field}`"
+                ));
+            }
+            if keep_object.get("type").and_then(Value::as_str) != Some("thinking_turns") {
+                return Some(
+                    "clear_thinking_20251015.keep.type must be `thinking_turns`".to_string(),
+                );
+            }
+            positive_integer_schema_error(
+                keep_object.get("value"),
+                "clear_thinking_20251015.keep.value",
+            )
+        }
+        _ => Some(
+            "clear_thinking_20251015.keep must be `all` or `{type:\"thinking_turns\", value:N}`"
+                .to_string(),
+        ),
+    }
+}
+
+fn validate_anthropic_clear_tool_uses_edit(
+    object: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    if let Some(field) = first_unknown_field(
+        object,
+        &["type", "keep", "exclude_tools", "clear_tool_inputs"],
+    ) {
+        return Some(format!(
+            "clear_tool_uses_20250919 contains unsupported field `{field}`"
+        ));
+    }
+
+    if let Some(message) = validate_context_management_metric(
+        object.get("keep"),
+        "clear_tool_uses_20250919.keep",
+        &["tool_uses"],
+    ) {
+        return Some(message);
+    }
+    if let Some(exclude_tools) = object.get("exclude_tools") {
+        let Some(exclude_tools) = exclude_tools.as_array() else {
+            return Some("clear_tool_uses_20250919.exclude_tools must be an array".to_string());
+        };
+        if exclude_tools.iter().any(|tool| {
+            tool.as_str()
+                .map(str::trim)
+                .map_or(true, |tool| tool.is_empty())
+        }) {
+            return Some(
+                "clear_tool_uses_20250919.exclude_tools entries must be non-empty strings"
+                    .to_string(),
+            );
+        }
+    }
+    if object
+        .get("clear_tool_inputs")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Some("clear_tool_uses_20250919.clear_tool_inputs must be a boolean".to_string());
+    }
+    None
+}
+
+fn validate_context_management_metric(
+    value: Option<&Value>,
+    path: &str,
+    allowed_types: &[&str],
+) -> Option<String> {
+    let Some(value) = value else {
+        return None;
+    };
+    let Some(object) = value.as_object() else {
+        return Some(format!("{path} must be an object"));
+    };
+    if let Some(field) = first_unknown_field(object, &["type", "value"]) {
+        return Some(format!("{path} contains unsupported field `{field}`"));
+    }
+    let Some(metric_type) = object.get("type").and_then(Value::as_str) else {
+        return Some(format!("{path}.type must be a string"));
+    };
+    if !allowed_types.contains(&metric_type) {
+        return Some(format!("{path}.type `{metric_type}` is not supported"));
+    }
+    positive_integer_schema_error(object.get("value"), &format!("{path}.value"))
+}
+
+fn positive_integer_schema_error(value: Option<&Value>, path: &str) -> Option<String> {
+    if value.and_then(Value::as_u64).is_some_and(|value| value > 0) {
+        None
+    } else {
+        Some(format!("{path} must be a positive integer"))
+    }
+}
+
+fn first_unknown_field<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    allowed_fields: &[&str],
+) -> Option<&'a str> {
+    object
+        .keys()
+        .find(|key| !allowed_fields.contains(&key.as_str()))
+        .map(String::as_str)
 }
 
 fn anthropic_request_visible_thinking_carrier_fields(body: &Value) -> Vec<&'static str> {
@@ -2057,6 +2239,47 @@ fn anthropic_opaque_thinking_carrier_in_block(block: &Value, target_label: &str)
         )),
         _ => None,
     }
+}
+
+fn anthropic_duplicate_assistant_tool_use_id_message(
+    body: &Value,
+    target_label: &str,
+) -> Option<String> {
+    let messages = body.get("messages").and_then(Value::as_array)?;
+    let mut seen_tool_use_ids = BTreeSet::new();
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let mut duplicate_tool_use_id = None;
+        anthropic_visit_content_blocks(message.get("content"), |block| {
+            if duplicate_tool_use_id.is_some()
+                || !matches!(
+                    block.get("type").and_then(Value::as_str),
+                    Some("tool_use" | "server_tool_use")
+                )
+            {
+                return;
+            }
+            let Some(tool_use_id) = block
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|tool_use_id| !tool_use_id.is_empty())
+            else {
+                return;
+            };
+            if !seen_tool_use_ids.insert(tool_use_id.to_string()) {
+                duplicate_tool_use_id = Some(tool_use_id.to_string());
+            }
+        });
+        if let Some(duplicate_tool_use_id) = duplicate_tool_use_id {
+            return Some(format!(
+                "Anthropic assistant tool_use id `{duplicate_tool_use_id}` is duplicated and cannot be translated to {target_label}; OpenAI-family tool_call ids must be unique"
+            ));
+        }
+    }
+    None
 }
 
 pub(crate) fn assess_request_translation(
@@ -2292,6 +2515,10 @@ pub(crate) fn assess_request_translation(
         }
         if let Some(message) =
             anthropic_request_nonportable_tool_definition_message(body, target_label)
+        {
+            assessment.reject(message);
+        }
+        if let Some(message) = anthropic_duplicate_assistant_tool_use_id_message(body, target_label)
         {
             assessment.reject(message);
         }

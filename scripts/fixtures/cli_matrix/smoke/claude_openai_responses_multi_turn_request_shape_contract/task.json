@@ -1,7 +1,7 @@
 {
-  "id": "claude_openai_multi_turn_request_shape_contract",
+  "id": "claude_openai_responses_multi_turn_request_shape_contract",
   "kind": "smoke",
-  "description": "Claude Code to OpenAI-compatible positive coverage for a second Anthropic-shaped request after a tool round-trip.",
+  "description": "Claude Code to OpenAI Responses-compatible positive coverage for a second Anthropic-shaped request after a tool round-trip.",
   "prompt": "Inspect calc.py and main.py. There is a regression in add(): it currently subtracts instead of adding. Fix the implementation so add(a, b) returns a + b without changing the function name, argument list, or multiply() behavior. Validate the workspace by running main.py and make sure the printed output is correct.",
   "timeout_secs": 180,
   "workspace_template": "../public_editing_tool_workspace_edit_contract/workspace",
@@ -10,7 +10,7 @@
   ],
   "unsupported_targets": [
     "preset-anthropic-compatible",
-    "preset-openai-responses-compatible",
+    "preset-openai-compatible",
     "qwen-local"
   ],
   "verifier": {
@@ -46,7 +46,7 @@
         "type": "trace_request_contract",
         "path": "/anthropic/v1/messages",
         "client_format": "anthropic",
-        "upstream_format": "openai-completion",
+        "upstream_format": "openai-responses",
         "min_request_count": 2,
         "require_response_for_each_request": true,
         "forbid_response_http_statuses": [
@@ -56,18 +56,7 @@
         "required_request_fields": [
           "client_summary.message_roles",
           "client_summary.messages_tail",
-          "upstream_summary.message_roles",
-          "upstream_summary.messages_tail"
-        ],
-        "required_request_contains": [
-          {
-            "field": "upstream_summary.message_roles",
-            "value": "assistant"
-          },
-          {
-            "field": "upstream_summary.message_roles",
-            "value": "tool"
-          }
+          "upstream_summary.input_tail"
         ],
         "required_request_objects": [
           {
@@ -77,9 +66,9 @@
             }
           },
           {
-            "field": "upstream_summary.messages_tail",
+            "field": "upstream_summary.input_tail",
             "contains": {
-              "role": "tool"
+              "type": "function_call_output"
             }
           }
         ]

@@ -143,6 +143,68 @@ fn anthropic_visible_signed_thinking_history_body() -> serde_json::Value {
     })
 }
 
+fn anthropic_tool_clear_history_body(context_management: serde_json::Value) -> serde_json::Value {
+    json!({
+        "model": "claude-3",
+        "context_management": context_management,
+        "messages": [
+            { "role": "user", "content": "Use the tool history." },
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_lookup",
+                    "name": "lookup_weather",
+                    "input": { "city": "Paris" }
+                }]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_lookup",
+                    "content": "sunny"
+                }]
+            },
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_search",
+                    "name": "search_docs",
+                    "input": { "query": "rust" }
+                }]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_search",
+                    "content": "docs"
+                }]
+            },
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_calc",
+                    "name": "calculator",
+                    "input": { "expression": "2+2" }
+                }]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_calc",
+                    "content": "4"
+                }]
+            },
+            { "role": "user", "content": "Continue." }
+        ]
+    })
+}
+
 #[test]
 fn media_source_validator_rejects_encoded_controls_and_raw_unicode_boundaries() {
     for value in [
@@ -5606,12 +5668,108 @@ fn assess_request_translation_claude_to_openai_rejects_context_management_native
             &body,
         );
         let TranslationDecision::Reject(message) = assessment.decision() else {
-            panic!("expected native context_management state to fail closed for {label}, got {assessment:?}");
+            panic!(
+                "expected native context_management state to fail closed for {label}, got {assessment:?}"
+            );
         };
         assert!(
             message.contains("context_management"),
             "label = {label}, message = {message}"
         );
+    }
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_rejects_unknown_context_management_edit() {
+    let body = json!({
+        "model": "claude-3",
+        "context_management": {
+            "edits": [{
+                "type": "future_context_rewrite_20990101"
+            }]
+        },
+        "messages": [{ "role": "user", "content": "Hi" }]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected unknown context_management edit to fail closed, got {assessment:?}");
+    };
+    assert!(
+        message.contains("context_management"),
+        "message = {message}"
+    );
+    assert!(
+        message.contains("future_context_rewrite_20990101"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn translate_request_claude_to_openai_rejects_unsupported_clear_tool_uses_semantics() {
+    for (field, value) in [
+        (
+            "trigger",
+            json!({
+                "type": "input_tokens",
+                "value": 1000
+            }),
+        ),
+        (
+            "clear_at_least",
+            json!({
+                "type": "input_tokens",
+                "value": 500
+            }),
+        ),
+    ] {
+        let mut edit = serde_json::Map::new();
+        edit.insert("type".to_string(), json!("clear_tool_uses_20250919"));
+        edit.insert(field.to_string(), value);
+        let mut body = json!({
+            "model": "claude-3",
+            "context_management": {
+                "edits": [serde_json::Value::Object(edit)]
+            },
+            "messages": [{ "role": "user", "content": "Hi" }]
+        });
+
+        let err = translate_request(
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiCompletion,
+            "gpt-4o",
+            &mut body,
+            false,
+        )
+        .expect_err("accepted-but-ignored clear_tool_uses fields should fail closed");
+
+        assert!(err.contains("clear_tool_uses_20250919"), "err = {err}");
+        assert!(err.contains(field), "field = {field}, err = {err}");
+        assert!(err.contains("unsupported"), "err = {err}");
+    }
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_treats_null_or_false_context_management_as_noop() {
+    for context_management in [serde_json::Value::Null, json!(false)] {
+        let body = json!({
+            "model": "claude-3",
+            "context_management": context_management,
+            "messages": []
+        });
+
+        let assessment = assess_request_translation(
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiCompletion,
+            &body,
+        );
+        let TranslationDecision::Allow = assessment.decision() else {
+            panic!("expected null/false context_management to be a no-op, got {assessment:?}");
+        };
     }
 }
 
@@ -5653,7 +5811,9 @@ fn assess_request_translation_claude_to_openai_rejects_context_controls_without_
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
-        panic!("expected context controls without visible user/context to fail closed, got {assessment:?}");
+        panic!(
+            "expected context controls without visible user/context to fail closed, got {assessment:?}"
+        );
     };
     assert!(
         message.contains("complete visible history"),
@@ -5693,7 +5853,9 @@ fn assess_request_translation_claude_to_openai_rejects_unpaired_tool_result_with
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
-        panic!("expected unpaired tool_result with context controls to fail closed, got {assessment:?}");
+        panic!(
+            "expected unpaired tool_result with context controls to fail closed, got {assessment:?}"
+        );
     };
     assert!(
         message.contains("complete visible history"),
@@ -5732,12 +5894,71 @@ fn assess_request_translation_claude_to_openai_rejects_unpaired_assistant_tool_u
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
-        panic!("expected unpaired assistant tool_use with context controls to fail closed, got {assessment:?}");
+        panic!(
+            "expected unpaired assistant tool_use with context controls to fail closed, got {assessment:?}"
+        );
     };
     assert!(
         message.contains("complete visible history"),
         "message = {message}"
     );
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_rejects_duplicate_tool_use_id_even_with_matching_results(
+) {
+    let body = json!({
+        "model": "claude-3",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Use both lookups."
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_duplicate",
+                        "name": "lookup",
+                        "input": { "query": "weather" }
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_duplicate",
+                        "name": "lookup",
+                        "input": { "query": "forecast" }
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_duplicate",
+                        "content": "sunny"
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_duplicate",
+                        "content": "rain later"
+                    }
+                ]
+            }
+        ]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected duplicate assistant tool_use ids to fail closed, got {assessment:?}");
+    };
+    assert!(message.contains("tool_use"), "message = {message}");
+    assert!(message.contains("duplicate"), "message = {message}");
 }
 
 #[test]
@@ -5787,7 +6008,9 @@ fn assess_request_translation_claude_to_openai_rejects_duplicate_tool_use_id_wit
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
-        panic!("expected duplicate assistant tool_use ids with only one result to fail closed, got {assessment:?}");
+        panic!(
+            "expected duplicate assistant tool_use ids with only one result to fail closed, got {assessment:?}"
+        );
     };
     assert!(
         message.contains("complete visible history"),
@@ -7799,6 +8022,298 @@ fn translate_request_claude_to_responses_drops_anthropic_hint_controls_and_keeps
     assert!(body["tools"].is_array(), "body = {body:?}");
     assert_eq!(body["tool_choice"]["type"], "function");
     assert_eq!(body["tool_choice"]["name"], "lookup");
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_applies_clear_thinking_default_before_dropping_control(
+) {
+    let mut chat_body = json!({
+        "model": "claude-3",
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048
+        },
+        "context_management": {
+            "edits": [{
+                "type": "clear_thinking_20251015"
+            }]
+        },
+        "messages": [
+            { "role": "user", "content": "First question" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "old reasoning",
+                        "signature": "sig_old"
+                    },
+                    {
+                        "type": "text",
+                        "text": "First answer"
+                    }
+                ]
+            },
+            { "role": "user", "content": "Second question" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "recent reasoning",
+                        "signature": "sig_recent"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Second answer"
+                    }
+                ]
+            },
+            { "role": "user", "content": "Continue" }
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut chat_body,
+        false,
+    )
+    .expect("clear_thinking should be applied before Anthropic controls are dropped");
+
+    assert_no_anthropic_only_top_level_fields(&chat_body);
+    let messages = chat_body["messages"].as_array().expect("chat messages");
+    assert!(messages[1].get("reasoning_content").is_none());
+    assert_eq!(messages[1]["content"], "First answer");
+    assert_eq!(messages[3]["reasoning_content"], "recent reasoning");
+    assert_eq!(messages[3]["content"], "Second answer");
+    let serialized = serde_json::to_string(&chat_body).unwrap();
+    assert!(
+        !serialized.contains("old reasoning"),
+        "body = {chat_body:?}"
+    );
+    assert!(!serialized.contains("signature"), "body = {chat_body:?}");
+    assert!(
+        !serialized.contains("encrypted_content"),
+        "body = {chat_body:?}"
+    );
+    assert!(
+        !serialized.contains("_anthropic_reasoning_replay"),
+        "body = {chat_body:?}"
+    );
+
+    let mut responses_body = json!({
+        "model": "claude-3",
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048
+        },
+        "context_management": {
+            "edits": [{
+                "type": "clear_thinking_20251015",
+                "keep": {
+                    "type": "thinking_turns",
+                    "value": 1
+                }
+            }]
+        },
+        "messages": [
+            { "role": "user", "content": "First question" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "old reasoning",
+                        "signature": "sig_old"
+                    },
+                    {
+                        "type": "text",
+                        "text": "First answer"
+                    }
+                ]
+            },
+            { "role": "user", "content": "Second question" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "recent reasoning",
+                        "signature": "sig_recent"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Second answer"
+                    }
+                ]
+            },
+            { "role": "user", "content": "Continue" }
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiResponses,
+        "gpt-4o",
+        &mut responses_body,
+        false,
+    )
+    .expect("explicit clear_thinking keep should be applied before Responses translation");
+
+    assert_no_anthropic_only_top_level_fields(&responses_body);
+    let input = responses_body["input"].as_array().expect("responses input");
+    assert!(
+        input
+            .iter()
+            .any(|item| item["type"] == "reasoning"
+                && item["summary"][0]["text"] == "recent reasoning"),
+        "body = {responses_body:?}"
+    );
+    let serialized = serde_json::to_string(&responses_body).unwrap();
+    assert!(
+        !serialized.contains("old reasoning"),
+        "body = {responses_body:?}"
+    );
+    assert!(
+        !serialized.contains("signature"),
+        "body = {responses_body:?}"
+    );
+    assert!(
+        !serialized.contains("encrypted_content"),
+        "body = {responses_body:?}"
+    );
+    assert!(
+        !serialized.contains("_anthropic_reasoning_replay"),
+        "body = {responses_body:?}"
+    );
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_clear_thinking_keep_all_preserves_visible_thinking_text(
+) {
+    let mut body = json!({
+        "model": "claude-3",
+        "context_management": {
+            "edits": [{
+                "type": "clear_thinking_20251015",
+                "keep": "all"
+            }]
+        },
+        "messages": [
+            { "role": "user", "content": "First question" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "old reasoning",
+                        "signature": "sig_old"
+                    },
+                    {
+                        "type": "text",
+                        "text": "First answer"
+                    }
+                ]
+            },
+            { "role": "user", "content": "Second question" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "recent reasoning",
+                        "signature": "sig_recent"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Second answer"
+                    }
+                ]
+            },
+            { "role": "user", "content": "Continue" }
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("keep all should preserve visible thinking text while dropping carrier fields");
+
+    let messages = body["messages"].as_array().expect("chat messages");
+    assert_eq!(messages[1]["reasoning_content"], "old reasoning");
+    assert_eq!(messages[3]["reasoning_content"], "recent reasoning");
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(!serialized.contains("signature"), "body = {body:?}");
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_clear_tool_inputs_prunes_empty_messages() {
+    let mut body = anthropic_tool_clear_history_body(json!({
+        "edits": [{
+            "type": "clear_tool_uses_20250919",
+            "keep": {
+                "type": "tool_uses",
+                "value": 1
+            },
+            "clear_tool_inputs": true
+        }]
+    }));
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("clear_tool_inputs should remove older tool interactions without empty messages");
+
+    let messages = body["messages"].as_array().expect("chat messages");
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.get("content") != Some(&json!(""))),
+        "body = {body:?}"
+    );
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(!serialized.contains("toolu_lookup"), "body = {body:?}");
+    assert!(!serialized.contains("toolu_search"), "body = {body:?}");
+    assert!(serialized.contains("toolu_calc"), "body = {body:?}");
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_clear_tool_uses_trims_exclude_tools() {
+    let mut body = anthropic_tool_clear_history_body(json!({
+        "edits": [{
+            "type": "clear_tool_uses_20250919",
+            "keep": {
+                "type": "tool_uses",
+                "value": 1
+            },
+            "exclude_tools": [" lookup_weather "],
+            "clear_tool_inputs": true
+        }]
+    }));
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("trimmed exclude_tools should still match tool names");
+
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(serialized.contains("toolu_lookup"), "body = {body:?}");
+    assert!(!serialized.contains("toolu_search"), "body = {body:?}");
+    assert!(serialized.contains("toolu_calc"), "body = {body:?}");
 }
 
 #[test]

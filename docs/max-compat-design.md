@@ -72,7 +72,7 @@ Client brand names can still exist in wrappers, real-client test matrix labels, 
 The product promise is bounded: protocol coverage means every request is governed by maximum safe compatibility. When no cross-protocol construction is needed, the implementation may keep original provider bytes and fields unchanged within proxy routing, auth, header, and observability boundaries. When construction is needed, the proxy preserves the maximum safe portable representation and warns or rejects at hard boundaries. That singular behavior is the product contract; provider-specific fidelity remains bounded by portability.
 
 - same-wire native preservation is an internal optimization: preserve the original provider payload within proxy routing, auth, and observability boundaries when no body mutation or response normalization is required
-- provider prompt-cache support is provider-native request-control support: preserve or map only explicit provider-native cache request controls as a request-control modifier; this is not `llmup` caching and not a separate product behavior
+- provider prompt-cache support is provider-native request-control support: `llmup` does not cache; it preserves or maps explicit provider cache controls, and may synthesize an OpenAI-family `prompt_cache_key` only in the controlled stable static-prefix path with redacted/fingerprinted trace metadata; this is not general automatic cache-control generation and not a separate product behavior
 - local transcript replay is a built-in state expansion helper: keep short-term process-memory transcript state only for llmup-owned `resp_llmup_*` IDs when request construction needs it; configure only retention bounds, not a compatibility switch
 - constructed requests use maximum safe compatibility: preserve the maximum safe portable representation and emit portability warnings when non-portable detail is omitted
 - provider-native state and native extensions: preserve only when same-wire internal handling can keep native semantics unchanged unless a documented, explicit shim exists
@@ -153,7 +153,7 @@ The product behavior is intentionally singular:
 
 - same-wire native preservation is an internal optimization for routes that can avoid body mutation and response normalization
 - request construction always uses maximum safe compatibility
-- provider prompt-cache support is provider-native request-control support, not a `llmup` cache and not a separate product behavior
+- provider prompt-cache support is provider-native request-control support, not a `llmup` cache and not a separate product behavior; it preserves or maps explicit controls and may synthesize OpenAI-family `prompt_cache_key` only in the controlled stable-prefix path with redaction/fingerprint, not as general automatic cache controls
 - local transcript replay is an internal helper under maximum safe compatibility, not a user-facing mode
 - hard portability boundaries fail closed before upstream when the proxy cannot preserve semantics or represent them by omitting non-portable detail with a portability warning
 

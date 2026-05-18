@@ -3,12 +3,12 @@
 #![allow(dead_code)]
 
 use axum::{
-    Router,
     body::Body,
     extract::{Json, Path, State},
     http::{Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
+    Router,
 };
 use serde_json::Value;
 use std::{
@@ -392,8 +392,8 @@ pub async fn spawn_openai_responses_reasoning_mock() -> (String, tokio::task::Jo
     (base, handle)
 }
 
-pub async fn spawn_openai_responses_reasoning_with_encrypted_carrier_mock()
--> (String, tokio::task::JoinHandle<()>) {
+pub async fn spawn_openai_responses_reasoning_with_encrypted_carrier_mock(
+) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let base = format!("http://127.0.0.1:{port}");

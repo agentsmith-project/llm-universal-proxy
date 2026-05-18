@@ -5,7 +5,7 @@ use axum::{
 use tracing::debug;
 
 use crate::formats::UpstreamFormat;
-use crate::hooks::{CredentialSource, fingerprint_credential};
+use crate::hooks::{fingerprint_credential, CredentialSource};
 
 use super::data_auth::{DataAccess, RequestAuthContext, RequestAuthorization};
 use super::secret_redaction::SecretRedactor;
@@ -351,15 +351,11 @@ mod tests {
 
         strip_auth_headers(&mut headers);
 
-        assert!(
-            !headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("x-goog-api-key"))
-        );
-        assert!(
-            headers
-                .iter()
-                .any(|(name, value)| name == "openai-organization" && value == "org_123")
-        );
+        assert!(!headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("x-goog-api-key")));
+        assert!(headers
+            .iter()
+            .any(|(name, value)| name == "openai-organization" && value == "org_123"));
     }
 }

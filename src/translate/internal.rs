@@ -2,6 +2,8 @@
 //!
 //! Reference: 9router open-sse/translator/index.js — source → openai → target.
 
+use std::collections::BTreeSet;
+
 use serde_json::Value;
 
 use crate::config::ModelSurface;
@@ -96,6 +98,9 @@ pub fn translate_request_with_policy(
     }
     // Step 1: client → openai (if client is not openai)
     if client_format != UpstreamFormat::OpenAiCompletion {
+        if client_format == UpstreamFormat::Anthropic && openai_family_format(upstream_format) {
+            apply_anthropic_context_management_request_edits(body)?;
+        }
         client_to_openai_completion(client_format, upstream_format, body)?;
     }
     apply_request_translation_policy_defaults(UpstreamFormat::OpenAiCompletion, &policy, body);
@@ -119,6 +124,13 @@ pub fn translate_request_with_policy(
     }
     apply_request_translation_policy_defaults(upstream_format, &policy, body);
     Ok(())
+}
+
+fn openai_family_format(format: UpstreamFormat) -> bool {
+    matches!(
+        format,
+        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
+    )
 }
 
 fn apply_request_scoped_bridge_structural_repair_pass(
@@ -1000,6 +1012,405 @@ fn validate_anthropic_content_tool_names(content: &Value) -> Result<(), String> 
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnthropicThinkingKeep {
+    All,
+    RecentTurns(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AnthropicToolClearOptions {
+    keep_tool_uses: usize,
+    clear_tool_inputs: bool,
+    exclude_tools: BTreeSet<String>,
+}
+
+fn apply_anthropic_context_management_request_edits(body: &mut Value) -> Result<(), String> {
+    let edits = body
+        .get("context_management")
+        .and_then(|context_management| context_management.get("edits"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    for edit in edits {
+        match edit.get("type").and_then(Value::as_str) {
+            Some("clear_thinking_20251015") => {
+                apply_anthropic_clear_thinking_edit(
+                    body,
+                    anthropic_clear_thinking_keep_from_edit(&edit)?,
+                );
+            }
+            Some("clear_tool_uses_20250919") => {
+                apply_anthropic_clear_tool_uses_edit(
+                    body,
+                    anthropic_clear_tool_uses_options_from_edit(&edit)?,
+                );
+            }
+            Some(other) => {
+                return Err(format!(
+                    "Anthropic context_management edit `{other}` cannot be translated to OpenAI-family targets"
+                ));
+            }
+            None => {
+                return Err(
+                    "Anthropic context_management edits require a string `type` field".to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn anthropic_clear_thinking_keep_from_edit(edit: &Value) -> Result<AnthropicThinkingKeep, String> {
+    let Some(keep) = edit.get("keep") else {
+        return Ok(AnthropicThinkingKeep::RecentTurns(1));
+    };
+    match keep {
+        Value::String(value) if value == "all" => Ok(AnthropicThinkingKeep::All),
+        Value::Object(object)
+            if object.get("type").and_then(Value::as_str) == Some("thinking_turns") =>
+        {
+            let Some(value) = object
+                .get("value")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+            else {
+                return Err(
+                    "clear_thinking_20251015.keep.value must be a positive integer".to_string(),
+                );
+            };
+            Ok(AnthropicThinkingKeep::RecentTurns(value as usize))
+        }
+        _ => Err(
+            "clear_thinking_20251015.keep must be `all` or `{type:\"thinking_turns\", value:N}`"
+                .to_string(),
+        ),
+    }
+}
+
+fn apply_anthropic_clear_thinking_edit(body: &mut Value, keep: AnthropicThinkingKeep) {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let thinking_turn_indices = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            (message.get("role").and_then(Value::as_str) == Some("assistant")
+                && anthropic_content_has_thinking_block(message.get("content")))
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+
+    let keep_indices = match keep {
+        AnthropicThinkingKeep::All => return,
+        AnthropicThinkingKeep::RecentTurns(keep_turns) => thinking_turn_indices
+            .iter()
+            .rev()
+            .take(keep_turns)
+            .copied()
+            .collect::<BTreeSet<_>>(),
+    };
+
+    for (index, message) in messages.iter_mut().enumerate() {
+        if keep_indices.contains(&index) {
+            continue;
+        }
+        remove_anthropic_thinking_blocks_from_message(message);
+    }
+}
+
+fn anthropic_content_has_thinking_block(content: Option<&Value>) -> bool {
+    match content {
+        Some(Value::Array(blocks)) => blocks.iter().any(anthropic_block_is_thinking),
+        Some(Value::Object(_)) => content.is_some_and(anthropic_block_is_thinking),
+        _ => false,
+    }
+}
+
+fn anthropic_block_is_thinking(block: &Value) -> bool {
+    block.get("type").and_then(Value::as_str) == Some("thinking")
+}
+
+fn remove_anthropic_thinking_blocks_from_message(message: &mut Value) {
+    let Some(content) = message.get_mut("content") else {
+        return;
+    };
+    match content {
+        Value::Array(blocks) => {
+            blocks.retain(|block| !anthropic_block_is_thinking(block));
+        }
+        Value::Object(_) if anthropic_block_is_thinking(content) => {
+            *content = Value::Array(Vec::new());
+        }
+        _ => {}
+    }
+}
+
+fn anthropic_clear_tool_uses_options_from_edit(
+    edit: &Value,
+) -> Result<AnthropicToolClearOptions, String> {
+    let keep_tool_uses = edit
+        .get("keep")
+        .and_then(Value::as_object)
+        .and_then(|keep| {
+            (keep.get("type").and_then(Value::as_str) == Some("tool_uses"))
+                .then(|| keep.get("value").and_then(Value::as_u64))
+                .flatten()
+        })
+        .unwrap_or(3);
+    if keep_tool_uses == 0 {
+        return Err("clear_tool_uses_20250919.keep.value must be positive".to_string());
+    }
+
+    let clear_tool_inputs = edit
+        .get("clear_tool_inputs")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let exclude_tools = edit
+        .get("exclude_tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|tool| !tool.is_empty())
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(AnthropicToolClearOptions {
+        keep_tool_uses: keep_tool_uses as usize,
+        clear_tool_inputs,
+        exclude_tools,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AnthropicToolInteraction {
+    id: String,
+    name: Option<String>,
+}
+
+fn apply_anthropic_clear_tool_uses_edit(body: &mut Value, options: AnthropicToolClearOptions) {
+    let interactions = anthropic_paired_tool_interactions(body);
+    let eligible = interactions
+        .iter()
+        .filter(|interaction| {
+            interaction
+                .name
+                .as_deref()
+                .map_or(true, |name| !options.exclude_tools.contains(name.trim()))
+        })
+        .collect::<Vec<_>>();
+    let clear_count = eligible.len().saturating_sub(options.keep_tool_uses);
+    if clear_count == 0 {
+        return;
+    }
+    let clear_ids = eligible
+        .into_iter()
+        .take(clear_count)
+        .map(|interaction| interaction.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    if options.clear_tool_inputs {
+        remove_anthropic_tool_interactions(body, &clear_ids);
+    } else {
+        replace_anthropic_tool_results_with_context_cleared_placeholder(body, &clear_ids);
+    }
+}
+
+fn anthropic_paired_tool_interactions(body: &Value) -> Vec<AnthropicToolInteraction> {
+    let Some(messages) = body.get("messages").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut result_ids = BTreeSet::new();
+    for message in messages {
+        anthropic_visit_content_blocks_for_translate(message.get("content"), |block| {
+            if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                if let Some(tool_use_id) = block
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|tool_use_id| !tool_use_id.is_empty())
+                {
+                    result_ids.insert(tool_use_id.to_string());
+                }
+            }
+        });
+    }
+
+    let mut interactions = Vec::new();
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        anthropic_visit_content_blocks_for_translate(message.get("content"), |block| {
+            if !matches!(
+                block.get("type").and_then(Value::as_str),
+                Some("tool_use" | "server_tool_use")
+            ) {
+                return;
+            }
+            let Some(tool_use_id) = block
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|tool_use_id| !tool_use_id.is_empty())
+            else {
+                return;
+            };
+            if result_ids.contains(tool_use_id) {
+                interactions.push(AnthropicToolInteraction {
+                    id: tool_use_id.to_string(),
+                    name: block
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string),
+                });
+            }
+        });
+    }
+    interactions
+}
+
+fn anthropic_visit_content_blocks_for_translate(
+    content: Option<&Value>,
+    mut visit: impl FnMut(&Value),
+) {
+    match content {
+        Some(Value::Array(blocks)) => {
+            for block in blocks {
+                visit(block);
+            }
+        }
+        Some(Value::Object(_)) => {
+            if let Some(block) = content {
+                visit(block);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn remove_anthropic_tool_interactions(body: &mut Value, clear_ids: &BTreeSet<String>) {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let mut changed_message_indices = BTreeSet::new();
+    for (index, message) in messages.iter_mut().enumerate() {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let Some(content) = message.get_mut("content") else {
+            continue;
+        };
+        match content {
+            Value::Array(blocks) => {
+                let before_len = blocks.len();
+                blocks.retain(|block| {
+                    !anthropic_tool_block_matches_clear_ids(block, &role, clear_ids)
+                });
+                if blocks.len() != before_len {
+                    changed_message_indices.insert(index);
+                }
+            }
+            Value::Object(_)
+                if anthropic_tool_block_matches_clear_ids(content, &role, clear_ids) =>
+            {
+                *content = Value::Array(Vec::new());
+                changed_message_indices.insert(index);
+            }
+            _ => {}
+        }
+    }
+    let mut index = 0usize;
+    messages.retain(|message| {
+        let keep = !changed_message_indices.contains(&index)
+            || !anthropic_message_content_empty_after_context_edit(message);
+        index += 1;
+        keep
+    });
+}
+
+fn anthropic_message_content_empty_after_context_edit(message: &Value) -> bool {
+    match message.get("content") {
+        Some(Value::Array(blocks)) => blocks.is_empty(),
+        Some(Value::String(text)) => text.trim().is_empty(),
+        Some(Value::Null) | None => true,
+        _ => false,
+    }
+}
+
+fn replace_anthropic_tool_results_with_context_cleared_placeholder(
+    body: &mut Value,
+    clear_ids: &BTreeSet<String>,
+) {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for message in messages {
+        let Some(content) = message.get_mut("content") else {
+            continue;
+        };
+        match content {
+            Value::Array(blocks) => {
+                for block in blocks {
+                    replace_anthropic_tool_result_if_cleared(block, clear_ids);
+                }
+            }
+            Value::Object(_) => replace_anthropic_tool_result_if_cleared(content, clear_ids),
+            _ => {}
+        }
+    }
+}
+
+fn anthropic_tool_block_matches_clear_ids(
+    block: &Value,
+    role: &str,
+    clear_ids: &BTreeSet<String>,
+) -> bool {
+    match block.get("type").and_then(Value::as_str) {
+        Some("tool_use" | "server_tool_use") if role == "assistant" => block
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|tool_use_id| clear_ids.contains(tool_use_id)),
+        Some("tool_result") => block
+            .get("tool_use_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|tool_use_id| clear_ids.contains(tool_use_id)),
+        _ => false,
+    }
+}
+
+fn replace_anthropic_tool_result_if_cleared(block: &mut Value, clear_ids: &BTreeSet<String>) {
+    if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+        return;
+    }
+    let Some(tool_use_id) = block
+        .get("tool_use_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+    else {
+        return;
+    };
+    if !clear_ids.contains(tool_use_id) {
+        return;
+    }
+    block["content"] = Value::String(
+        "[tool result cleared by context_management.clear_tool_uses_20250919]".to_string(),
+    );
+}
+
 fn anthropic_block_has_nonportable_thinking_provenance(block: &Value) -> bool {
     if block.get("type").and_then(Value::as_str) != Some("thinking") {
         return false;
@@ -1668,8 +2079,8 @@ fn anthropic_tool_choice_to_openai(
         }
         other => {
             return Err(format!(
-            "Anthropic tool_choice.type `{other}` cannot be translated to OpenAI Chat Completions"
-        ))
+                "Anthropic tool_choice.type `{other}` cannot be translated to OpenAI Chat Completions"
+            ));
         }
     };
 
@@ -2105,14 +2516,14 @@ fn openai_image_url_part_to_claude_block(part: &Value) -> Result<Value, String> 
             "type": "image",
             "source": { "type": "url", "url": url }
         })),
-        MediaSourceReference::ProviderOrLocalUri { uri } => Err(
-            openai_content_part_not_portable_to_anthropic_message(
+        MediaSourceReference::ProviderOrLocalUri { uri } => {
+            Err(openai_content_part_not_portable_to_anthropic_message(
                 "image_url",
                 &format!(
                     "Anthropic image URL sources only support http:// or https:// remote URLs; provider/local URI `{uri}` is not portable."
                 ),
-            ),
-        ),
+            ))
+        }
         MediaSourceReference::BareBase64 { .. } | MediaSourceReference::Unsupported { .. } => {
             Err(openai_content_part_not_portable_to_anthropic_message(
                 "image_url",
@@ -2148,7 +2559,9 @@ fn openai_file_part_to_claude_document_block(part: &Value) -> Result<Value, Stri
             if !is_pdf_mime(&mime_type) {
                 return Err(openai_file_part_error_to_anthropic(
                     "file/input_file",
-                    &format!("only application/pdf files can map to Anthropic document blocks; got MIME `{mime_type}`."),
+                    &format!(
+                        "only application/pdf files can map to Anthropic document blocks; got MIME `{mime_type}`."
+                    ),
                 ));
             }
             Ok(serde_json::json!({
@@ -2160,7 +2573,9 @@ fn openai_file_part_to_claude_document_block(part: &Value) -> Result<Value, Stri
             if !is_pdf_mime(&mime_type) {
                 return Err(openai_file_part_error_to_anthropic(
                     "file/input_file",
-                    &format!("only application/pdf HTTP(S) URLs can map to Anthropic document URL blocks; got MIME `{mime_type}`."),
+                    &format!(
+                        "only application/pdf HTTP(S) URLs can map to Anthropic document URL blocks; got MIME `{mime_type}`."
+                    ),
                 ));
             }
             Ok(serde_json::json!({
@@ -2186,7 +2601,9 @@ fn openai_file_part_to_claude_document_block(part: &Value) -> Result<Value, Stri
                 .unwrap_or_default();
             Err(openai_file_part_error_to_anthropic(
                 "file/input_file",
-                &format!("bare base64 file_data{detail} must not be coerced into Anthropic document bytes; use a MIME-bearing PDF data URI."),
+                &format!(
+                    "bare base64 file_data{detail} must not be coerced into Anthropic document bytes; use a MIME-bearing PDF data URI."
+                ),
             ))
         }
     }
@@ -2250,11 +2667,13 @@ fn openai_system_part_to_claude_block(role: &str, part: &Value) -> Result<Option
     match part_type {
         "text" => openai_text_part_to_claude_text_block(part).map(Some),
         "refusal" => Ok(Some(openai_refusal_part_to_claude_text_block(part))),
-        other => Err(openai_system_content_part_not_portable_to_anthropic_message(
-            role,
-            openai_system_content_part_label(other),
-            "system/developer content arrays only support text/refusal parts; unsupported typed parts must not be silently dropped.",
-        )),
+        other => Err(
+            openai_system_content_part_not_portable_to_anthropic_message(
+                role,
+                openai_system_content_part_label(other),
+                "system/developer content arrays only support text/refusal parts; unsupported typed parts must not be silently dropped.",
+            ),
+        ),
     }
 }
 

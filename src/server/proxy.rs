@@ -6,11 +6,11 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::{
-    Extension, Json,
     body::Body,
     extract::{Path, Request, State},
     http::{HeaderMap, Response, StatusCode},
     response::IntoResponse,
+    Extension, Json,
 };
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
@@ -22,32 +22,32 @@ use crate::debug_trace::{ConversationStateBridgeDebugTrace, DebugTraceContext};
 use crate::downstream::DownstreamCancellation;
 use crate::formats::UpstreamFormat;
 use crate::hooks::{
-    HeaderEntry, HookRequestContext, capture_headers, json_response_headers, new_request_id,
-    now_timestamp_ms, sse_response_headers,
+    capture_headers, json_response_headers, new_request_id, now_timestamp_ms, sse_response_headers,
+    HeaderEntry, HookRequestContext,
 };
 use crate::prompt_cache_controls::{
-    OpenAiFamilyPromptCacheKeySynthesisContext,
     synthesize_openai_family_prompt_cache_key_from_source,
+    OpenAiFamilyPromptCacheKeySynthesisContext,
 };
 use crate::provider_state_controls::{
     provider_state_control_enabled, responses_stateful_request_controls,
 };
 use crate::request_processing::{
-    PromptCacheRequestControl, RequestProcessing, RequestProcessingInput, StateBridgeModifier,
-    classify_request_processing,
+    classify_request_processing, PromptCacheRequestControl, RequestProcessing,
+    RequestProcessingInput, StateBridgeModifier,
 };
-use crate::streaming::{GuardedSseStream, TranslateSseStream, needs_stream_translation};
+use crate::streaming::{needs_stream_translation, GuardedSseStream, TranslateSseStream};
 use crate::translate::{
-    RequestTranslationPolicy, ResponseTranslationContext, TranslationDecision,
     assess_request_translation_with_surface, translate_request_with_policy,
-    translate_response_with_context,
+    translate_response_with_context, RequestTranslationPolicy, ResponseTranslationContext,
+    TranslationDecision,
 };
 use crate::upstream;
 
-use super::body_limits::{JsonRequestBody, read_limited_json_request};
+use super::body_limits::{read_limited_json_request, JsonRequestBody};
 use super::conversation_state_bridge::{
-    BridgeRouteConfigFingerprint, ConversationStateBridgeStore, LOCAL_REPLAY_SCHEMA_VERSION,
-    LOCAL_RESPONSE_ID_PREFIX, StoredBridgeResponse,
+    BridgeRouteConfigFingerprint, ConversationStateBridgeStore, StoredBridgeResponse,
+    LOCAL_REPLAY_SCHEMA_VERSION, LOCAL_RESPONSE_ID_PREFIX,
 };
 use super::data_auth::{self, RequestAuthContext};
 use super::errors::{
@@ -60,14 +60,14 @@ use super::headers::{
     append_upstream_protocol_response_headers, apply_upstream_headers, build_auth_headers,
 };
 use super::public_boundary::{
-    REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD, reject_internal_request_scoped_tool_bridge_context,
-    validate_provider_forwarding_request_boundary,
+    reject_internal_request_scoped_tool_bridge_context,
+    validate_provider_forwarding_request_boundary, REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD,
 };
 use super::responses_resources::resolve_native_responses_stateful_route_or_error;
 use super::secret_redaction::{
-    RedactingSseObservationTransform, RedactingSseStream, SecretRedactor, redactor_for_request,
+    redactor_for_request, RedactingSseObservationTransform, RedactingSseStream, SecretRedactor,
 };
-use super::state::{AppState, DEFAULT_NAMESPACE, RuntimeNamespaceState};
+use super::state::{AppState, RuntimeNamespaceState, DEFAULT_NAMESPACE};
 use super::tracked_body::TrackedBodyStream;
 
 const TOOL_BRIDGE_CONTEXT_VERSION: u64 = 2;
