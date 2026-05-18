@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.34 - 2026-05-18
+
+- Advanced the main-branch release identity to Cargo package version `0.2.34`, the next patch version after the published, occupied `v0.2.33` tag, without moving, deleting, or reusing the existing tag.
+- Refreshed the checked-in container publication manifest and docs around the actual published `v0.2.33` multi-arch image digest while keeping `0.2.34` / `v0.2.34` as the next release identity, not a published container tag yet.
+- Verified the `v0.2.33` release workflow, GitHub Release, GHCR `v0.2.33`, `0.2.33`, and `latest` image tags, and the online `install.sh` path after publication.
+
 ## v0.2.33 - 2026-05-18
 
 - Restored full repository documentation contract coverage after the user-facing README / clients simplification: README now keeps pointers to the advanced compatibility, protocol matrix, and design docs while the quick start remains focused on install -> configure -> launch.
