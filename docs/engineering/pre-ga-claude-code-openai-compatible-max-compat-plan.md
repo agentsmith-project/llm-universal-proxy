@@ -2,7 +2,7 @@
 
 - 状态：implementation contract
 - 日期：2026-05-18
-- 范围：把 Claude Code / Anthropic Messages client -> OpenAI-compatible provider 作为 `llmup` 的一等正向路径实现，并通过真实 CLI / E2E 证明普通对话、streaming、工具循环、编辑工具、thinking/reasoning 和 provider-side prompt cache hint 都可用。
+- 范围：把 Claude Code / Anthropic Messages client -> OpenAI-family provider 作为 `llmup` 的一等正向路径实现，覆盖 OpenAI Chat Completions 与 OpenAI Responses 两类 target adapter，并通过真实 CLI / E2E 证明普通对话、streaming、工具循环、编辑工具、thinking/reasoning 和 provider-side prompt cache hint 都可用。
 - Pre-GA 原则：不为旧行为保留兼容负担；允许重构 translation pipeline、assessment、stream reducer、tool bridge、prompt-cache hint 和轻量状态边界。重构必须服务于最终合同，不能把 `llmup` 做成 LiteLLM / OpenRouter 风格的重型网关。
 
 ## 背景
@@ -13,7 +13,7 @@
 
 ## 目标合同
 
-1. `llmup` MUST 把 Claude Code / Anthropic Messages client -> OpenAI-compatible Chat Completions provider 视为一等正向路径。
+1. `llmup` MUST 把 Claude Code / Anthropic Messages client -> OpenAI-family provider 视为一等正向路径。OpenAI-family 在本文中同时包含 Chat Completions (`openai-completion`) 与 Responses (`openai-responses`) 两种 target adapter。
 2. 该路径 MUST 通过真实 CLI / E2E：普通 `hi`、streaming、结构化 tool use/tool result、workspace edit fixture、usage 汇总和负向拒绝用例都要被验证。
 3. 在请求满足“完整可见 history”时，translation MUST 优先 `map` / `synthesize` / `warn+drop`，MUST NOT 因 Anthropic-only 顶层 hint 直接 fail closed。
 4. `llmup` MAY 合成 provider request 所需的兼容数据，但 MUST NOT 伪造 opaque security carrier、provider-owned resource、provider cache 内容或模型响应。
@@ -33,6 +33,7 @@
 - Claude Code LLM gateway：<https://code.claude.com/docs/en/llm-gateway>
 - OpenAI prompt caching：<https://developers.openai.com/api/docs/guides/prompt-caching>
 - OpenAI Chat Completions request fields：<https://platform.openai.com/docs/api-reference/chat/create>
+- OpenAI Responses request fields：<https://platform.openai.com/docs/api-reference/responses>
 - OpenAI reasoning guide：<https://developers.openai.com/api/docs/guides/reasoning>
 - OpenAI function calling guide：<https://developers.openai.com/api/docs/guides/function-calling>
 - OpenAI provider-managed conversation state：<https://developers.openai.com/api/docs/guides/conversation-state>
@@ -66,23 +67,46 @@ Claude Code / Anthropic Messages -> OpenAI-compatible 的请求 MUST 经过同�
 
 1. `assessment`：分类每个字段的 disposition：`map`、`synthesize`、`warn+drop`、`fallback-text`、`fail-closed`。这里必须判断完整可见 history、provider-owned state/resource、non-fallbackable unsupported media/source、invalid tool schema、非法显式 OpenAI fields。
 2. `deterministic normalization/edit`：执行无 LLM 的确定性规范化和可支持的 context edit，生成稳定 IR。该步骤 MAY 清理旧 tool results 或 unsigned visible thinking，但 MUST 保持 transcript 顺序和 tool call/result 约束。
-3. `request construction`：从 IR 构造 OpenAI-compatible request。Anthropic-only 顶层字段 MUST NOT 泄露到上游；工具、messages、system/developer 内容、response format、stream 参数和 model 参数必须按目标 provider surface 构造。
+3. `request construction`：从 IR 构造 OpenAI-family request。Anthropic-only 顶层字段 MUST NOT 泄露到上游；工具、messages/input、system/developer instructions、response format、stream 参数和 model 参数必须按目标 provider surface 构造。
 4. `provider cache hint synthesis`：在 request 构造后、upstream 前处理 `prompt_cache_key` / `prompt_cache_retention`。显式 OpenAI extra fields 优先；没有显式 key 时 MAY 受控合成 OpenAI provider request hint。
 5. `upstream`：发送到目标 provider。未知 provider feature MUST 由 surface 或显式 request 控制，不能盲目注入高风险字段。
 6. `stream reducer`：把 OpenAI-compatible chunks 聚合为 Anthropic SSE lifecycle，按 block id/index 维护 text、thinking、tool partial JSON、finish reason 和 usage。
 7. `response repair/usage telemetry`：修复可安全修复的 response shape，输出 warning/debug trace，保留 upstream raw usage 中可见的 cached tokens、reasoning tokens、prompt/completion tokens。Telemetry MUST NOT 驱动本地 cache 或 routing。
 
+## OpenAI-Family 双 Target 合同
+
+Chat Completions 和 Responses 都是 OpenAI-family target，但它们不是同一个 wire shape。实现 MUST 以同一份 normalized IR 为源，分别由 Chat target adapter 和 Responses target adapter 构造请求与解析响应。
+
+| 维度 | Chat Completions target | Responses target |
+| --- | --- | --- |
+| 上游 endpoint | `/v1/chat/completions` | `/v1/responses` |
+| 输入主结构 | `messages`，包含 `system/developer/user/assistant/tool` role | `instructions` + `input` items/messages |
+| 工具调用 | assistant `tool_calls` + `role:"tool"` results | `function_call` / `function_call_output` items；custom tools 走已有 bridge 语义 |
+| reasoning request | top-level `reasoning_effort` | nested `reasoning.effort` |
+| prompt cache hint | top-level `prompt_cache_key` / `prompt_cache_retention` | top-level `prompt_cache_key` / `prompt_cache_retention` |
+| provider state controls | 默认 stateless messages；不生成 Chat provider state | `previous_response_id` / `conversation` / hosted `prompt` 是 provider-managed state，只能 same-wire native preserve 或由 `llmup` 自有 transcript bridge 展开 |
+| streaming source | Chat chunks：text/tool delta/finish reason/usage | Responses events/items：output text、reasoning、function_call、function_call_output、usage/state events |
+
+合同要求：
+
+1. Anthropic -> OpenAI-family translation MUST 同时有 Chat 和 Responses target tests。不得因为 Chat target 可用就视为 OpenAI-family 完成。
+2. Target adapter MUST 只表达目标 wire shape 差异；assessment、完整可见 history 判断、field disposition、tool id 映射、prompt-cache hint、warning trace 应尽量共享。
+3. Responses target SHOULD 优先用 stateless full `input` 构造 Anthropic history 的翻译结果。`llmup` MUST NOT 为 Anthropic client 合成外部 provider `previous_response_id` / `conversation` 来制造 provider durable state。
+4. OpenAI Responses client same-wire 使用 Responses upstream 时，provider-native state controls 可以按 native policy 保留。跨协议或跨 upstream 时，只有 `llmup` 自有 in-memory transcript bridge 能把本地 id 展开为完整可见 history；不能展开时 MUST fail closed。
+5. Chat target 的 `tool_calls` / `role:"tool"` 与 Responses target 的 `function_call` / `function_call_output` 必须共享同一套 call-id 关联规则，避免同一 Anthropic tool loop 在两个 target 上行为不一致。
+6. Reasoning 和 prompt-cache 规则 MUST 同时覆盖两种 target shape：Chat 使用 `reasoning_effort`，Responses 使用 `reasoning.effort`；两者都可接收合法 `prompt_cache_key` / `prompt_cache_retention`。
+
 ## Field Disposition Matrix
 
 | 字段/形态 | 目标 disposition | 合同 |
 | --- | --- | --- |
-| top-level `thinking` | `map` 或 `warn+drop` | 若显式 `extra_body.openai.reasoning_effort` 合法，MUST 使用显式值；若 target surface 明确支持 OpenAI `reasoning_effort`，SHOULD 将 Anthropic thinking hint 映射为合法 effort；否则在完整可见 history 下 MUST warning 后丢弃顶层 hint。 |
+| top-level `thinking` | `map` 或 `warn+drop` | 若显式 `extra_body.openai.reasoning_effort` 合法，MUST 使用显式值；若 target surface 明确支持 Chat `reasoning_effort` 或 Responses `reasoning.effort`，SHOULD 将 Anthropic thinking hint 映射为目标 shape 的合法 effort；否则在完整可见 history 下 MUST warning 后丢弃顶层 hint。 |
 | top-level `context_management` | deterministic edit、`warn+drop` 或 `fail-closed` | 支持的 context edit MAY 在 normalization 中执行；未知但不影响完整可见 history 的 hint SHOULD warning+drop；依赖 provider compact/resource/opaque state 或缺少完整可见 history 时 MUST fail closed。 |
 | top-level `container` | `warn+drop` 或 `fail-closed` | 空、disabled、普通 hint、无 server resource 依赖且 history 完整时 SHOULD warning+drop；provider-owned `container.id`、skills、code execution、MCP、server tools/resource runtime MUST fail closed，除非该请求已由 `llmup` 自己拥有的内存 transcript 完全展开。 |
 | Anthropic `cache_control` | same-wire preserve 或 cross-provider `warn+drop` | Anthropic target 可按 same-wire 透传；OpenAI-compatible target MUST NOT 与 OpenAI `prompt_cache_key` / retention 硬互转。可用于 trace 说明“已丢弃 Anthropic cache hint”，但不能派生 OpenAI key。 |
 | `extra_body.openai.prompt_cache_key` | explicit `map` | OpenAI-family target MUST 保留并校验显式 key。显式 key 优先于合成 key；非法值 MUST fail closed。 |
 | `extra_body.openai.prompt_cache_retention` | explicit `map` | 仅允许 provider 支持的合法值。不得因为合成 key 自动设置 retention；非法显式值 MUST fail closed。 |
-| `tool_use` / `tool_result` | structured `map` | assistant `tool_use` MUST 转为 OpenAI Chat `tool_calls` 或等价 function call；user `tool_result` MUST 转为 `role:"tool"` 或等价 output。必须保留或合成稳定 call id，按 id/block index 关联，不能默认降级成普通文本。 |
+| `tool_use` / `tool_result` | structured `map` | assistant `tool_use` MUST 在 Chat target 转为 `tool_calls`，在 Responses target 转为 `function_call` / custom-tool bridge；user `tool_result` MUST 在 Chat target 转为 `role:"tool"`，在 Responses target 转为 `function_call_output`。必须保留或合成稳定 call id，按 id/block index 关联，不能默认降级成普通文本。 |
 | partial tool JSON | stream-aware `map` | Streaming 中 MUST 支持 partial JSON delta，维护 block id/index 和 arguments buffer。结束时必须生成目标 Anthropic lifecycle 事件和一致的 final content block。 |
 | unsigned plain visible thinking | reasoning side channel 或 context `map` | 可见文本 SHOULD 保留到目标 provider 支持的 reasoning side channel；不支持时 MAY 放入普通 assistant context，并记录降级 warning。 |
 | signed `thinking` with visible text | visible text `map` + carrier `warn+drop` | MUST NOT 伪造 signature。若 history 完整且 block 内有普通可见 thinking text，MAY 保留该文本并 warning/drop signature carrier；若后续 round-trip 依赖 signature 才能继续，MUST fail closed。 |
@@ -97,9 +121,9 @@ Claude Code / Anthropic Messages -> OpenAI-compatible 的请求 MUST 经过同�
 `llmup` MAY 合成以下数据，因为它们是目标协议兼容 shim 或 request-local bookkeeping：
 
 - OpenAI `prompt_cache_key`，前提是使用稳定、确定性、不可逆、不含敏感原文的 canonical digest，且显式用户 key 优先。
-- OpenAI `reasoning_effort`，前提是 target surface 明确支持，或用户通过 `extra_body.openai.reasoning_effort` 显式覆盖。
+- OpenAI-family reasoning hint：Chat `reasoning_effort` 或 Responses `reasoning.effort`，前提是 target surface 明确支持，或用户通过 `extra_body.openai.reasoning_effort` 显式覆盖。
 - Synthetic message/content block ids、tool-call ids、block index shim、stream reducer buffer id。
-- Provider-compatible request fields，例如必要的 `tool_choice`、function schema 包装、response format shim。
+- Provider-compatible request fields，例如 Chat `tool_choice` / `response_format` shim、Responses `tools` / `reasoning` / `input` item shape、function schema 包装。
 - Request/stream 内部 bookkeeping，例如 partial JSON buffer、usage accumulator、warning disposition trace。
 - 现有 `llmup`-owned in-memory transcript bridge 展开的 messages，用于把 provider-state-style client request 转成完整可见 history。
 
@@ -114,7 +138,7 @@ Claude Code / Anthropic Messages -> OpenAI-compatible 的请求 MUST 经过同�
 
 1. Top-level Anthropic `thinking` MUST 被视为能力 hint，而不是必须同语义转发的 opaque state。
 2. 显式 `extra_body.openai.reasoning_effort` MUST 优先，且非法值 MUST fail closed。
-3. 若 model surface 声明支持 OpenAI Chat `reasoning_effort` / Responses `reasoning.effort`，translator SHOULD 将 Anthropic `thinking` 映射为合法 effort。`budget_tokens` 只能用确定性、保守的区间启发式映射；不得生成目标不支持的值。
+3. 若 model surface 声明支持 OpenAI Chat `reasoning_effort` 或 Responses `reasoning.effort`，translator SHOULD 将 Anthropic `thinking` 映射为目标 shape 的合法 effort。`budget_tokens` 只能用确定性、保守的区间启发式映射；不得生成目标不支持的值。
 4. 未声明 reasoning support 的 OpenAI-compatible target MUST NOT 被盲目注入 reasoning field；在完整可见 history 下应 warning+drop 顶层 hint。
 5. Visible unsigned thinking MUST 尽量保留。优先进入目标 provider 的 reasoning side channel；没有 side channel 时可作为普通 assistant context 保留，并记录 trace。
 6. Signed/redacted/opaque carrier MUST NOT 被伪造。若请求仍有完整可见 history 且存在独立可见文本/摘要，translator MAY 保留可见部分并 warning/drop carrier；若只有 opaque carrier、或 provider 要求 signature round-trip 才能继续，MUST fail closed。
@@ -124,8 +148,8 @@ Claude Code / Anthropic Messages -> OpenAI-compatible 的请求 MUST 经过同�
 
 1. `llmup` MUST NOT 实现 response cache、semantic cache、result cache、provider KV cache 保存、cache lookup、cache-aware routing 或 fallback routing。
 2. OpenAI prompt caching 是 provider-side 能力。Translator MUST 保持静态 prefix 稳定：system/developer 内容、tool 定义、schema 序列化、message/tool 顺序不得混入 request id、trace id、时间戳、随机数、`previous_response_id` 或 `resp_llmup_*`。
-3. 显式 `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` MUST 保留、校验并映射到 OpenAI-family target。
-4. 当 target 是 OpenAI-family、没有显式 key、且 translator 能构造稳定 canonical static-prefix digest 时，`llmup` SHOULD 合成 OpenAI `prompt_cache_key`。推荐格式：`llmup:v1:<namespace-fp>:<upstream-fp>:<model-fp>:<static-prefix-fp>`。
+3. 显式 `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` MUST 保留、校验并映射到 Chat Completions 和 Responses target。
+4. 当 target 是 OpenAI-family Chat 或 Responses、没有显式 key、且 translator 能构造稳定 canonical static-prefix digest 时，`llmup` SHOULD 合成 OpenAI `prompt_cache_key`。推荐格式：`llmup:v1:<namespace-fp>:<upstream-fp>:<model-fp>:<static-prefix-fp>`。
 5. Canonical static-prefix digest 的输入 MUST 只包含 canonicalized target upstream static prefix：resolved namespace/upstream/model/protocol/version、system/developer instructions、tool definitions/schema、stable response-format/static config。
 6. Digest 输入和合成 key MUST NOT 包含最后用户消息、dynamic transcript tail、request id、timestamp、conversation/container ids、provider credentials、trace ids、random、raw prompt text 明文、Anthropic `cache_control`、`previous_response_id` 或 `resp_llmup_*`。
 7. 合成 key 不得自动设置 `prompt_cache_retention`。Retention 只能来自合法显式请求或 provider-native same-wire request。
@@ -156,11 +180,12 @@ Claude Code / Anthropic Messages -> OpenAI-compatible 的请求 MUST 经过同�
 实现 MAY 大幅重构，但 SHOULD 保持模块边界清晰：
 
 - `src/translate/internal/assessment.rs`：从 hard reject 列表改为 field disposition classifier，输出 `map/synthesize/warn+drop/fallback-text/fail-closed` 和完整可见 history 判断结果。
-- `src/translate/internal.rs`：让 Anthropic -> OpenAI construction 消费规范化 IR，保证 Anthropic-only 字段不会泄露到上游。
+- `src/translate/internal.rs`：让 Anthropic -> OpenAI-family construction 消费规范化 IR，保证 Anthropic-only 字段不会泄露到上游，并把 Chat / Responses target adapter 分开。
+- `src/translate/internal/openai_responses.rs`：把 Responses-specific input item、function_call/function_call_output、reasoning item、custom-tool bridge 和 Responses SSE/response repair 作为一等 target adapter 维护。
 - Content block IR：统一 text、thinking、tool_use、tool_result、partial JSON、media/source 和 block id/index，降低 request 与 stream 两边的重复逻辑。
-- Reasoning surface：增加最小 provider capability，例如是否支持 OpenAI `reasoning_effort`、允许 effort 集合、是否支持 reasoning content delta；不得引入用户可见兼容等级。
+- Reasoning surface：增加最小 provider capability，例如是否支持 Chat `reasoning_effort`、Responses `reasoning.effort`、允许 effort 集合、是否支持 reasoning content delta；不得引入用户可见兼容等级。
 - Prompt cache controls：把显式 mapping、controlled key synthesis、prefix stability check、usage telemetry 放在 provider-side hint 模块中；继续禁止 `llmup` cache。
-- Stream reducer：集中处理 OpenAI-compatible chunks -> Anthropic SSE lifecycle，维护 block id/index、tool argument buffer、reasoning delta、finish reason 和 usage accumulator。
+- Stream reducer：集中处理 Chat chunks 与 Responses events -> Anthropic SSE lifecycle，维护 block id/index、tool argument buffer、reasoning delta、finish reason 和 usage accumulator。
 - Warning/debug trace：每个 drop/fallback/synthesis MUST 有机器可读 disposition reason；普通日志不得输出完整 synthesized cache key 或敏感 prompt。
 - Real CLI matrix：Claude -> OpenAI-compatible MUST 进入 positive usable suite；negative fail-closed suite 只验证真正不可兼容的 provider-owned state/resource 和非法显式字段。
 
@@ -169,14 +194,16 @@ Claude Code / Anthropic Messages -> OpenAI-compatible 的请求 MUST 经过同�
 Focused Rust tests MUST 覆盖：
 
 - assessment 对 top-level `thinking` / `context_management` / 普通无资源 `container` 给出 warning disposition，而不是 hard reject。
-- translation 后 OpenAI request 不含 Anthropic-only 顶层字段，但保留 model/messages/tools/tool_choice/stream 参数。
+- translation 后 OpenAI-family request 不含 Anthropic-only 顶层字段。Chat target 必须保留并正确构造 `model/messages/tools/tool_choice/stream`；Responses target 必须保留并正确构造 `model/instructions/input/tools/tool_choice/stream`。
 - provider-owned container/server tool/resource、opaque-only state、non-fallbackable unsupported media/source、invalid tool schema 仍在上游前 fail closed。
-- top-level `thinking` 在 surface 支持或显式 override 时映射为合法 `reasoning_effort`；未知 target warning+drop。
+- top-level `thinking` 在 Chat surface 支持或显式 override 时映射为合法 `reasoning_effort`；在 Responses surface 支持时映射为合法 `reasoning.effort`；未知 target warning+drop。
 - visible unsigned thinking 被保留到 reasoning side channel 或普通上下文。
 - signed thinking visible text 可保留且 signature carrier 被 warning/drop；opaque-only、redacted-only、encrypted-only thinking fail closed。
 - Anthropic `cache_control` 不会变成 OpenAI `prompt_cache_key`；显式 OpenAI key/retention 被保留并校验。
 - 合成 `prompt_cache_key` 对同一 namespace/upstream/model/static-prefix 稳定，对 system/tools 改变敏感；digest 输入只含 canonicalized static prefix，不含最后用户消息、dynamic transcript tail、raw prompt text 明文、request id、timestamp、trace ids、conversation/container ids、provider credentials 或 `resp_llmup_*`。
 - tool_use/tool_result 结构化 round-trip、并行工具 id 关联、partial JSON streaming、finish reason 映射和 usage telemetry。
+- Anthropic `tool_use` / `tool_result` 必须分别覆盖 Chat `tool_calls` / `role:"tool"` 和 Responses `function_call` / `function_call_output` 两种 target shape。
+- Responses target 必须覆盖 stateless full `input` 翻译；OpenAI Responses provider-native `previous_response_id` / `conversation` 只能 same-wire preserve 或由 `llmup` 自有 bridge 展开，不能为 Anthropic client 伪造 provider state id。
 - in-memory transcript bridge 只能展开 `llmup` 自有可见 transcript；TTL/max bytes/restart missing 直接 fail closed。
 
 Python / script tests MUST 覆盖：
@@ -184,10 +211,12 @@ Python / script tests MUST 覆盖：
 - `tests/test_real_cli_matrix.py` 不再把 Claude non-Anthropic upstream blanket 标为预期拒绝。
 - Positive usable suite 和 negative fail-closed suite 分开展示；positive 中出现预期拒绝必须失败。
 - Report markdown/json 明确展示真实可用 pass、真实失败、负向拒绝 pass。
+- Real CLI matrix MUST 有 OpenAI-family 双 target 覆盖：一个 `openai-completion` / Chat Completions upstream，一个 `openai-responses` / Responses upstream。若现有 fixture 只有 `preset-openai-compatible`，必须补一个 Responses preset 或等价 fixture。
 
 真实 CLI / E2E MUST 覆盖：
 
-- `scripts/run_claude_proxy.sh --model preset-openai-compatible --proxy-port <free-port>` 后 Claude Code 普通 `hi` 成功返回。
+- `scripts/run_claude_proxy.sh --model <openai-chat-compatible-preset> --proxy-port <free-port>` 后 Claude Code 普通 `hi` 成功返回。
+- `scripts/run_claude_proxy.sh --model <openai-responses-compatible-preset> --proxy-port <free-port>` 后 Claude Code 普通 `hi` 成功返回。
 - Claude Code streaming tool-use fixture。
 - Claude Code public editing tool workspace edit fixture。
 - Claude native Anthropic-compatible baseline 继续通过。
