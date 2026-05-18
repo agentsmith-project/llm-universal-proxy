@@ -204,9 +204,9 @@ model_aliases:
 ## 容器镜像
 
 正式 release 镜像发布在 `ghcr.io/agentsmith-project/llm-universal-proxy`。
-当前已发布容器版本是 `v0.2.28`；Cargo package version `0.2.30` 是下一次
+当前已发布容器版本是 `v0.2.30`；Cargo package version `0.2.31` 是下一次
 release identity，并不是已发布容器 tag。生产环境请 pin
-`ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.28` 或已发布 digest，不要依赖
+`ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.30` 或已发布 digest，不要依赖
 `latest`。容器运行、Docker Compose、一分钟 smoke 验证、Admin Dashboard
 鉴权边界，以及认证拉取或 public 包匿名拉取的 GHCR 访问说明都放在
 [docs/container.md](./docs/container.md)。

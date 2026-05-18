@@ -2,19 +2,19 @@
   "schema": 1,
   "image": "ghcr.io/agentsmith-project/llm-universal-proxy",
   "published": {
-    "release_tag": "v0.2.28",
-    "version_tag": "0.2.28",
-    "digest": "sha256:09cc7aa406d8ef82e4bc6bccec3d2b330140f6356044c081d1b9423a5aeac03b",
-    "cargo_package_version": "0.2.28",
-    "git_sha": "64f72535b6ab2e045f86fc636fe3a757bad251c0",
+    "release_tag": "v0.2.30",
+    "version_tag": "0.2.30",
+    "digest": "sha256:9fa6cf5318742786c9752452c108498879af2e79968c1505b5a6e52fd7ce4e1f",
+    "cargo_package_version": "0.2.30",
+    "git_sha": "c97a1d57b4c36cd248d03adb8fe59aa40da530ea",
     "status": "published",
-    "published_at": "2026-05-17T18:03:41Z",
-    "run_url": "https://github.com/agentsmith-project/llm-universal-proxy/actions/runs/25997467627"
+    "published_at": "2026-05-18T11:34:43Z",
+    "run_url": "https://github.com/agentsmith-project/llm-universal-proxy/actions/runs/26028844869"
   },
   "next_release": {
-    "cargo_package_version": "0.2.30",
-    "release_tag": "v0.2.30",
+    "cargo_package_version": "0.2.31",
+    "release_tag": "v0.2.31",
     "status": "not_published",
-    "main_branch_action": "After publishing v0.2.28, advance main to Cargo package version 0.2.30 before the next release."
+    "main_branch_action": "After publishing v0.2.30, advance main to Cargo package version 0.2.31 before the next release."
   }
 }
