@@ -205,7 +205,7 @@ For the full YAML reference and more examples, see [docs/configuration.md](./doc
 
 Release images are published at `ghcr.io/agentsmith-project/llm-universal-proxy`.
 The current published container release is `v0.2.28`; Cargo package version
-`0.2.29` is the next release identity, not a published container tag yet. For
+`0.2.30` is the next release identity, not a published container tag yet. For
 production, pin `ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.28` or the
 published digest instead of relying on `latest`. Container usage, Docker
 Compose, one-minute smoke verification, Admin Dashboard auth boundaries, and

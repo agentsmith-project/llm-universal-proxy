@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.2.30 - 2026-05-18
+
+- Maximized Claude Code / Anthropic Messages compatibility with OpenAI-compatible Chat targets by allowing complete visible thinking and context-management history to translate instead of failing closed on provider-native request controls.
+- Hardened Anthropic context-management handling, prompt-cache control synthesis contracts, and debug trace redaction so `llmup` only forwards or synthesizes provider request controls it can represent safely.
+- Strengthened the real CLI and trace verifier matrix for Claude Code, OpenAI Chat, and OpenAI Responses targets, including duplicate request id rejection, Responses tool-call pairing evidence, and Python workspace behavior checks.
+- Added the pre-GA context editing / trace / cache contract correction handoff plan under `docs/engineering`, covering single prepared request bodies, provider prompt-cache defaults, Anthropic beta headers, and focused TDD gates.
+- Advanced the Cargo package version to `0.2.30` for this release identity.
+
 ## v0.2.29 - 2026-05-17
 
 - Advanced the main-branch release identity to Cargo package version `0.2.29`, the next patch version after the published, occupied `v0.2.28` tag, without moving, deleting, or reusing the existing tag.

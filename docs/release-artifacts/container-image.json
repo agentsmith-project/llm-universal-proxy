@@ -12,9 +12,9 @@
     "run_url": "https://github.com/agentsmith-project/llm-universal-proxy/actions/runs/25997467627"
   },
   "next_release": {
-    "cargo_package_version": "0.2.29",
-    "release_tag": "v0.2.29",
+    "cargo_package_version": "0.2.30",
+    "release_tag": "v0.2.30",
     "status": "not_published",
-    "main_branch_action": "After publishing v0.2.28, advance main to Cargo package version 0.2.29 before the next release."
+    "main_branch_action": "After publishing v0.2.28, advance main to Cargo package version 0.2.30 before the next release."
   }
 }
