@@ -2,237 +2,330 @@
 
 [English README](./README.md) · [文档索引](./docs/README.md)
 
-`llmup` 是一个单二进制 LLM HTTP 代理。你可以把它放在客户端和真实模型服务之间，让不同协议的客户端都通过一个稳定入口访问上游模型；当客户端协议和上游协议不一致时，代理会自动完成必要的转换。
+Codex CLI 和 Claude Code 很好用，但它们经常只认自己熟悉的接口。
+你手上可能有另一个模型服务，比如 MiniMax，给的是“长得像 OpenAI 的接口”。
+这时就容易卡住：工具想走一种格式，模型服务又等着另一种格式。
 
-它最适合这些场景：
+`llmup` 就是放在你电脑上的一个本地中转站。Codex CLI 或 Claude Code 先把请求发给
+`llmup`，`llmup` 再尽量转成模型服务能听懂的格式，然后把结果送回客户端。少数服务独有能力如果无法安全转换，`llmup` 会在本地报错，而不是把不确定的请求硬塞给模型服务。
 
-- 让 Codex CLI 使用非 OpenAI 原生的上游模型
-- 让 Codex CLI 和 Claude Code 通过一个本地代理接不同厂商
-- 给客户端暴露稳定的本地 alias，而不是直接暴露厂商模型 ID
+这份中文 README 只讲一件事：不用 Docker，也不用先学完整配置，先把本地二进制跑起来，让 Codex CLI 或 Claude Code 通过 `llmup` 使用 MiniMax 这样的 OpenAI-compatible 服务。
 
-> [!IMPORTANT]
-> `llmup` 适合连接 OpenAI / Anthropic 协议或 OpenAI-compatible / Anthropic-compatible 服务。Gemini 模型可以作为 Google OpenAI-compatible upstream 使用，但 native Gemini `generateContent` wire format 不是 active support 面。
+## 你会得到什么
 
-![LLMUP dashboard](./docs/images/dashboard.png)
+- 给 Codex CLI 接入它原本不好直接使用的 OpenAI-compatible Chat Completions 服务。
+- 给 Claude Code 接入 OpenAI-compatible 服务，例如 MiniMax。
+- 把真实模型服务 API Key 留在本地中转站里，客户端只拿一个本地密码。
+- 给复杂模型名取一个短名字，例如 `minimax`。
+- 一条命令启动本地中转站和客户端；退出客户端后，中转站也会自动停掉。
 
-可选的本地 dashboard 可以帮助你查看路由、流式响应、取消、上游状态和 hook 工作情况。
+这里的 MiniMax 只是一个例子，不是 `llmup` 绑定或必需的供应商。你可以把地址、模型名、API Key 换成其他长得像 OpenAI 接口的服务。
 
-## Quick Start
+## 你需要准备什么
 
-GA 用户入口采用 provider-neutral preset，并优先从 CLI wrapper 启动。推荐的配置源是 [examples/quickstart-provider-neutral.yaml](./examples/quickstart-provider-neutral.yaml)，它暴露两个稳定本地 alias：
+先确认你有这些东西：
 
-- `preset-openai-compatible`：OpenAI-compatible provider
-- `preset-anthropic-compatible`：Anthropic-compatible provider
+- 已经安装好的 Codex CLI 或 Claude Code，至少装一个即可。
+- Python 3。仓库里的启动脚本需要它。
+- Git，或者能下载本仓库 zip 包。
+- 一个模型服务账号。下面用 MiniMax 举例。
+- 这个模型服务的三样信息：
+  - API 地址前缀，例如 `https://api.minimaxi.com/v1`
+  - 模型名，例如 `MiniMax-M2.7-highspeed`
+  - API Key。不要发给别人，也不要提交到仓库。
 
-MiniMax 只是一个可替换的 OpenAI-compatible 示例，不是 GA 必需 provider，也不是主线 preset 名称。如果你想看已经写死具体厂商的 OpenAI + MiniMax 样例，可以参考 [examples/quickstart-openai-minimax.yaml](./examples/quickstart-openai-minimax.yaml)。
+下面的命令以 macOS、Linux 或 WSL 的 Bash 终端为例。Windows 原生 PowerShell 后续再单独写，第一次使用建议走 WSL。
 
-provider-neutral 配置源如下：
+## 第一步：拿到本地程序
 
-```yaml
-listen: 127.0.0.1:8080
-upstream_timeout_secs: 120
-
-upstreams:
-  PRESET-ANTHROPIC-COMPATIBLE:
-    api_root: PRESET_ANTHROPIC_ENDPOINT_BASE_URL
-    format: anthropic
-    provider_key_env: PRESET_ENDPOINT_API_KEY
-    limits:
-      context_window: 200000
-      max_output_tokens: 128000
-    surface_defaults:
-      modalities:
-        input: ["text"]
-        output: ["text"]
-      tools:
-        supports_search: false
-        supports_view_image: false
-        apply_patch_transport: freeform
-        supports_parallel_calls: false
-
-  PRESET-OPENAI-COMPATIBLE:
-    api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
-    format: openai-completion
-    provider_key_env: PRESET_ENDPOINT_API_KEY
-    limits:
-      context_window: 200000
-      max_output_tokens: 128000
-    surface_defaults:
-      modalities:
-        input: ["text"]
-        output: ["text"]
-      tools:
-        supports_search: false
-        supports_view_image: false
-        apply_patch_transport: freeform
-        supports_parallel_calls: false
-
-model_aliases:
-  preset-anthropic-compatible: "PRESET-ANTHROPIC-COMPATIBLE:PRESET_ENDPOINT_MODEL"
-  preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL"
-```
-
-启动 wrapper-managed 会话前，先设置这些环境变量：
+先把仓库拉下来。这里主要需要里面的启动脚本和示例文件。
 
 ```bash
 git clone https://github.com/agentsmith-project/llm-universal-proxy.git
 cd llm-universal-proxy
-cargo build --locked --release
-
-export PRESET_OPENAI_ENDPOINT_BASE_URL="https://openai-compatible.example/v1"
-export PRESET_ANTHROPIC_ENDPOINT_BASE_URL="https://anthropic-compatible.example/v1"
-export PRESET_ENDPOINT_MODEL="provider-model-id"
-export PRESET_ENDPOINT_API_KEY="provider-api-key"
-export LLM_UNIVERSAL_PROXY_AUTH_MODE=proxy_key
-export LLM_UNIVERSAL_PROXY_KEY="local-proxy-key"
 ```
 
-这些变量的含义：
+然后下载 `llmup` 的本地可执行文件。先按你的电脑选择一个文件名：
 
-| 变量 | 作用 |
+| 你的电脑 | 文件名 |
 | --- | --- |
-| `PRESET_OPENAI_ENDPOINT_BASE_URL` | OpenAI-compatible 上游 API root，需要包含 `/v1` 这类版本段 |
-| `PRESET_ANTHROPIC_ENDPOINT_BASE_URL` | Anthropic-compatible 上游 API root |
-| `PRESET_ENDPOINT_MODEL` | wrapper 渲染到两个 preset alias 里的真实 provider model ID |
-| `PRESET_ENDPOINT_API_KEY` | 通过环境变量提供、由 proxy 持有并转发给上游的 provider credential |
-| `LLM_UNIVERSAL_PROXY_AUTH_MODE` | 静态 `data_auth` 省略时的 data-plane auth 兼容 fallback；proxy 持有 provider key 时使用 `proxy_key` |
-| `LLM_UNIVERSAL_PROXY_KEY` | `proxy_key` 模式下客户端使用的 proxy API key；也可被环境变量 fallback 或 `data_auth.proxy_key.env` 使用 |
+| Mac，Apple Silicon，例如 M1/M2/M3/M4 | `llm-universal-proxy-macos-aarch64.tar.gz` |
+| Mac，Intel 芯片 | `llm-universal-proxy-macos-x86_64.tar.gz` |
+| Linux，常见 Intel/AMD 服务器或电脑 | `llm-universal-proxy-linux-x86_64.tar.gz` |
+| Linux，ARM64 | `llm-universal-proxy-linux-aarch64.tar.gz` |
 
-`PRESET_*` 是 wrapper/config-source 契约。wrapper 会先把它们渲染成具体 runtime config，再启动 proxy。直接运行 `llm-universal-proxy --config` 时，需要先把占位符替换成真实 URL 和模型名。
+如果你在 WSL 里使用，请按 Linux 选择，通常是 `llm-universal-proxy-linux-x86_64.tar.gz`。
 
-优先使用静态 `data_auth` 配置 data-plane auth；`LLM_UNIVERSAL_PROXY_AUTH_MODE` 和 `LLM_UNIVERSAL_PROXY_KEY` 是省略 `data_auth` 时的环境变量兼容 fallback。`proxy_key` 模式下，每个上游的 provider credential 可以来自 `provider_key.inline`、`provider_key.env` 或 legacy `provider_key_env`；上面的 preset source 使用 legacy env-name 形式，让 wrapper 从 `PRESET_ENDPOINT_API_KEY` 渲染。
+例如 Apple Silicon Mac 可以这样下载：
 
-像 `xhigh` 这样的 reasoning effort 是客户端/请求侧设置，不是模型名的一部分。模型 alias 保持稳定，把 reasoning 放在请求或客户端配置里即可。
+```bash
+export LLMUP_ASSET="llm-universal-proxy-macos-aarch64.tar.gz"
 
-## Compatibility Contract
+mkdir -p .local/bin
+curl -L \
+  -o /tmp/llmup.tar.gz \
+  "https://github.com/agentsmith-project/llm-universal-proxy/releases/latest/download/${LLMUP_ASSET}"
+tar -xzf /tmp/llmup.tar.gz -C .local/bin
+chmod +x .local/bin/llm-universal-proxy
 
-`llmup` 提供稳定的本地协议入口，但不承诺不同厂商能力可以无限等价。
+test -x .local/bin/llm-universal-proxy && echo "llmup 已准备好"
+```
 
-- 产品目标是 maximum safe compatibility / 最大安全兼容：尽量保留安全可移植语义，省略不可移植细节时发出 portability warning，无法安全保留的语义在请求上游前 reject
-- 无需跨协议 request construction 时，内部处理可以在 routing、auth、headers、observability 不需要 body mutation / response normalization 的前提下保留 provider-native bytes 和字段
-- 需要 request 或 response construction 时，`llmup` 仍最大化安全保留；不可移植的 provider-native 能力会 warning 或 reject
-- fail-closed 代表 hard portability boundary：触及 hard portability boundary 的请求会在上游前被拒绝
-- native extension 和厂商托管的 lifecycle state 需要 native upstream handling，除非有明确 documented shim
-- Responses reasoning/compaction continuity 只有在仍有 visible summary text 或 visible transcript history 时，才可以发出 portability warning 并省略 opaque carrier；opaque-only reasoning 和 opaque-only compaction 都 fail closed；provider-owned state 只有在同协议内部处理能保持 native semantics 不变时才保留
-- quickstart 里的 `surface_defaults` 是保守的 text-only 默认值；只有确认模型 surface 支持时，才打开 search、image 或 parallel-tool 标志
-- 多模态 `surface.modalities.input` 只 gate 媒体类型，不承诺所有 source transport；HTTP(S) 图片/PDF URL 和 `gs://`、`s3://`、`file://` 这类 provider/local URI 是不同边界
-- Gemini 模型通过 Google OpenAI-compatible endpoint 接入时使用 `format: openai-completion`；旧的 native Gemini `generateContent` 路由和 `format: google` / `format: gemini` 已移除
-- typed media 的元数据必须自洽；例如 `mime_type` 和 `file_data` data URI 里声明的 MIME 冲突时，代理会在请求上游前拒绝
+如果最后一行能看到 `llmup 已准备好`，说明本地程序已经放好了。
 
-## Codex / Claude Code 基本接法
+如果下载地址返回 404，可以打开 [Releases](https://github.com/agentsmith-project/llm-universal-proxy/releases) 页面，手动下载同名文件。
 
-日常使用更推荐仓库自带的 wrapper，而不是直接手配客户端参数。它们会帮你处理本地环境隔离、base URL 注入、preset hydration，以及部分客户端需要的模型元数据。
+## 第二步：写一个 MiniMax 配置
 
-`scripts/interactive_cli.py` 的默认模型就是 provider-neutral preset：
+先写一个只包含 MiniMax 的最小配置文件：
 
-| 客户端 | 默认 wrapper model |
-| --- | --- |
-| Codex CLI | `preset-openai-compatible` |
-| Claude Code | `preset-anthropic-compatible` |
+MiniMax 常见有两个 API 地址：
 
-### Codex CLI
+- 国际站账号通常用 `https://api.minimax.io/v1`
+- 中国站账号通常用 `https://api.minimaxi.com/v1`
+
+下面示例先用中国站地址。如果你的账号在国际站，把 `api_root` 改成 `https://api.minimax.io/v1`。
+
+```bash
+cat > llmup-minimax.yaml <<'YAML'
+listen: 127.0.0.1:18888
+upstream_timeout_secs: 120
+
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+
+upstreams:
+  MINIMAX:
+    api_root: https://api.minimaxi.com/v1
+    format: openai-completion
+    provider_key:
+      env: MINIMAX_API_KEY
+    limits:
+      context_window: 200000
+      max_output_tokens: 128000
+    surface_defaults:
+      modalities:
+        input: ["text"]
+        output: ["text"]
+      tools:
+        supports_search: false
+        supports_view_image: false
+        apply_patch_transport: freeform
+        supports_parallel_calls: false
+
+model_aliases:
+  minimax: "MINIMAX:MiniMax-M2.7-highspeed"
+YAML
+```
+
+这段配置里最重要的是三行：
+
+- `api_root`：模型服务的 API 地址前缀。MiniMax 国际站通常是 `https://api.minimax.io/v1`，中国站通常是 `https://api.minimaxi.com/v1`。
+- `provider_key.env`：真实 API Key 放在哪个环境变量里。这里写的是变量名 `MINIMAX_API_KEY`，不是 API Key 本身。
+- `minimax`：你给模型取的本地短名字。后面 Codex CLI 和 Claude Code 都用这个名字。
+
+这个 YAML 不放真实 API Key。真实 API Key 放在下一步的 `.env.llmup.local` 里。
+
+如果你的 MiniMax 模型名不是 `MiniMax-M2.7-highspeed`，把最后一行里的模型名换成你账号里可用的模型名。
+
+再写一个本地密钥文件：
+
+```bash
+cat > .env.llmup.local <<'ENV'
+MINIMAX_API_KEY=REPLACE_WITH_YOUR_MINIMAX_API_KEY
+LLM_UNIVERSAL_PROXY_KEY=local-dev-key
+ENV
+```
+
+`MINIMAX_API_KEY` 是真实模型服务的 Key。`LLM_UNIVERSAL_PROXY_KEY` 是给本机中转站用的本地密码，可以自己换一个更长的随机字符串。
+
+`.env.llmup.local` 已经被 `.gitignore` 覆盖，不应该提交到仓库。也建议你不要把真实 API Key 写进聊天、截图或公开文档。
+
+## 第三步：启动 Codex CLI
+
+如果你想让 Codex CLI 使用 MiniMax，运行：
 
 ```bash
 bash scripts/run_codex_proxy.sh \
-  --config-source examples/quickstart-provider-neutral.yaml \
+  --binary "$PWD/.local/bin/llm-universal-proxy" \
+  --config-source llmup-minimax.yaml \
+  --env-file .env.llmup.local \
   --workspace "$PWD" \
-  --model preset-openai-compatible
+  --model minimax
 ```
 
-### Claude Code
+这条命令会自动做几件事：
+
+- 启动 `llmup`。
+- 等 `llmup` 准备好。
+- 把 Codex CLI 指到本地 `llmup`。
+- 告诉 Codex CLI 使用你配置的 `minimax` 模型短名字。
+- 你退出 Codex CLI 后，自动停止这次启动的 `llmup`。
+
+你可以先在 Codex CLI 里问一句很短的问题，例如：
+
+```text
+hi
+```
+
+能正常回答，就说明链路通了。
+
+## 第四步：启动 Claude Code
+
+如果你想让 Claude Code 也使用同一个 MiniMax OpenAI-compatible 服务，运行：
 
 ```bash
 bash scripts/run_claude_proxy.sh \
-  --config-source examples/quickstart-provider-neutral.yaml \
+  --binary "$PWD/.local/bin/llm-universal-proxy" \
+  --config-source llmup-minimax.yaml \
+  --env-file .env.llmup.local \
   --workspace "$PWD" \
-  --model preset-anthropic-compatible
+  --model minimax
 ```
 
-如果你要连接已经启动的 proxy，可以额外传 `--proxy-base http://127.0.0.1:8080`。不传 `--proxy-base` 时，wrapper 会渲染 preset config、启动 proxy、等待 `/health`、拉起客户端，并在会话结束后停止 proxy。
+Claude Code 还是按它熟悉的 Claude Messages 方式发请求；`llmup` 会在本地把请求尽量转成 MiniMax 这类 OpenAI-compatible 服务能接收的请求。无法安全转换的少数能力会在本地报错。
 
-wrapper 设置的 base URL 和代理实际收到的 endpoint 有关系，但不是同一个字符串。
+## 如果你的模型服务是 Anthropic Messages
 
-对 Codex 来说，wrapper 当前固定 `wire_api="responses"`，所以它走的是 Responses 路由：
+有些服务提供的是“长得像 Claude `/v1/messages` 的接口”。这种情况下，可以新建一个单独的配置文件：
 
-| 客户端 | wrapper 注入的 base URL | 客户端追加的路径 | 代理实际命中的 endpoint |
-| --- | --- | --- | --- |
-| Codex CLI | `OPENAI_BASE_URL=<proxy>/openai/v1` | `/responses` | `/openai/v1/responses` |
-| Claude Code | `ANTHROPIC_BASE_URL=<proxy>/anthropic` | `/v1/messages` | `/anthropic/v1/messages` |
+```bash
+cat > llmup-anthropic-like.yaml <<'YAML'
+listen: 127.0.0.1:18888
+upstream_timeout_secs: 120
 
-Codex 对 wrapper 的依赖尤其明显，因为 wrapper 会为代理 alias 注入临时模型元数据。细节请看 [docs/clients.md](./docs/clients.md)。
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
 
-如果要把 Gemini 当作模型供应方，请使用 Google OpenAI-compatible endpoint：
+upstreams:
+  MY_ANTHROPIC_LIKE_SERVICE:
+    api_root: https://anthropic-compatible.example/v1
+    format: anthropic
+    provider_key:
+      env: MY_ANTHROPIC_LIKE_API_KEY
+    limits:
+      context_window: 200000
+      max_output_tokens: 128000
+    surface_defaults:
+      modalities:
+        input: ["text"]
+        output: ["text"]
+      tools:
+        supports_search: false
+        supports_view_image: false
+        apply_patch_transport: freeform
+        supports_parallel_calls: false
+
+model_aliases:
+  my-claude-like-model: "MY_ANTHROPIC_LIKE_SERVICE:provider-model-name"
+YAML
+```
+
+把 `https://anthropic-compatible.example/v1` 换成你的模型服务地址，把 `provider-model-name` 换成真实模型名。
+
+再写本地密钥文件：
+
+```bash
+cat > .env.llmup.local <<'ENV'
+MY_ANTHROPIC_LIKE_API_KEY=REPLACE_WITH_YOUR_PROVIDER_API_KEY
+LLM_UNIVERSAL_PROXY_KEY=local-dev-key
+ENV
+```
+
+启动 Codex CLI：
+
+```bash
+bash scripts/run_codex_proxy.sh \
+  --binary "$PWD/.local/bin/llm-universal-proxy" \
+  --config-source llmup-anthropic-like.yaml \
+  --env-file .env.llmup.local \
+  --workspace "$PWD" \
+  --model my-claude-like-model
+```
+
+启动 Claude Code：
+
+```bash
+bash scripts/run_claude_proxy.sh \
+  --binary "$PWD/.local/bin/llm-universal-proxy" \
+  --config-source llmup-anthropic-like.yaml \
+  --env-file .env.llmup.local \
+  --workspace "$PWD" \
+  --model my-claude-like-model
+```
+
+## 常见问题
+
+**提示找不到 `codex` 或 `claude` 命令**
+
+说明你的电脑还没有安装对应客户端，或者命令不在 `PATH` 里。先在同一个终端里确认：
+
+```bash
+codex --version
+claude --version
+```
+
+你只需要安装自己要用的那个客户端。
+
+**提示找不到 `llm-universal-proxy`**
+
+确认你下载后执行过：
+
+```bash
+chmod +x .local/bin/llm-universal-proxy
+test -x .local/bin/llm-universal-proxy && echo "llmup 已准备好"
+```
+
+也确认启动命令里的 `--binary "$PWD/.local/bin/llm-universal-proxy"` 没有写错。
+
+**提示 401、unauthorized 或 API key 无效**
+
+通常是 `.env.llmup.local` 里的真实模型服务 Key 填错了，或者 Key 没有这个模型的权限。注意：客户端拿到的是 `LLM_UNIVERSAL_PROXY_KEY`，真正发给 MiniMax 的是 `MINIMAX_API_KEY`。
+
+**提示 `MINIMAX_API_KEY`、`MY_ANTHROPIC_LIKE_API_KEY` 或 `LLM_UNIVERSAL_PROXY_KEY` 缺失**
+
+通常是 `.env.llmup.local` 没写好，或者启动命令漏了：
+
+```bash
+--env-file .env.llmup.local
+```
+
+也检查一下你有没有把 `REPLACE_WITH_...` 这种占位文字替换成真实值。
+
+**提示 404、not found 或 model not found**
+
+通常是 `api_root` 或模型名填错了。`api_root` 写到版本前缀即可，例如：
 
 ```yaml
-upstreams:
-  GOOGLE-OPENAI-COMPATIBLE:
-    api_root: https://generativelanguage.googleapis.com/v1beta/openai
-    format: openai-completion
-    provider_key_env: GEMINI_API_KEY
-model_aliases:
-  gemini-flash: GOOGLE-OPENAI-COMPATIBLE:gemini-2.0-flash
+api_root: https://api.minimaxi.com/v1
 ```
 
-## 最常用静态配置
+不要写成完整的 `/chat/completions` 地址。模型名也要换成供应商后台实际可用的名字。
 
-静态 YAML 的主线很简单：
+**提示端口被占用**
 
-| 字段 | 作用 |
-| --- | --- |
-| `listen` | 代理监听地址 |
-| `upstream_timeout_secs` | 上游请求超时 |
-| `data_auth` | 进程级 data-plane auth；省略时使用环境变量兼容 fallback |
-| `upstreams` | 上游 API 根路径、协议格式与鉴权策略 |
-| `model_aliases` | 本地稳定名字到 `UPSTREAM:MODEL` 的映射 |
-| `surface_defaults` / `surface` | 可选的客户端可见能力元数据，供 wrapper 和模型目录使用 |
-| `proxy` | 可选的默认上游代理 |
-| `hooks` | 可选的 usage / exchange 导出 hook |
-| `debug_trace` | 可选的本地调试 trace |
+wrapper 默认会临时使用 `18888` 端口。换一个端口即可：
 
-实用规则：
+```bash
+bash scripts/run_codex_proxy.sh \
+  --proxy-port 19999 \
+  --binary "$PWD/.local/bin/llm-universal-proxy" \
+  --config-source llmup-minimax.yaml \
+  --env-file .env.llmup.local \
+  --workspace "$PWD" \
+  --model minimax
+```
 
-- `api_root` 应写厂商 API 根路径，并包含版本段，例如 `.../v1` 或 `.../v1beta`
-- `format` 用来固定上游协议：`openai-responses`、`openai-completion`、`anthropic`
-- `preset-openai-compatible`、`preset-anthropic-compatible` 这样的 alias 是本地名字，不要求和真实 upstream model ID 一样
-- 只有在你需要补充 `limits` 或 `surface` 元数据时，才需要改成 `target: UPSTREAM:MODEL` 的结构化 alias 写法
-- provider-neutral `PRESET_*` 占位符用于 wrapper 渲染的 config source；直接给 proxy 的静态 YAML 应该写真实 URL 和模型 ID
-- `data_auth` 是所有 data-plane 路由共用的进程级设置，不是 per-upstream 字段；`proxy_key` 模式下每个上游可用 `provider_key.inline`、`provider_key.env` 或 legacy `provider_key_env` 指定 provider credential source
-- 如果省略 `data_auth`，`LLM_UNIVERSAL_PROXY_AUTH_MODE` 和 `LLM_UNIVERSAL_PROXY_KEY` 会继续作为环境变量兼容 fallback
-
-完整 YAML 参考和更多示例请看 [docs/configuration.md](./docs/configuration.md)。
-
-## 容器镜像
-
-正式 release 镜像发布在 `ghcr.io/agentsmith-project/llm-universal-proxy`。
-当前已发布容器版本是 `v0.2.30`；Cargo package version `0.2.31` 是下一次
-release identity，并不是已发布容器 tag。生产环境请 pin
-`ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.30` 或已发布 digest，不要依赖
-`latest`。容器运行、Docker Compose、一分钟 smoke 验证、Admin Dashboard
-鉴权边界，以及认证拉取或 public 包匿名拉取的 GHCR 访问说明都放在
-[docs/container.md](./docs/container.md)。
-
-## 动态配置概要
-
-默认推荐静态 YAML。只有在你需要运行中改配置时，再用 admin 接口读取运行时状态、替换 namespace 配置，或轮换全局 data-plane auth。Namespace payload 使用 runtime shape。全局 `data_auth` 可以来自静态 YAML、环境变量兼容 fallback，或 Admin API `/admin/data-auth` 状态。
-
-当前 admin 入口：
-
-- `GET /admin/state`
-- `GET /admin/data-auth`
-- `PUT /admin/data-auth`
-- `GET /admin/namespaces/:namespace/state`
-- `POST /admin/namespaces/:namespace/config`
-
-这部分细节在 [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md)。
+Claude Code 同理，把脚本名换成 `scripts/run_claude_proxy.sh`。
 
 ## 继续阅读
 
-- [docs/configuration.md](./docs/configuration.md)：静态配置、alias 设计、YAML 参考
-- [docs/clients.md](./docs/clients.md)：Codex / Claude Code wrapper 与 base URL 细节
-- [docs/container.md](./docs/container.md)：GHCR 镜像、Docker Compose、container smoke 与发布策略
-- [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md)：admin API、运行时配置、CAS 更新
-- [docs/ga-readiness-review.md](./docs/ga-readiness-review.md)：GA 范围、发布证据与兼容边界
-- [docs/protocol-compatibility-matrix.md](./docs/protocol-compatibility-matrix.md)：兼容边界与可移植性摘要
-- [docs/max-compat-design.md](./docs/max-compat-design.md)：translated path 的更深入兼容性说明
-- [docs/DESIGN.md](./docs/DESIGN.md)：当前架构图
-- [docs/README.md](./docs/README.md)：文档索引
+第一次使用只看本页就够了。后面如果你想了解更多，可以继续看：
+
+- [docs/clients.md](./docs/clients.md)：Codex CLI 和 Claude Code 更细的接法
+- [docs/configuration.md](./docs/configuration.md)：完整 YAML 配置说明
+- [docs/README.md](./docs/README.md)：完整文档索引

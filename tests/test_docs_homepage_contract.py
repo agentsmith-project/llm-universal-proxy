@@ -9,7 +9,6 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 REAL_CLI_MATRIX_PATH = REPO_ROOT / "scripts" / "real_cli_matrix.py"
 QUICKSTART_CONFIG_PATHS = (
     "README.md",
-    "README_CN.md",
     "examples/quickstart-provider-neutral.yaml",
 )
 QUICKSTART_ALIASES = (
@@ -24,7 +23,6 @@ PRESET_ENV_KEYS = (
 )
 USER_ENTRY_DOCS = (
     "README.md",
-    "README_CN.md",
     "docs/configuration.md",
     "docs/clients.md",
 )
@@ -152,46 +150,78 @@ class DocsHomepageContractTests(unittest.TestCase):
         self.assert_in_order(
             self.read_text("README_CN.md"),
             (
-                "## Quick Start",
-                "## Codex / Claude Code 基本接法",
-                "## 最常用静态配置",
-                "## 动态配置概要",
+                "## 你会得到什么",
+                "## 你需要准备什么",
+                "## 第一步：拿到本地程序",
+                "## 第二步：写一个 MiniMax 配置",
+                "## 第三步：启动 Codex CLI",
+                "## 第四步：启动 Claude Code",
+                "## 常见问题",
             ),
         )
 
-    def test_readmes_make_provider_neutral_presets_the_homepage_story(self):
+    def test_english_readme_keeps_provider_neutral_presets_the_homepage_story(self):
         readme = self.read_text("README.md")
-        readme_cn = self.read_text("README_CN.md")
 
-        for text in (readme, readme_cn):
-            with self.subTest(language="README" if text is readme else "README_CN"):
-                self.assertIn(
-                    "examples/quickstart-provider-neutral.yaml",
-                    text,
-                )
-                self.assertIn("preset-openai-compatible", text)
-                self.assertIn("preset-anthropic-compatible", text)
-                self.assertIn("PRESET_OPENAI_ENDPOINT_BASE_URL", text)
-                self.assertIn("PRESET_ANTHROPIC_ENDPOINT_BASE_URL", text)
-                self.assertIn("PRESET_ENDPOINT_MODEL", text)
-                self.assertIn("PRESET_ENDPOINT_API_KEY", text)
-                self.assertIn("--model preset-openai-compatible", text)
-                self.assertIn("--model preset-anthropic-compatible", text)
-                self.assertNotIn("gpt-5-4", text)
-                self.assertNotIn("MiniMax-M2.7-highspeed", text)
-                self.assertNotIn("proxy.yaml", text)
+        self.assertIn("examples/quickstart-provider-neutral.yaml", readme)
+        self.assertIn("preset-openai-compatible", readme)
+        self.assertIn("preset-anthropic-compatible", readme)
+        self.assertIn("PRESET_OPENAI_ENDPOINT_BASE_URL", readme)
+        self.assertIn("PRESET_ANTHROPIC_ENDPOINT_BASE_URL", readme)
+        self.assertIn("PRESET_ENDPOINT_MODEL", readme)
+        self.assertIn("PRESET_ENDPOINT_API_KEY", readme)
+        self.assertIn("--model preset-openai-compatible", readme)
+        self.assertIn("--model preset-anthropic-compatible", readme)
+        self.assertNotIn("gpt-5-4", readme)
+        self.assertNotIn("MiniMax-M2.7-highspeed", readme)
+        self.assertNotIn("proxy.yaml", readme)
 
         self.assertNotIn("### Which endpoint should clients use?", readme)
-        self.assertNotIn("### 客户端应该连哪个入口", readme_cn)
         self.assertNotIn("| Codex CLI | `/openai/v1` |", readme)
-        self.assertNotIn("| Codex CLI | `/openai/v1` |", readme_cn)
 
         self.assertIn(
             "Reasoning effort such as `xhigh` is a client/request-side setting, not part of the model name.",
             readme,
         )
+
+    def test_chinese_readme_is_user_first_binary_quickstart(self):
+        readme_cn = self.read_text("README_CN.md")
+
+        for snippet in (
+            "不用 Docker，也不用先学完整配置，先把本地二进制跑起来",
+            "MiniMax 只是一个例子",
+            "llmup-minimax.yaml",
+            ".env.llmup.local",
+            "provider_key:",
+            "env: MINIMAX_API_KEY",
+            "https://api.minimax.io/v1",
+            "https://api.minimaxi.com/v1",
+            'minimax: "MINIMAX:MiniMax-M2.7-highspeed"',
+            "--binary \"$PWD/.local/bin/llm-universal-proxy\"",
+            "--env-file .env.llmup.local",
+            "--model minimax",
+            "llmup-anthropic-like.yaml",
+            "--model my-claude-like-model",
+            "wrapper 默认会临时使用 `18888` 端口",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, readme_cn)
+
+        for forbidden in (
+            "PRESET_OPENAI_ENDPOINT_BASE_URL",
+            "PRESET_ANTHROPIC_ENDPOINT_BASE_URL",
+            "PRESET_ENDPOINT_MODEL",
+            "PRESET_ENDPOINT_API_KEY",
+            "preset-openai-compatible",
+            "preset-anthropic-compatible",
+            "## 容器镜像",
+            "## 动态配置概要",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, readme_cn)
+
         self.assertIn(
-            "像 `xhigh` 这样的 reasoning effort 是客户端/请求侧设置，不是模型名的一部分。",
+            "少数服务独有能力如果无法安全转换，`llmup` 会在本地报错",
             readme_cn,
         )
 
@@ -202,8 +232,8 @@ class DocsHomepageContractTests(unittest.TestCase):
                 "not a GA-required provider",
             ),
             "README_CN.md": (
-                "MiniMax 只是一个可替换的 OpenAI-compatible 示例",
-                "不是 GA 必需 provider",
+                "MiniMax 只是一个例子",
+                "你可以把地址、模型名、API Key 换成其他长得像 OpenAI 接口的服务",
             ),
             "docs/configuration.md": (
                 "MiniMax is only a replaceable OpenAI-compatible example",
@@ -251,31 +281,23 @@ class DocsHomepageContractTests(unittest.TestCase):
             with self.subTest(language="README", snippet=snippet):
                 self.assertIn(snippet, readme)
 
-        chinese_snippets = (
-            "产品目标是 maximum safe compatibility / 最大安全兼容",
-            "无需跨协议 request construction",
-            "保留 provider-native bytes 和字段",
-            "需要 request 或 response construction",
-            "fail-closed 代表 hard portability boundary",
-            "触及 hard portability boundary 的请求会在上游前被拒绝",
+        chinese_user_snippets = (
+            "尽量转成模型服务能听懂的格式",
+            "少数服务独有能力如果无法安全转换",
+            "会在本地报错",
         )
-        for snippet in chinese_snippets:
+        for snippet in chinese_user_snippets:
             with self.subTest(language="README_CN", snippet=snippet):
                 self.assertIn(snippet, readme_cn)
 
     def test_docs_index_and_readmes_link_ga_readiness_review(self):
-        for relative_path in ("README.md", "README_CN.md", "docs/README.md"):
+        for relative_path in ("README.md", "docs/README.md"):
             with self.subTest(path=relative_path):
                 self.assertIn("docs/ga-readiness-review.md", self.read_text(relative_path))
 
     def test_readmes_and_docs_index_surface_data_auth_admin_entrypoint(self):
         expectations = {
             "README.md": (
-                "`data_auth`",
-                "`GET /admin/data-auth`",
-                "`PUT /admin/data-auth`",
-            ),
-            "README_CN.md": (
                 "`data_auth`",
                 "`GET /admin/data-auth`",
                 "`PUT /admin/data-auth`",

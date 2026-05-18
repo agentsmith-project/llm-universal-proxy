@@ -929,11 +929,9 @@ os.execv(real_git, [real_git, *args])
 
     def test_readme_and_docs_expose_container_entrypoint_only(self):
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        readme_cn = (REPO_ROOT / "README_CN.md").read_text(encoding="utf-8")
         docs_index = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("docs/container.md", readme)
-        self.assertIn("docs/container.md", readme_cn)
         self.assertIn("container.md", docs_index)
 
     def test_active_docs_bound_overbroad_compatibility_promises(self):

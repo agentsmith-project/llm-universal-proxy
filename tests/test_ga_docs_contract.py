@@ -216,7 +216,6 @@ class GaDocsContractTests(unittest.TestCase):
     def test_readmes_summarize_published_container_usage(self):
         refs = container_refs()
         english = normalized_whitespace(read_doc("README.md"))
-        chinese = normalized_whitespace(read_doc("README_CN.md"))
 
         readme_expectations = {
             "README.md": (
@@ -224,12 +223,6 @@ class GaDocsContractTests(unittest.TestCase):
                 f'The current published container release is `{refs["published_release_tag"]}`',
                 f'Cargo package version `{refs["next_package_version"]}` is the next release identity, not a published container tag yet',
                 rf"current published .*`{re.escape(refs['next_release_tag'])}`",
-            ),
-            "README_CN.md": (
-                chinese,
-                f'当前已发布容器版本是 `{refs["published_release_tag"]}`',
-                f'Cargo package version `{refs["next_package_version"]}` 是下一次 release identity，并不是已发布容器 tag',
-                rf"当前已发布.*`{re.escape(refs['next_release_tag'])}`",
             ),
         }
 
@@ -276,12 +269,19 @@ class GaDocsContractTests(unittest.TestCase):
             'check_contains "docs/container.md" "GITHUB_USERNAME"',
             'check_contains "docs/container.md" "If the package is public"',
             'check_contains "docs/container.md" "unauthorized, 403, or package page appears 404"',
+            'check_contains "README_CN.md" "不用 Docker，也不用先学完整配置，先把本地二进制跑起来"',
+            'check_contains "README_CN.md" ".local/bin/llm-universal-proxy"',
+            'check_contains "README_CN.md" ".env.llmup.local"',
+            'check_contains "README_CN.md" "provider_key:"',
+            'check_contains "README_CN.md" "env: MINIMAX_API_KEY"',
+            'check_contains "README_CN.md" "--model minimax"',
+            'check_contains "README_CN.md" "llmup-anthropic-like.yaml"',
+            'check_contains "README_CN.md" "--model my-claude-like-model"',
+            'check_absent "README_CN.md" "preset-openai-compatible"',
+            'check_absent "README_CN.md" "## 容器镜像"',
             'check_contains "README.md" "${PUBLISHED_CONTAINER_RELEASE_TAG}"',
-            'check_contains "README_CN.md" "${PUBLISHED_CONTAINER_RELEASE_TAG}"',
             'check_contains "README.md" "${NEXT_PACKAGE_VERSION}"',
-            'check_contains "README_CN.md" "${NEXT_PACKAGE_VERSION}"',
             'check_readme_container_release_semantics "README.md" en',
-            'check_readme_container_release_semantics "README_CN.md" zh',
             'check_absent "docs/container.md" "fine-grained personal access token"',
             'check_absent "docs/container.md" \'$GITHUB_ACTOR\'',
             'check_contains "examples/docker-compose.yaml" "${PUBLISHED_CONTAINER_IMAGE}:${PUBLISHED_CONTAINER_RELEASE_TAG}"',
@@ -553,11 +553,6 @@ class GaDocsContractTests(unittest.TestCase):
                 "Prefer static `data_auth`",
                 "environment fallback when `data_auth` is omitted",
                 "`provider_key.inline`, `provider_key.env`, or legacy `provider_key_env`",
-            ),
-            "README_CN.md": (
-                "优先使用静态 `data_auth`",
-                "省略 `data_auth` 时的环境变量兼容 fallback",
-                "`provider_key.inline`、`provider_key.env` 或 legacy `provider_key_env`",
             ),
             "docs/clients.md": (
                 "Prefer static `data_auth`",

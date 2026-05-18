@@ -882,15 +882,26 @@ check_contains ".github/workflows/release.yml" "IMAGE=llm-universal-proxy:releas
 
 check_contains "docs/README.md" "container.md"
 check_contains "README.md" "docs/container.md"
-check_contains "README_CN.md" "docs/container.md"
+check_contains "README_CN.md" "不用 Docker，也不用先学完整配置，先把本地二进制跑起来"
+check_contains "README_CN.md" "llm-universal-proxy-macos-aarch64.tar.gz"
+check_contains "README_CN.md" ".local/bin/llm-universal-proxy"
+check_contains "README_CN.md" ".env.llmup.local"
+check_contains "README_CN.md" "provider_key:"
+check_contains "README_CN.md" "env: MINIMAX_API_KEY"
+check_contains "README_CN.md" "https://api.minimax.io/v1"
+check_contains "README_CN.md" "https://api.minimaxi.com/v1"
+check_contains "README_CN.md" "--model minimax"
+check_contains "README_CN.md" "llmup-anthropic-like.yaml"
+check_contains "README_CN.md" "--model my-claude-like-model"
+check_contains "README_CN.md" 'wrapper 默认会临时使用 `18888` 端口'
+check_absent "README_CN.md" "preset-openai-compatible"
+check_absent "README_CN.md" "preset-anthropic-compatible"
+check_absent "README_CN.md" "## 容器镜像"
+check_absent "README_CN.md" "## 动态配置概要"
 check_contains "README.md" "${PUBLISHED_CONTAINER_RELEASE_TAG}"
-check_contains "README_CN.md" "${PUBLISHED_CONTAINER_RELEASE_TAG}"
 check_contains "README.md" "${NEXT_PACKAGE_VERSION}"
-check_contains "README_CN.md" "${NEXT_PACKAGE_VERSION}"
 check_readme_container_release_semantics "README.md" en
-check_readme_container_release_semantics "README_CN.md" zh
 check_absent "README.md" "${PUBLISHED_CONTAINER_IMAGE}:${NEXT_RELEASE_TAG}"
-check_absent "README_CN.md" "${PUBLISHED_CONTAINER_IMAGE}:${NEXT_RELEASE_TAG}"
 check_contains "$CONTAINER_IMAGE_MANIFEST" '"published"'
 check_contains "$CONTAINER_IMAGE_MANIFEST" '"next_release"'
 check_contains "docs/container.md" "ghcr.io/agentsmith-project/llm-universal-proxy"
