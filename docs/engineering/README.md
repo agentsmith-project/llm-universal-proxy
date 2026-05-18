@@ -11,3 +11,5 @@ for maintainers, but are not part of the user-facing product guide.
   Pre-GA lightweight in-memory conversation state bridge plan
 - [pre-ga-remove-native-gemini-format-plan.md](./pre-ga-remove-native-gemini-format-plan.md)
   Pre-GA plan to remove native Google/Gemini wire-format support while keeping Gemini usable through OpenAI-compatible upstreams
+- [pre-ga-user-tooling-install-config-agent-launch-plan.md](./pre-ga-user-tooling-install-config-agent-launch-plan.md)
+  Pre-GA plan for user-facing install, configuration, and Codex/Claude Code launcher tooling
