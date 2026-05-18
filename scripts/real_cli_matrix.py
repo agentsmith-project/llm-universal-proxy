@@ -4591,6 +4591,278 @@ def _verify_tool_identity_trace_contract(
     return True, ""
 
 
+_TRACE_FIELD_MISSING = object()
+
+
+def _trace_value_at_path(value: object, field_path: str) -> object:
+    current = value
+    for part in field_path.split("."):
+        if isinstance(current, dict):
+            if part not in current:
+                return _TRACE_FIELD_MISSING
+            current = current[part]
+            continue
+        if isinstance(current, list) and part.isdigit():
+            index = int(part)
+            if index >= len(current):
+                return _TRACE_FIELD_MISSING
+            current = current[index]
+            continue
+        return _TRACE_FIELD_MISSING
+    return current
+
+
+def _trace_value_contains(value: object, needle: str) -> bool:
+    if isinstance(value, str):
+        return needle in value
+    return needle in json.dumps(value, sort_keys=True, default=str)
+
+
+def _trace_object_contains_subset(
+    value: dict[str, object], expected_subset: dict[str, object]
+) -> bool:
+    for key, expected_value in expected_subset.items():
+        if key not in value:
+            return False
+        actual_value = value[key]
+        if isinstance(expected_value, dict):
+            if not isinstance(actual_value, dict):
+                return False
+            if not _trace_object_contains_subset(actual_value, expected_value):
+                return False
+            continue
+        if actual_value != expected_value:
+            return False
+    return True
+
+
+def _trace_value_has_object_containing(
+    value: object, expected_subset: dict[str, object]
+) -> bool:
+    if isinstance(value, dict):
+        if _trace_object_contains_subset(value, expected_subset):
+            return True
+        return any(
+            _trace_value_has_object_containing(child, expected_subset)
+            for child in value.values()
+        )
+    if isinstance(value, list):
+        return any(
+            _trace_value_has_object_containing(child, expected_subset)
+            for child in value
+        )
+    return False
+
+
+def _trace_entry_matches_filters(
+    entry: dict[str, object], filters: dict[str, str]
+) -> bool:
+    return all(entry.get(key) == expected for key, expected in filters.items())
+
+
+def _trace_contract_http_status(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _verify_trace_request_contract(
+    verifier: dict[str, object],
+    context: VerifierContext | None,
+) -> tuple[bool, str]:
+    trace_entries = tuple(context.trace_entries if context is not None else ())
+    if not trace_entries:
+        return (
+            False,
+            "expected debug trace entries for trace_request_contract; "
+            "no matching entries were captured after case filtering",
+        )
+
+    filters: dict[str, str] = {}
+    for key in ("path", "client_format", "upstream_format"):
+        value = verifier.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value:
+            return False, f"trace_request_contract {key} must be a non-empty string"
+        filters[key] = value
+    min_request_count = verifier.get("min_request_count", 1)
+    if (
+        isinstance(min_request_count, bool)
+        or not isinstance(min_request_count, int)
+        or min_request_count < 0
+    ):
+        return (
+            False,
+            "trace_request_contract min_request_count must be a non-negative integer",
+        )
+
+    request_entries = [
+        entry
+        for entry in trace_entries
+        if entry.get("phase") == "request"
+        and _trace_entry_matches_filters(entry, filters)
+    ]
+    if len(request_entries) < min_request_count:
+        return (
+            False,
+            "expected at least "
+            f"{min_request_count} matching debug trace request entries, "
+            f"got {len(request_entries)}",
+        )
+
+    request_ids = {
+        request_id
+        for request_id in (entry.get("request_id") for entry in request_entries)
+        if isinstance(request_id, str)
+    }
+    response_entries = [
+        entry
+        for entry in trace_entries
+        if entry.get("phase") == "response"
+        and (
+            entry.get("request_id") in request_ids
+            if request_ids
+            else _trace_entry_matches_filters(entry, filters)
+        )
+    ]
+    raw_forbidden_statuses = verifier.get("forbid_response_http_statuses", [])
+    if not isinstance(raw_forbidden_statuses, list):
+        return (
+            False,
+            "trace_request_contract forbid_response_http_statuses must be a list",
+        )
+    forbidden_statuses = {
+        status
+        for status in raw_forbidden_statuses
+        if isinstance(status, int) and not isinstance(status, bool)
+    }
+    for response_entry in response_entries:
+        http_status = _trace_contract_http_status(response_entry.get("http_status"))
+        if http_status in forbidden_statuses:
+            request_id = response_entry.get("request_id")
+            request_suffix = (
+                f" for request {request_id!r}" if isinstance(request_id, str) else ""
+            )
+            return (
+                False,
+                f"expected no debug trace response http_status {http_status}"
+                f"{request_suffix}",
+            )
+
+    raw_required_fields = verifier.get("required_request_fields", [])
+    if not isinstance(raw_required_fields, list):
+        return (
+            False,
+            "trace_request_contract required_request_fields must be a list",
+        )
+    for field in raw_required_fields:
+        if not isinstance(field, str) or not field:
+            return (
+                False,
+                "trace_request_contract required_request_fields must contain "
+                "non-empty strings",
+            )
+        if not any(
+            _trace_value_at_path(entry.get("request", {}), field)
+            is not _TRACE_FIELD_MISSING
+            for entry in request_entries
+        ):
+            return (
+                False,
+                f"expected matching debug trace request field {field!r}",
+            )
+
+    raw_contains_specs = verifier.get("required_request_contains", [])
+    if not isinstance(raw_contains_specs, list):
+        return (
+            False,
+            "trace_request_contract required_request_contains must be a list",
+        )
+    for spec in raw_contains_specs:
+        if not isinstance(spec, dict):
+            return (
+                False,
+                "trace_request_contract required_request_contains entries "
+                "must be objects",
+            )
+        field = spec.get("field")
+        needle = spec.get("value")
+        if not isinstance(field, str) or not field:
+            return (
+                False,
+                "trace_request_contract required_request_contains.field "
+                "must be a non-empty string",
+            )
+        if not isinstance(needle, str) or not needle:
+            return (
+                False,
+                "trace_request_contract required_request_contains.value "
+                "must be a non-empty string",
+            )
+        if not any(
+            (
+                value := _trace_value_at_path(entry.get("request", {}), field)
+            )
+            is not _TRACE_FIELD_MISSING
+            and _trace_value_contains(value, needle)
+            for entry in request_entries
+        ):
+            return (
+                False,
+                "expected matching debug trace request field "
+                f"{field!r} to contain {needle!r}",
+            )
+
+    raw_object_specs = verifier.get("required_request_objects", [])
+    if not isinstance(raw_object_specs, list):
+        return (
+            False,
+            "trace_request_contract required_request_objects must be a list",
+        )
+    for spec in raw_object_specs:
+        if not isinstance(spec, dict):
+            return (
+                False,
+                "trace_request_contract required_request_objects entries "
+                "must be objects",
+            )
+        field = spec.get("field")
+        expected_subset = spec.get("contains")
+        if not isinstance(field, str) or not field:
+            return (
+                False,
+                "trace_request_contract required_request_objects.field "
+                "must be a non-empty string",
+            )
+        if not isinstance(expected_subset, dict) or not expected_subset:
+            return (
+                False,
+                "trace_request_contract required_request_objects.contains "
+                "must be a non-empty object",
+            )
+        if not any(
+            (
+                value := _trace_value_at_path(entry.get("request", {}), field)
+            )
+            is not _TRACE_FIELD_MISSING
+            and _trace_value_has_object_containing(value, expected_subset)
+            for entry in request_entries
+        ):
+            expected_json = json.dumps(expected_subset, sort_keys=True, default=str)
+            return (
+                False,
+                "expected matching debug trace request field "
+                f"{field!r} to contain an object containing {expected_json}",
+            )
+
+    return True, ""
+
+
 def _codex_command_targets_path(command: str, path_suffix: str) -> bool:
     quoted_patterns = (
         rf"(?<![A-Za-z0-9_./-]){re.escape(path_suffix)}(?![A-Za-z0-9_./-])",
@@ -4659,6 +4931,8 @@ def _verify_verifier_output(
         if not ok:
             return False, message
         return _verify_tool_identity_trace_contract(verifier, context)
+    if verifier_type == "trace_request_contract":
+        return _verify_trace_request_contract(verifier, context)
     if verifier_type == "stdout_contract":
         client_contains, message = _client_specific_verifier_values(
             verifier, "contains", context

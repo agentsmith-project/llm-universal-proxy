@@ -2762,6 +2762,184 @@ async fn anthropic_cache_control_changes_do_not_drive_synthesized_openai_key() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn anthropic_claude_code_second_round_thinking_context_management_reaches_openai_chat() {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_claude_code_second_round",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    {
+        let mut runtime = state.runtime.write().await;
+        let namespace = runtime
+            .namespaces
+            .get_mut(DEFAULT_NAMESPACE)
+            .expect("default namespace");
+        namespace.config.model_aliases.insert(
+            "preset-openai-compatible".to_string(),
+            crate::config::ModelAlias {
+                upstream_name: "primary".to_string(),
+                upstream_model: "gpt-4o-mini".to_string(),
+                limits: None,
+                surface: None,
+            },
+        );
+    }
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/anthropic/v1/messages".to_string(),
+        serde_json::json!({
+            "model": "preset-openai-compatible",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 1024 },
+            "context_management": {
+                "edits": [{ "type": "clear_thinking_20251015" }]
+            },
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "hi" }]
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I should answer briefly and keep visible context.",
+                            "signature": "claude-code-prior-visible-thinking-signature"
+                        },
+                        { "type": "text", "text": "Hi there." },
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_lookup_context_1",
+                            "name": "lookup_context",
+                            "input": { "query": "current task status" }
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_lookup_context_1",
+                            "content": [
+                                { "type": "text", "text": "tool says ready" },
+                                { "type": "json", "json": { "status": "ready", "attempt": 2 } }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "text": "Please answer the current request."
+                    }]
+                }
+            ],
+            "stream": false
+        }),
+        "preset-openai-compatible".to_string(),
+        crate::formats::UpstreamFormat::Anthropic,
+        None,
+    )
+    .await;
+
+    let status = response.status();
+    let body_text = response_text(response).await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "body = {body_text}");
+    assert_eq!(status, StatusCode::OK, "body = {body_text}");
+
+    let recorded = requests.lock().await;
+    assert_eq!(recorded.len(), 1, "requests = {recorded:?}");
+    let upstream_body = &recorded[0];
+    assert!(
+        upstream_body.get("thinking").is_none(),
+        "OpenAI Chat body must not receive top-level Anthropic thinking: {upstream_body:?}"
+    );
+    assert!(
+        upstream_body.get("context_management").is_none(),
+        "OpenAI Chat body must not receive Anthropic context_management: {upstream_body:?}"
+    );
+    assert!(
+        !json_contains_key(upstream_body, "signature"),
+        "OpenAI Chat body must not receive Anthropic signed-thinking carrier fields: {upstream_body:?}"
+    );
+    let messages = upstream_body["messages"]
+        .as_array()
+        .expect("OpenAI Chat messages array");
+    assert!(
+        messages.iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("user")
+                && message
+                    .to_string()
+                    .contains("Please answer the current request.")
+        }),
+        "OpenAI Chat body must retain the current user request: {upstream_body:?}"
+    );
+    let assistant_tool_call_message = messages
+        .iter()
+        .find(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+                && message.get("tool_calls").is_some()
+        })
+        .expect("OpenAI Chat assistant tool-call message");
+    assert_eq!(
+        assistant_tool_call_message["reasoning_content"],
+        "I should answer briefly and keep visible context."
+    );
+    assert_eq!(assistant_tool_call_message["content"], "Hi there.");
+    let tool_calls = assistant_tool_call_message["tool_calls"]
+        .as_array()
+        .expect("OpenAI Chat tool_calls");
+    assert_eq!(tool_calls.len(), 1, "tool_calls = {tool_calls:?}");
+    assert_eq!(tool_calls[0]["id"], "toolu_lookup_context_1");
+    assert_eq!(tool_calls[0]["type"], "function");
+    assert_eq!(tool_calls[0]["function"]["name"], "lookup_context");
+    let tool_arguments: Value = serde_json::from_str(
+        tool_calls[0]["function"]["arguments"]
+            .as_str()
+            .unwrap_or(""),
+    )
+    .expect("OpenAI Chat function arguments JSON");
+    assert_eq!(
+        tool_arguments,
+        serde_json::json!({ "query": "current task status" })
+    );
+    let tool_result_message = messages
+        .iter()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("tool"))
+        .expect("OpenAI Chat tool result message");
+    assert_eq!(
+        tool_result_message["tool_call_id"],
+        "toolu_lookup_context_1"
+    );
+    assert_eq!(
+        tool_result_message["content"],
+        serde_json::json!([
+            { "type": "text", "text": "tool says ready" },
+            { "type": "json", "json": { "status": "ready", "attempt": 2 } }
+        ])
+    );
+
+    upstream_server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn debug_trace_records_prompt_cache_disposition_for_synthesized_openai_key_and_dropped_anthropic_cache_control()
  {
     let server_response_body = serde_json::json!({

@@ -31,6 +31,15 @@ TOOL_IDENTITY_FIXTURE_PATH = (
     / "smoke"
     / "tool_identity_public_contract.json"
 )
+CLAUDE_OPENAI_MULTI_TURN_SHAPE_FIXTURE_PATH = (
+    REPO_ROOT
+    / "scripts"
+    / "fixtures"
+    / "cli_matrix"
+    / "smoke"
+    / "claude_openai_multi_turn_request_shape_contract"
+    / "task.json"
+)
 LOCKED_TOOL_CONTRACT_SPEC_PATHS = (
     REPO_ROOT / "docs" / "DESIGN.md",
     REPO_ROOT / "docs" / "PRD.md",
@@ -370,6 +379,48 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertTrue(fixtures["rust_6502_cpu"].requires_tool_loop)
         self.assertFalse(fixtures["smoke_pong"].requires_tool_loop)
         self.assertFalse(fixtures["tool_identity_public_contract"].requires_tool_loop)
+        self.assertTrue(
+            fixtures[
+                "claude_openai_multi_turn_request_shape_contract"
+            ].requires_tool_loop
+        )
+
+    def test_claude_openai_multi_turn_shape_fixture_targets_only_preset_openai(
+        self,
+    ):
+        module = load_module()
+        self.assertTrue(CLAUDE_OPENAI_MULTI_TURN_SHAPE_FIXTURE_PATH.exists())
+        fixtures = module.load_fixtures(DEFAULT_CONFIG_PATH.parent)
+        fixture = next(
+            fixture
+            for fixture in fixtures
+            if fixture.fixture_id == "claude_openai_multi_turn_request_shape_contract"
+        )
+        parsed = module.parse_proxy_source(
+            DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
+        )
+        targets = module.resolve_matrix_targets(parsed, preset_endpoint_env())
+
+        cases = module.expand_matrix(
+            module.CLIENT_NAMES,
+            targets,
+            fixtures,
+            phase="basic",
+            skip_slow=True,
+        )
+        shape_case_ids = [
+            case.case_id
+            for case in cases
+            if case.fixture.fixture_id == fixture.fixture_id
+        ]
+
+        self.assertEqual(fixture.supported_clients, ("claude",))
+        self.assertEqual(
+            shape_case_ids,
+            [
+                "claude__preset-openai-compatible__claude_openai_multi_turn_request_shape_contract"
+            ],
+        )
 
     def test_load_fixtures_infers_tool_loop_for_nested_workspace_verifier_without_manual_flag(self):
         module = load_module()
@@ -2587,6 +2638,298 @@ class RealCliMatrixTests(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertIn("__llmup_custom__", message)
+
+    def test_verify_fixture_output_accepts_claude_openai_multi_turn_trace_contract(
+        self,
+    ):
+        module = load_module()
+        fixture = make_fixture(
+            module,
+            fixture_id="claude_openai_multi_turn_request_shape_contract",
+            verifier={
+                "type": "trace_request_contract",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "min_request_count": 2,
+                "forbid_response_http_statuses": [400],
+                "required_request_fields": [
+                    "client_summary.message_roles",
+                    "client_summary.messages_tail",
+                ],
+                "required_request_objects": [
+                    {
+                        "field": "client_summary.messages_tail",
+                        "contains": {"type": "tool_result"},
+                    }
+                ],
+            },
+        )
+        trace_entries = (
+            {
+                "request_id": "req-1",
+                "phase": "request",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "request": {
+                    "client_summary": {
+                        "message_roles": ["user"],
+                        "messages_tail": [
+                            {"role": "user", "content": [{"type": "text"}]}
+                        ],
+                    }
+                },
+            },
+            {
+                "request_id": "req-1",
+                "phase": "response",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "http_status": 200,
+            },
+            {
+                "request_id": "req-2",
+                "phase": "request",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "request": {
+                    "client_summary": {
+                        "message_roles": ["user", "assistant", "user"],
+                        "messages_tail": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": "toolu_123",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                },
+            },
+            {
+                "request_id": "req-2",
+                "phase": "response",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "http_status": 200,
+            },
+        )
+
+        ok, message = module.verify_fixture_output(
+            fixture,
+            "",
+            None,
+            context=module.VerifierContext(
+                client_name="claude",
+                trace_entries=trace_entries,
+            ),
+        )
+
+        self.assertTrue(ok, message)
+
+    def test_verify_fixture_output_rejects_claude_openai_trace_contract_with_one_matching_request(
+        self,
+    ):
+        module = load_module()
+        fixture = make_fixture(
+            module,
+            fixture_id="claude_openai_multi_turn_request_shape_contract",
+            verifier={
+                "type": "trace_request_contract",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "min_request_count": 2,
+                "required_request_objects": [
+                    {
+                        "field": "client_summary.messages_tail",
+                        "contains": {"type": "tool_result"},
+                    }
+                ],
+            },
+        )
+        trace_entries = (
+            {
+                "request_id": "req-1",
+                "phase": "request",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "request": {
+                    "client_summary": {
+                        "messages_tail": [
+                            {
+                                "role": "user",
+                                "content": [{"type": "tool_result"}],
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+
+        ok, message = module.verify_fixture_output(
+            fixture,
+            "",
+            None,
+            context=module.VerifierContext(
+                client_name="claude",
+                trace_entries=trace_entries,
+            ),
+        )
+
+        self.assertFalse(ok)
+        self.assertIn("got 1", message)
+
+    def test_verify_fixture_output_rejects_claude_openai_trace_contract_text_only_tool_result(
+        self,
+    ):
+        module = load_module()
+        fixture = make_fixture(
+            module,
+            fixture_id="claude_openai_multi_turn_request_shape_contract",
+            verifier={
+                "type": "trace_request_contract",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "min_request_count": 2,
+                "required_request_fields": ["client_summary.messages_tail"],
+                "required_request_objects": [
+                    {
+                        "field": "client_summary.messages_tail",
+                        "contains": {"type": "tool_result"},
+                    }
+                ],
+            },
+        )
+        trace_entries = (
+            {
+                "request_id": "req-1",
+                "phase": "request",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "request": {
+                    "client_summary": {
+                        "messages_tail": [
+                            {
+                                "role": "user",
+                                "content": "tool_result",
+                            }
+                        ],
+                    }
+                },
+            },
+            {
+                "request_id": "req-2",
+                "phase": "request",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "request": {
+                    "client_summary": {
+                        "messages_tail": [
+                            "tool_result",
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": "tool_result"}],
+                            },
+                        ],
+                    }
+                },
+            },
+        )
+
+        ok, message = module.verify_fixture_output(
+            fixture,
+            "",
+            None,
+            context=module.VerifierContext(
+                client_name="claude",
+                trace_entries=trace_entries,
+            ),
+        )
+
+        self.assertFalse(ok)
+        self.assertIn("object containing", message)
+
+    def test_verify_fixture_output_rejects_claude_openai_trace_contract_local_400(
+        self,
+    ):
+        module = load_module()
+        fixture = make_fixture(
+            module,
+            verifier={
+                "type": "trace_request_contract",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "min_request_count": 2,
+                "forbid_response_http_statuses": [400],
+                "required_request_objects": [
+                    {
+                        "field": "client_summary.messages_tail",
+                        "contains": {"type": "tool_result"},
+                    }
+                ],
+            },
+        )
+        trace_entries = (
+            {
+                "request_id": "req-1",
+                "phase": "request",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "request": {
+                    "client_summary": {
+                        "messages_tail": [
+                            {
+                                "role": "user",
+                                "content": [{"type": "tool_result"}],
+                            }
+                        ],
+                    }
+                },
+            },
+            {
+                "request_id": "req-2",
+                "phase": "request",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "request": {"client_summary": {"messages_tail": []}},
+            },
+            {
+                "request_id": "req-2",
+                "phase": "response",
+                "path": "/anthropic/v1/messages",
+                "client_format": "anthropic",
+                "upstream_format": "openai-completion",
+                "http_status": 400,
+            },
+        )
+
+        ok, message = module.verify_fixture_output(
+            fixture,
+            "",
+            None,
+            context=module.VerifierContext(
+                client_name="claude",
+                trace_entries=trace_entries,
+            ),
+        )
+
+        self.assertFalse(ok)
+        self.assertIn("http_status 400", message)
 
     def test_tool_identity_fixture_prompt_template_renders_client_and_exclusion_constraints(self):
         module = load_module()

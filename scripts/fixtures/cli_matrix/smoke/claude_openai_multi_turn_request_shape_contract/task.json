@@ -1,0 +1,69 @@
+{
+  "id": "claude_openai_multi_turn_request_shape_contract",
+  "kind": "smoke",
+  "description": "Claude Code to OpenAI-compatible positive coverage for a second Anthropic-shaped request after a tool round-trip.",
+  "prompt": "Inspect calc.py and main.py. There is a regression in add(): it currently subtracts instead of adding. Fix the implementation so add(a, b) returns a + b without changing the function name, argument list, or multiply() behavior. Validate the workspace by running main.py and make sure the printed output is correct.",
+  "timeout_secs": 180,
+  "workspace_template": "../public_editing_tool_workspace_edit_contract/workspace",
+  "supported_clients": [
+    "claude"
+  ],
+  "unsupported_targets": [
+    "preset-anthropic-compatible",
+    "preset-openai-responses-compatible",
+    "qwen-local"
+  ],
+  "verifier": {
+    "type": "all_of",
+    "verifiers": [
+      {
+        "type": "python_source_and_output",
+        "source": {
+          "path": "calc.py",
+          "function": "add",
+          "args": [
+            "a",
+            "b"
+          ],
+          "returns": {
+            "kind": "binary_op",
+            "operator": "+",
+            "left": "a",
+            "right": "b"
+          }
+        },
+        "entrypoint": {
+          "path": "main.py",
+          "expect_stdout_contains": [
+            "2 + 3 = 5",
+            "-1 + 5 = 4",
+            "0 + 0 = 0",
+            "4 * 5 = 20"
+          ]
+        }
+      },
+      {
+        "type": "trace_request_contract",
+        "path": "/anthropic/v1/messages",
+        "client_format": "anthropic",
+        "upstream_format": "openai-completion",
+        "min_request_count": 2,
+        "forbid_response_http_statuses": [
+          400
+        ],
+        "required_request_fields": [
+          "client_summary.message_roles",
+          "client_summary.messages_tail"
+        ],
+        "required_request_objects": [
+          {
+            "field": "client_summary.messages_tail",
+            "contains": {
+              "type": "tool_result"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

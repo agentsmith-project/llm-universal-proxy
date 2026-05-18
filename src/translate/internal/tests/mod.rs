@@ -112,6 +112,37 @@ fn assert_no_anthropic_only_top_level_fields(body: &serde_json::Value) {
     }
 }
 
+fn anthropic_visible_signed_thinking_history_body() -> serde_json::Value {
+    json!({
+        "model": "claude-3",
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048
+        },
+        "context_management": {
+            "type": "auto"
+        },
+        "messages": [
+            { "role": "user", "content": "hi" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "visible reasoning",
+                        "signature": "sig"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Hello there."
+                    }
+                ]
+            },
+            { "role": "user", "content": "continue" }
+        ]
+    })
+}
+
 #[test]
 fn media_source_validator_rejects_encoded_controls_and_raw_unicode_boundaries() {
     for value in [
@@ -5522,6 +5553,30 @@ fn assess_request_translation_claude_to_openai_family_warns_for_dropped_anthropi
 }
 
 #[test]
+fn assess_request_translation_claude_to_openai_family_allows_visible_signed_thinking_with_context_hints(
+) {
+    let body = anthropic_visible_signed_thinking_history_body();
+
+    for upstream_format in [
+        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiResponses,
+    ] {
+        let assessment =
+            assess_request_translation(UpstreamFormat::Anthropic, upstream_format, &body);
+        let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
+            panic!("expected warnings for {upstream_format}, got {assessment:?}");
+        };
+        let joined = warnings.join("\n");
+        assert!(joined.contains("thinking"), "warnings = {warnings:?}");
+        assert!(
+            joined.contains("context_management"),
+            "warnings = {warnings:?}"
+        );
+        assert!(joined.contains("signature"), "warnings = {warnings:?}");
+    }
+}
+
+#[test]
 fn assess_request_translation_claude_to_openai_rejects_context_management_native_state_handles() {
     for (label, context_management) in [
         (
@@ -5738,6 +5793,68 @@ fn assess_request_translation_claude_to_openai_rejects_duplicate_tool_use_id_wit
         message.contains("complete visible history"),
         "message = {message}"
     );
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_family_rejects_opaque_thinking_with_context_hints() {
+    for (label, content) in [
+        (
+            "opaque_only_signed_thinking",
+            json!([{
+                "type": "thinking",
+                "thinking": { "display": "omitted" },
+                "signature": "sig_opaque"
+            }]),
+        ),
+        (
+            "redacted_thinking",
+            json!([{
+                "type": "redacted_thinking",
+                "data": "opaque_provider_state"
+            }]),
+        ),
+        (
+            "encrypted_thinking",
+            json!([{
+                "type": "encrypted_thinking",
+                "encrypted_content": "opaque_provider_state"
+            }]),
+        ),
+    ] {
+        for upstream_format in [
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiResponses,
+        ] {
+            let body = json!({
+                "model": "claude-3",
+                "thinking": {
+                    "type": "enabled",
+                    "budget_tokens": 2048
+                },
+                "context_management": {
+                    "type": "auto"
+                },
+                "messages": [
+                    { "role": "user", "content": "hi" },
+                    {
+                        "role": "assistant",
+                        "content": content.clone()
+                    },
+                    { "role": "user", "content": "continue" }
+                ]
+            });
+
+            let assessment =
+                assess_request_translation(UpstreamFormat::Anthropic, upstream_format, &body);
+            let TranslationDecision::Reject(message) = assessment.decision() else {
+                panic!("expected reject for {label} to {upstream_format}, got {assessment:?}");
+            };
+            assert!(
+                message.contains("thinking"),
+                "label = {label}, target = {upstream_format}, message = {message}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -7682,6 +7799,60 @@ fn translate_request_claude_to_responses_drops_anthropic_hint_controls_and_keeps
     assert!(body["tools"].is_array(), "body = {body:?}");
     assert_eq!(body["tool_choice"]["type"], "function");
     assert_eq!(body["tool_choice"]["name"], "lookup");
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_drops_context_hints_and_preserves_visible_signed_thinking(
+) {
+    let mut chat_body = anthropic_visible_signed_thinking_history_body();
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut chat_body,
+        false,
+    )
+    .expect("visible signed thinking should allow Chat translation with dropped Anthropic hints");
+
+    assert_no_anthropic_only_top_level_fields(&chat_body);
+    let messages = chat_body["messages"].as_array().expect("chat messages");
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["reasoning_content"], "visible reasoning");
+    assert_eq!(messages[1]["content"], "Hello there.");
+    let serialized = serde_json::to_string(&chat_body).unwrap();
+    assert!(!serialized.contains("signature"), "body = {chat_body:?}");
+    assert!(!serialized.contains("sig"), "body = {chat_body:?}");
+
+    let mut responses_body = anthropic_visible_signed_thinking_history_body();
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiResponses,
+        "gpt-4o",
+        &mut responses_body,
+        false,
+    )
+    .expect(
+        "visible signed thinking should allow Responses translation with dropped Anthropic hints",
+    );
+
+    assert_no_anthropic_only_top_level_fields(&responses_body);
+    assert!(
+        responses_body.get("messages").is_none(),
+        "body = {responses_body:?}"
+    );
+    let input = responses_body["input"].as_array().expect("responses input");
+    let reasoning_item = input
+        .iter()
+        .find(|item| item["type"] == "reasoning")
+        .expect("reasoning item");
+    assert_eq!(reasoning_item["summary"][0]["text"], "visible reasoning");
+    let serialized = serde_json::to_string(&responses_body).unwrap();
+    assert!(
+        !serialized.contains("signature"),
+        "body = {responses_body:?}"
+    );
+    assert!(!serialized.contains("sig"), "body = {responses_body:?}");
 }
 
 #[test]

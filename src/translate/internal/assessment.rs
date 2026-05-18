@@ -1832,17 +1832,22 @@ fn anthropic_block_has_provider_owned_state_hint(block: &Value) -> bool {
     match block.get("type").and_then(Value::as_str) {
         Some("redacted_thinking" | "encrypted_thinking") => true,
         Some("thinking") => {
-            let has_visible_thinking = block
-                .get("thinking")
-                .and_then(Value::as_str)
-                .is_some_and(|thinking| !thinking.trim().is_empty());
-            !has_visible_thinking
-                || block.get("signature").is_some()
-                || block.get("data").is_some()
+            if !anthropic_block_has_visible_thinking_text(block) {
+                return true;
+            }
+            block.get("data").is_some()
+                || block.get("redacted_content").is_some()
                 || block.get("encrypted_content").is_some()
         }
         _ => false,
     }
+}
+
+fn anthropic_block_has_visible_thinking_text(block: &Value) -> bool {
+    block
+        .get("thinking")
+        .and_then(Value::as_str)
+        .is_some_and(|thinking| !thinking.trim().is_empty())
 }
 
 fn anthropic_visit_content_blocks(content: Option<&Value>, mut visit: impl FnMut(&Value)) {
@@ -1993,11 +1998,7 @@ fn anthropic_collect_block_thinking_carrier_fields(block: &Value, fields: &mut V
     if block.get("type").and_then(Value::as_str) != Some("thinking") {
         return;
     }
-    if !block
-        .get("thinking")
-        .and_then(Value::as_str)
-        .is_some_and(|thinking| !thinking.trim().is_empty())
-    {
+    if !anthropic_block_has_visible_thinking_text(block) {
         return;
     }
     if block.get("signature").is_some() {
@@ -2043,11 +2044,7 @@ fn anthropic_opaque_thinking_carrier_in_content(
 fn anthropic_opaque_thinking_carrier_in_block(block: &Value, target_label: &str) -> Option<String> {
     match block.get("type").and_then(Value::as_str) {
         Some("thinking") => {
-            if block
-                .get("thinking")
-                .and_then(Value::as_str)
-                .is_some_and(|thinking| !thinking.trim().is_empty())
-            {
+            if anthropic_block_has_visible_thinking_text(block) {
                 None
             } else {
                 Some(format!(
