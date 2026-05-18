@@ -1,379 +1,223 @@
-# Pre-GA Claude Code -> OpenAI-Compatible 最大兼容开发计划
+# Pre-GA Claude Code -> OpenAI-Compatible 最大兼容最终目标计划
 
-- 状态：team-reviewed handoff draft
+- 状态：implementation contract
 - 日期：2026-05-18
-- 范围：让 Claude Code / Anthropic Messages client 通过 `llmup` 使用 OpenAI-compatible Chat Completions upstream 时尽量可用，同时尽量利用 provider-side prompt cache，并保持 reasoning / thinking 语义的最大安全兼容。
-- 非范围：`llmup` response cache、semantic cache、provider cache 资源生命周期管理、持久化会话数据库、完整 Conversations API 模拟、Anthropic server tool / code execution / skills 容器模拟、通用负载均衡或 fallback 产品化。
+- 范围：把 Claude Code / Anthropic Messages client -> OpenAI-compatible provider 作为 `llmup` 的一等正向路径实现，并通过真实 CLI / E2E 证明普通对话、streaming、工具循环、编辑工具、thinking/reasoning 和 provider-side prompt cache hint 都可用。
+- Pre-GA 原则：不为旧行为保留兼容负担；允许重构 translation pipeline、assessment、stream reducer、tool bridge、prompt-cache hint 和轻量状态边界。重构必须服务于最终合同，不能把 `llmup` 做成 LiteLLM / OpenRouter 风格的重型网关。
 
 ## 背景
 
-当前 `claude + preset-openai-compatible` 在真实 CLI 矩阵中不是正向通过，而是被标记为 `expected_fail_closed`。用户手动运行 Claude Code 时看到的 400 是 `llmup` 本地 request boundary 在上游调用前拒绝了顶层 `thinking` / `context_management`，不是 OpenAI-compatible provider 返回的错误。
+当前 `claude + preset-openai-compatible` 在真实 CLI 矩阵中不是正向通过，而是被归类为预期拒绝。用户手动运行 Claude Code 时看到的 400 是 `llmup` 本地 request boundary 在上游调用前拒绝了顶层 `thinking` / `context_management`，不是 OpenAI-compatible provider 返回的错误。
 
-这与新的产品目标不一致：`llmup` 的目标是最大化兼容，Claude Code 应该可以优先以降级兼容方式使用 OpenAI-compatible endpoint。只有真正无法安全表示、且请求缺少可见上下文的 provider-owned state 才应该 fail closed。
+这与最终目标不一致。Claude Code / Anthropic Messages client 使用 OpenAI-compatible upstream 必须是正常路径；只有真正无法安全表示、缺少可见上下文、或依赖 provider-owned opaque state/resource 的请求才应该在上游前拒绝。
 
-## 目标
+## 目标合同
 
-1. Claude Code 使用 OpenAI-compatible Chat Completions upstream 时，普通对话、streaming、工具循环和编辑工具应能正常工作。
-2. Anthropic-only 顶层控制不再一锅 hard reject；按 `map` / `warn+drop` / `hard fail` 三类处理。
-3. Prompt cache 支持只使用 provider-side 机制。`llmup` 可以保留、显式映射或在严格条件下合成目标 provider request hint，但不保存、不查找、不复用模型响应。
-4. Reasoning / thinking 优先保留安全请求 hint 和 unsigned plain visible thinking text；signed、omitted、redacted 或 opaque carrier 不跨 provider 伪造，Phase 1 继续 hard fail。
-5. E2E gate 不再把正向可用性路径藏进 `expected_fail_closed`。
-6. 设计和配置保持低心智负担：默认最大兼容，不新增用户可见兼容等级。
+1. `llmup` MUST 把 Claude Code / Anthropic Messages client -> OpenAI-compatible Chat Completions provider 视为一等正向路径。
+2. 该路径 MUST 通过真实 CLI / E2E：普通 `hi`、streaming、结构化 tool use/tool result、workspace edit fixture、usage 汇总和负向拒绝用例都要被验证。
+3. 在请求满足“完整可见 history”时，translation MUST 优先 `map` / `synthesize` / `warn+drop`，MUST NOT 因 Anthropic-only 顶层 hint 直接 fail closed。
+4. `llmup` MAY 合成 provider request 所需的兼容数据，但 MUST NOT 伪造 opaque security carrier、provider-owned resource、provider cache 内容或模型响应。
+5. Prompt cache 只能使用 provider-side 机制。`llmup` MAY 生成 OpenAI-compatible request hint，MUST NOT 实现 response cache、result cache、semantic cache、cache-aware routing 或跨 provider cache handle 互转。
+6. Thinking / reasoning MUST 尽量保留下游可用能力：可见 unsigned thinking 要进入 reasoning side channel 或普通上下文；top-level `thinking` 要在 surface 或显式覆盖允许时映射为 OpenAI reasoning hint；opaque/signed/redacted carrier 不能伪造。
+7. 配置面 MUST 保持小。不得新增用户可见兼容等级或“模式开关”；高风险 provider feature 只能由 model surface、显式 `extra_body` 或 same-wire provider-native request 控制。
 
 ## 参考资料
 
 官方资料：
 
-- Anthropic Messages API 是 stateless，客户端应发送完整 conversation history：<https://platform.claude.com/docs/en/build-with-claude/working-with-messages>
-- Anthropic context editing 是 server-side 清理 tool results / thinking blocks：<https://platform.claude.com/docs/en/build-with-claude/context-editing>
-- Anthropic extended thinking 包含 `thinking` block、`signature` 和 redacted thinking 的 round-trip 约束：<https://platform.claude.com/docs/en/build-with-claude/extended-thinking>
-- Anthropic prompt caching 支持 top-level / block-level `cache_control`，thinking blocks 不能直接标记 cache：<https://platform.claude.com/docs/en/build-with-claude/prompt-caching>
-- OpenAI prompt caching 自动启用，并可用 `prompt_cache_key` / `prompt_cache_retention` 影响 cache routing / retention：<https://developers.openai.com/api/docs/guides/prompt-caching>
-- OpenAI Chat Completions 暴露 `prompt_cache_key`、`prompt_cache_retention`、`reasoning_effort`：<https://platform.openai.com/docs/api-reference/chat/create>
-- OpenAI Responses `previous_response_id` / `conversation` 是 provider-managed state：<https://developers.openai.com/api/docs/guides/conversation-state>
+- Anthropic Messages API stateless，客户端应发送 conversation history：<https://platform.claude.com/docs/en/build-with-claude/working-with-messages>
+- Anthropic streaming lifecycle：<https://platform.claude.com/docs/en/build-with-claude/streaming>
+- Anthropic extended thinking：<https://platform.claude.com/docs/en/build-with-claude/extended-thinking>
+- Anthropic context editing：<https://platform.claude.com/docs/en/build-with-claude/context-editing>
+- Anthropic prompt caching：<https://platform.claude.com/docs/en/build-with-claude/prompt-caching>
+- Claude Code LLM gateway：<https://code.claude.com/docs/en/llm-gateway>
+- OpenAI prompt caching：<https://developers.openai.com/api/docs/guides/prompt-caching>
+- OpenAI Chat Completions request fields：<https://platform.openai.com/docs/api-reference/chat/create>
+- OpenAI reasoning guide：<https://developers.openai.com/api/docs/guides/reasoning>
+- OpenAI function calling guide：<https://developers.openai.com/api/docs/guides/function-calling>
+- OpenAI provider-managed conversation state：<https://developers.openai.com/api/docs/guides/conversation-state>
 
 开源实践参考：
 
-- clawgate：把 Anthropic client / Claude Code 翻译到任意 OpenAI-compatible backend，主打 streaming 和 tool use：<https://clawgate.org/>
+- clawgate：Anthropic client / Claude Code -> OpenAI-compatible backend，强调 streaming 和 tool use：<https://clawgate.org/>
 - claude-code-proxy：Claude Code -> OpenAI-compatible API proxy：<https://github.com/fuergaosi233/claude-code-proxy>
-- claude2openai-proxy：Anthropic `/v1/messages` -> OpenAI/LiteLLM，支持 content block、tool、SSE 转换：<https://github.com/ziozzang/claude2openai-proxy>
-- UniClaudeProxy：支持 Claude Code 到 OpenAI-compatible / Responses / Anthropic passthrough，提供 reasoning block 和工具桥接参考：<https://github.com/vibheksoni/UniClaudeProxy>
-- raine/claude-code-proxy：强调 Claude Code streaming fallback、context window 与 prompt cache key/session id 处理：<https://github.com/raine/claude-code-proxy>
+- claude2openai-proxy：Anthropic `/v1/messages` -> OpenAI / LiteLLM，支持 content block、tool、SSE 转换：<https://github.com/ziozzang/claude2openai-proxy>
+- UniClaudeProxy：Claude Code 到 OpenAI-compatible / Responses / Anthropic passthrough，包含 reasoning block 和工具桥接参考：<https://github.com/vibheksoni/UniClaudeProxy>
+- raine/claude-code-proxy：Claude Code streaming fallback、context window、prompt cache key/session id 处理：<https://github.com/raine/claude-code-proxy>
+- LiteLLM：可作为 provider surface 和 OpenAI-compatible 差异参考，但 `llmup` MUST NOT 复制其重型路由产品形态：<https://github.com/BerriAI/litellm>
 
-这些项目的共同启发：Claude Code -> OpenAI-compatible 应是正向可用路径；实现上普遍采用降级、streaming event 转换和工具 round-trip，而不是遇到 provider-native 顶层字段就整体 400。
+共同启发：Claude Code -> OpenAI-compatible 应该正向可用；实现上应做协议降级、streaming event 转换、结构化工具 round-trip 和受控 hint synthesis，而不是遇到 provider-native 字段就整体 400。
 
-不直接照搬的部分：
+## 完整可见 History
 
-- 不把 tool call / tool result 默认退化成普通文本；只有结构化转换确实不可能时，才考虑显式 fallback。
-- 不引入 ReAct XML、per-model 大量 knobs、agent runtime、guardrail/interceptor 平台、cache-aware routing 或 provider fallback DSL。
-- 不硬编码某 provider/model 总是开启 reasoning、总是强制 tool choice、或自动注入 beta header；这些必须来自 explicit request、surface 或 provider-native same-wire handling。
+“完整可见 history”是机械条件，不是模型判断，也不是新的持久状态层。只有同时满足以下条件，request 才能按最大兼容策略降级：
 
-## 当前 Codebase 判断
+1. `messages` 非空，且当前轮生成所需的对话内容以 portable content block 或 string 形式出现在请求中。
+2. 当前轮依赖的 tool call、tool result、assistant turn、system/developer instruction 和用户可见上下文都在请求中，或已由 `llmup` 自己拥有的 in-memory transcript bridge 展开为普通 messages。
+3. 请求不依赖外部 provider-owned opaque handle：包括但不限于 Anthropic provider container runtime、server tool resource、hosted prompt/resource、opaque compact handle、OpenAI `previous_response_id` / `conversation` 等未展开状态。
+4. 请求中没有只能靠 opaque carrier 才能理解的 reasoning/thinking 内容。若存在 visible summary/text，可按本文 thinking 合同保留可见部分并丢弃 carrier；若只有 opaque carrier，则不满足本条件。
+5. tool schema 必须能被目标协议结构化表达；media/source 优先结构化表达，无法结构化表达但可安全文本降级、且完整可见 history 仍成立时 MAY `fallback-text` 并 warning；无法结构化表达且不能安全降级的 media/source MUST fail closed。
 
-关键现状：
+实现 MUST 用确定性 JSON/IR 检查判定上述条件。MUST NOT 通过 LLM、自然语言摘要或猜测来判断 history 是否完整。
 
-- `src/translate/internal/assessment.rs` 当前把 Anthropic 顶层 `container`、`thinking`、`context_management` 放在 hard reject 集合里。
-- `src/translate/internal.rs` 的 `claude_to_openai()` 已经会构造 OpenAI Chat request；只要 assessment 放行，顶层 Anthropic-only 字段默认不会进入目标 request。
-- `tool_choice`、`disable_parallel_tool_use`、普通 `tool_use` / `tool_result` 已有基础映射。
-- Anthropic -> OpenAI Chat 当前会生成 system message，但后续 maximum-safe role repair 可能把 system/developer 降成 user 并合并相邻 user string；这可能影响 OpenAI prompt-cache prefix 稳定性，需要在 Phase 3A 审计。
-- `ConversationStateBridgeStore` 已存在，但只覆盖 OpenAI Responses `resp_llmup_* previous_response_id` 本地 replay，不覆盖 Anthropic container/context state。
-- `src/prompt_cache_controls.rs` 已支持显式 `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 从 Anthropic request 映射到 OpenAI-family target。
-- `scripts/real_cli_matrix.py` 当前把 Claude client 到非 Anthropic upstream 统一归类为 `expected_fail_closed`，导致 gate 没能证明正向可用。
+## Translation Pipeline
 
-关键缺口：
+Claude Code / Anthropic Messages -> OpenAI-compatible 的请求 MUST 经过同一条可审计 pipeline：
 
-- `thinking` / `context_management` 过度 hard reject，直接阻塞 Claude Code。
-- 没有区分“可降级 provider hint”和“真正需要 provider-owned state 的 opaque handle”。
-- Claude Code -> OpenAI-compatible 只能依赖 OpenAI 自动 prompt caching 和现有显式 `extra_body.openai.prompt_cache_key`；对 Claude Code 这种不能自然发送 OpenAI extra fields 的 client，尚无受控的 target-provider cache hint 策略。
-- E2E 报告没有区分“正向可用性通过”和“负向 fail-closed 通过”。
+1. `assessment`：分类每个字段的 disposition：`map`、`synthesize`、`warn+drop`、`fallback-text`、`fail-closed`。这里必须判断完整可见 history、provider-owned state/resource、non-fallbackable unsupported media/source、invalid tool schema、非法显式 OpenAI fields。
+2. `deterministic normalization/edit`：执行无 LLM 的确定性规范化和可支持的 context edit，生成稳定 IR。该步骤 MAY 清理旧 tool results 或 unsigned visible thinking，但 MUST 保持 transcript 顺序和 tool call/result 约束。
+3. `request construction`：从 IR 构造 OpenAI-compatible request。Anthropic-only 顶层字段 MUST NOT 泄露到上游；工具、messages、system/developer 内容、response format、stream 参数和 model 参数必须按目标 provider surface 构造。
+4. `provider cache hint synthesis`：在 request 构造后、upstream 前处理 `prompt_cache_key` / `prompt_cache_retention`。显式 OpenAI extra fields 优先；没有显式 key 时 MAY 受控合成 OpenAI provider request hint。
+5. `upstream`：发送到目标 provider。未知 provider feature MUST 由 surface 或显式 request 控制，不能盲目注入高风险字段。
+6. `stream reducer`：把 OpenAI-compatible chunks 聚合为 Anthropic SSE lifecycle，按 block id/index 维护 text、thinking、tool partial JSON、finish reason 和 usage。
+7. `response repair/usage telemetry`：修复可安全修复的 response shape，输出 warning/debug trace，保留 upstream raw usage 中可见的 cached tokens、reasoning tokens、prompt/completion tokens。Telemetry MUST NOT 驱动本地 cache 或 routing。
 
-## 与现有文档合同的关系 / 文档同步 gate
+## Field Disposition Matrix
 
-本计划不是新增产品模式，而是对旧 fail-closed / cache / context-management 边界的下一步有界修订。开发 handoff 必须同步旧文档，避免同一代码库同时存在相反合同。
-
-- `docs/protocol-compatibility-matrix.md` 和 `docs/protocol-baselines/capabilities/state-continuity.md` 当前仍把 Anthropic top-level `container` / `thinking` / `context_management` 写成 cross-provider fail-closed / same-wire only；state-continuity baseline 也把 containers 作为非 portable 合同。本计划将其修订为：请求仍含完整可见 history 时，Phase 1 对 top-level `thinking` / `context_management` 和普通无资源 `container` hint `warn+drop`；provider-owned resource、provider-owned container runtime、opaque-only state、缺失 history 仍 hard fail。Phase 1 行为变更合并前必须同步这两份合同，尤其要把旧 containers 非 portable 口径同步为“普通无资源 container hint 可降级，provider-owned resource/container runtime 仍 hard fail”。
-- `docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md`、`docs/protocol-baselines/capabilities/cache.md` 和 `docs/max-compat-design.md` 仍强调不自动生成 OpenAI `prompt_cache_key`。Phase 3A 继续遵守该合同；Phase 3B 是受控合成 target-provider hint 的有界修订，进入实现前必须先同步这些文档并完成独立 follow-up review。
-- `docs/engineering/pre-ga-conversation-state-bridge-plan.md` 和 state-continuity baseline 已定义现有 state bridge 范围。Phase 4 不是 Conversations API 模拟，也不是持久 state bridge 扩容；它只能是无 LLM、无持久状态、输入含完整可见 history 的最小 context editing adapter。进入 Phase 4 前必须先同步边界文档并完成独立 follow-up review。
-
-## 设计原则
-
-1. 默认最大兼容。只要请求含有完整可见 history，就优先转换、降级、警告，而不是 fail closed。
-2. Fail closed 留给真正不可替代的 provider-owned state：opaque-only reasoning、Phase 1 内 signed/omitted/redacted thinking、外部 provider state ID、server-side container/tool 资源、hosted prompt/resource 生命周期。
-3. 不引入 `llmup` cache。任何 cache 增强都是 provider request field / usage telemetry。
-4. 不用 LLM 或自然语言判断内容是否“稳定”。cache hint 只能来自显式 provider-native 字段，或来自结构化、确定性、可解释的 route/static-prefix 指纹。
-5. 不为了 cache 命中重排 message/tool 顺序。cache 优化必须服从协议语义。
-6. 配置面保持小。新增能力默认内建，只有高风险 provider feature 才通过 model surface 或显式 `extra_body` 启用。
-7. TDD 开发。每个行为变更先有失败测试，再实现。
-
-## 字段处理策略
-
-本文中的“完整可见 history”是机械条件，不是新状态层：请求的 `messages` 非空，当前轮所需的对话和工具结果都在 `messages` 中以 portable content 表示，并且没有 provider-owned container、server tool、context resource/compact handle 或其他外部 provider state 引用。任一条件不满足时，不能按“完整可见 history”降级。
-
-### Anthropic -> OpenAI-compatible request controls
-
-| 字段/形态 | 目标行为 | 原因 |
+| 字段/形态 | 目标 disposition | 合同 |
 | --- | --- | --- |
-| top-level `thinking` 且请求满足完整可见 history | Phase 1 默认 `warn+drop`；Phase 2 在目标 surface 支持时可 map 到 OpenAI `reasoning_effort` | Anthropic token budget 与 OpenAI effort 不等价，但不应阻塞普通请求 |
-| top-level `context_management` 且请求满足完整可见 history | Phase 1 `warn+drop`；Phase 4 可做最小本地 context editing | 官方语义是 server-side context edit；有完整 history 时可先降级，避免普通 Claude Code 请求直接 400 |
-| `context_management` 依赖 provider compact/resource/opaque state，或请求缺少完整可见 history | hard fail | 目标 provider 无法重建缺失上下文 |
-| top-level `container` 为空、disabled/null 或无 server resource 依赖，且请求满足完整可见 history | `warn+drop` | 容器 hint 不应阻塞可见 transcript 请求 |
-| provider-owned `container.id`、`container.skills` / code execution / MCP / provider server tools | hard fail | 需要 Anthropic provider-owned runtime |
-| unsigned plain visible `thinking` blocks | Phase 1 仅保留/降级这类可见文本为 target reasoning side channel 或普通上下文 | 可见内容是 portability floor |
-| signed `thinking`（`signature` present）、omitted/non-string thinking、`redacted_thinking` | Phase 1 hard fail；未来只能进入 Phase 2 或独立 reasoning/matrix follow-up，且先同步 `docs/protocol-compatibility-matrix.md` | 不跨 provider 伪造或静默丢弃 opaque/signed/redacted carrier |
-| Anthropic `cache_control` | 到 OpenAI target 默认 `warn+drop`，除非显式 `extra_body.openai` | 与 OpenAI `prompt_cache_key` 语义不同 |
-| `extra_body.openai.prompt_cache_key` | 显式映射到 OpenAI-family top-level | 当前已支持，应保留 |
-| `extra_body.openai.prompt_cache_retention` | 显式映射，合法值 `in_memory` / `24h` | 当前已支持，应保留 |
+| top-level `thinking` | `map` 或 `warn+drop` | 若显式 `extra_body.openai.reasoning_effort` 合法，MUST 使用显式值；若 target surface 明确支持 OpenAI `reasoning_effort`，SHOULD 将 Anthropic thinking hint 映射为合法 effort；否则在完整可见 history 下 MUST warning 后丢弃顶层 hint。 |
+| top-level `context_management` | deterministic edit、`warn+drop` 或 `fail-closed` | 支持的 context edit MAY 在 normalization 中执行；未知但不影响完整可见 history 的 hint SHOULD warning+drop；依赖 provider compact/resource/opaque state 或缺少完整可见 history 时 MUST fail closed。 |
+| top-level `container` | `warn+drop` 或 `fail-closed` | 空、disabled、普通 hint、无 server resource 依赖且 history 完整时 SHOULD warning+drop；provider-owned `container.id`、skills、code execution、MCP、server tools/resource runtime MUST fail closed，除非该请求已由 `llmup` 自己拥有的内存 transcript 完全展开。 |
+| Anthropic `cache_control` | same-wire preserve 或 cross-provider `warn+drop` | Anthropic target 可按 same-wire 透传；OpenAI-compatible target MUST NOT 与 OpenAI `prompt_cache_key` / retention 硬互转。可用于 trace 说明“已丢弃 Anthropic cache hint”，但不能派生 OpenAI key。 |
+| `extra_body.openai.prompt_cache_key` | explicit `map` | OpenAI-family target MUST 保留并校验显式 key。显式 key 优先于合成 key；非法值 MUST fail closed。 |
+| `extra_body.openai.prompt_cache_retention` | explicit `map` | 仅允许 provider 支持的合法值。不得因为合成 key 自动设置 retention；非法显式值 MUST fail closed。 |
+| `tool_use` / `tool_result` | structured `map` | assistant `tool_use` MUST 转为 OpenAI Chat `tool_calls` 或等价 function call；user `tool_result` MUST 转为 `role:"tool"` 或等价 output。必须保留或合成稳定 call id，按 id/block index 关联，不能默认降级成普通文本。 |
+| partial tool JSON | stream-aware `map` | Streaming 中 MUST 支持 partial JSON delta，维护 block id/index 和 arguments buffer。结束时必须生成目标 Anthropic lifecycle 事件和一致的 final content block。 |
+| unsigned plain visible thinking | reasoning side channel 或 context `map` | 可见文本 SHOULD 保留到目标 provider 支持的 reasoning side channel；不支持时 MAY 放入普通 assistant context，并记录降级 warning。 |
+| signed `thinking` with visible text | visible text `map` + carrier `warn+drop` | MUST NOT 伪造 signature。若 history 完整且 block 内有普通可见 thinking text，MAY 保留该文本并 warning/drop signature carrier；若后续 round-trip 依赖 signature 才能继续，MUST fail closed。 |
+| omitted / redacted / encrypted / opaque thinking | visible summary `map` 或 `fail-closed` | MUST NOT 伪造 redacted/encrypted/opaque carrier。若同一请求提供独立可见摘要，可保留摘要并 warning/drop carrier；opaque-only 或缺少可见 history 时 MUST fail closed。 |
+| media/source | structured `map`、`fallback-text` 或 `fail-closed` | 目标协议可表达时 MUST 结构化映射；无法结构化表达但可安全文本降级、且完整可见 history 仍成立时 MAY `fallback-text` 并 warning；无法结构化表达且不能安全降级的 non-fallbackable unsupported media/source MUST fail closed。 |
+| provider-owned state/resource | `fail-closed` | 外部 provider state id、hosted prompt/resource、server-side tool resource、provider container runtime、未展开 `previous_response_id` / `conversation` MUST fail closed。只有 `llmup` 自己拥有的内存 transcript bridge 能展开成完整可见 messages。 |
+| OpenAI upstream reasoning output | Anthropic visible thinking `map` | 可见 `reasoning_content` / reasoning delta SHOULD 映射为 Anthropic thinking block/delta；encrypted或 opaque reasoning MUST NOT 被伪造成可见 thinking。 |
+| finish reason / stop reason | deterministic `map` | `stop`、`length`、`tool_calls`、content filter 和 provider-specific finish reason MUST 映射到 Anthropic `stop_reason` 或 warning trace；未知值不得破坏 SSE lifecycle。 |
 
-工具转换补充：
+## Proxy 可合成数据边界
 
-- assistant `tool_use` 必须优先转为 OpenAI Chat `tool_calls` 或 Responses `function_call`，保留 `id/name/arguments`。
-- user `tool_result` 必须优先转为 OpenAI Chat `role:"tool"` 或 Responses `function_call_output`，保留 call id 和结构化输出。
-- 并行或交错工具调用要按 id / block index 关联，不能依赖出现顺序猜测。
-- 只有在目标协议确实无法表示且请求仍有可见上下文时，才允许显式 warning 后退化为普通文本；这不是默认路径。
+`llmup` MAY 合成以下数据，因为它们是目标协议兼容 shim 或 request-local bookkeeping：
 
-### OpenAI prompt cache hint
+- OpenAI `prompt_cache_key`，前提是使用稳定、确定性、不可逆、不含敏感原文的 canonical digest，且显式用户 key 优先。
+- OpenAI `reasoning_effort`，前提是 target surface 明确支持，或用户通过 `extra_body.openai.reasoning_effort` 显式覆盖。
+- Synthetic message/content block ids、tool-call ids、block index shim、stream reducer buffer id。
+- Provider-compatible request fields，例如必要的 `tool_choice`、function schema 包装、response format shim。
+- Request/stream 内部 bookkeeping，例如 partial JSON buffer、usage accumulator、warning disposition trace。
+- 现有 `llmup`-owned in-memory transcript bridge 展开的 messages，用于把 provider-state-style client request 转成完整可见 history。
 
-OpenAI prompt caching 已自动启用，命中依赖稳定的 prompt prefix；官方最佳实践要求静态或重复内容放在开头，并一致使用 `prompt_cache_key`。本计划分两步处理，避免把目标 provider hint 误写成 `llmup` cache。
+`llmup` MUST NOT 合成或伪造以下数据：
 
-Phase 3A 先做无争议的稳定性和显式映射：
+- Anthropic thinking `signature`、redacted thinking payload、encrypted reasoning payload、opaque reasoning token。
+- Provider-owned container/resource contents、server tool results、hosted prompt/resource 内容、外部 provider conversation/container state。
+- 模型响应、response cache hit、semantic cache hit、provider KV cache 内容或跨 provider cache handle。
+- 会让用户误以为 provider 保留了状态的持久 id；重启后丢失的内存状态不能伪装成 provider durable state。
 
-- 保持 Anthropic -> OpenAI-family 翻译后的 prefix 稳定：system/developer 内容、tool 定义、schema 序列化、message/tool 顺序不得引入 request id、trace id、时间戳、随机数或 `previous_response_id`。
-- 保留已有显式 `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` 映射。
-- 不把 Anthropic `cache_control`、TTL、`max_tokens: 0`、conversation id、container id 或 `resp_llmup_*` 转成 OpenAI `prompt_cache_key`。
-- 不自动设置 `prompt_cache_retention`；只有用户显式提供时才传给 OpenAI-family target。
-- 评估 OpenAI Chat role repair 对 prefix 稳定性的影响。若 role repair 把 system/developer 合并为 user，必须确认这对目标 provider 是必要兼容 shim，否则不要为了 shim 破坏稳定前缀。
+## Thinking / Reasoning 合同
 
-Phase 3B 只有在 Phase 3A 后仍无法让 Claude Code 场景稳定获得 OpenAI cache routing benefit 时才进入，并且必须先同步修订 prompt-cache 计划：
+1. Top-level Anthropic `thinking` MUST 被视为能力 hint，而不是必须同语义转发的 opaque state。
+2. 显式 `extra_body.openai.reasoning_effort` MUST 优先，且非法值 MUST fail closed。
+3. 若 model surface 声明支持 OpenAI Chat `reasoning_effort` / Responses `reasoning.effort`，translator SHOULD 将 Anthropic `thinking` 映射为合法 effort。`budget_tokens` 只能用确定性、保守的区间启发式映射；不得生成目标不支持的值。
+4. 未声明 reasoning support 的 OpenAI-compatible target MUST NOT 被盲目注入 reasoning field；在完整可见 history 下应 warning+drop 顶层 hint。
+5. Visible unsigned thinking MUST 尽量保留。优先进入目标 provider 的 reasoning side channel；没有 side channel 时可作为普通 assistant context 保留，并记录 trace。
+6. Signed/redacted/opaque carrier MUST NOT 被伪造。若请求仍有完整可见 history 且存在独立可见文本/摘要，translator MAY 保留可见部分并 warning/drop carrier；若只有 opaque carrier、或 provider 要求 signature round-trip 才能继续，MUST fail closed。
+7. Response 侧 SHOULD 将 OpenAI-compatible 可见 reasoning delta 映射为 Anthropic thinking delta/content block，让 Claude Code 的 thinking UI 尽量正常。不可见、加密、或 provider-private reasoning 只能作为 usage/trace 呈现。
 
-- 仅在 target 是 OpenAI-family 且 request 没有显式 `prompt_cache_key` 时考虑。
-- 初始只面向 Anthropic/Claude Code -> OpenAI-compatible translation。
-- 生成的是 OpenAI provider request field，不是 `llmup` cache key，不代表缓存内容可由 `llmup` 查询或复用。
-- 不设置 `prompt_cache_retention`，除非用户显式提供。
-- 不从最后用户消息、request id、时间戳、随机数、provider credential、Anthropic `cache_control`、conversation/container id、`previous_response_id` 或 `resp_llmup_*` 派生。
-- 允许的 key source 只包括 namespace/upstream/model/protocol/static-prefix 的 canonical digest，以及 wrapper 或请求显式提供的 stable project/session hint。
-- digest 不写入普通日志；debug trace 只记录 `target_prompt_cache_hint_synthesized: true`、source component names、短 fingerprint，不记录完整 key。
-- 如果无法满足字段长度、字符集、隐私和稳定性要求，必须 omit+warning，不得 fail ordinary requests。
+## Provider-Side Prompt Cache 合同
 
-Phase 3B 是对旧 prompt-cache 计划“永不生成 OpenAI `prompt_cache_key`”规则的有界修订；它不得引入 `llmup` cache、cache lookup、response reuse、语义 cache、cache-aware routing、fallback routing 或跨 provider cache handle 互转。
+1. `llmup` MUST NOT 实现 response cache、semantic cache、result cache、provider KV cache 保存、cache lookup、cache-aware routing 或 fallback routing。
+2. OpenAI prompt caching 是 provider-side 能力。Translator MUST 保持静态 prefix 稳定：system/developer 内容、tool 定义、schema 序列化、message/tool 顺序不得混入 request id、trace id、时间戳、随机数、`previous_response_id` 或 `resp_llmup_*`。
+3. 显式 `extra_body.openai.prompt_cache_key` / `prompt_cache_retention` MUST 保留、校验并映射到 OpenAI-family target。
+4. 当 target 是 OpenAI-family、没有显式 key、且 translator 能构造稳定 canonical static-prefix digest 时，`llmup` SHOULD 合成 OpenAI `prompt_cache_key`。推荐格式：`llmup:v1:<namespace-fp>:<upstream-fp>:<model-fp>:<static-prefix-fp>`。
+5. Canonical static-prefix digest 的输入 MUST 只包含 canonicalized target upstream static prefix：resolved namespace/upstream/model/protocol/version、system/developer instructions、tool definitions/schema、stable response-format/static config。
+6. Digest 输入和合成 key MUST NOT 包含最后用户消息、dynamic transcript tail、request id、timestamp、conversation/container ids、provider credentials、trace ids、random、raw prompt text 明文、Anthropic `cache_control`、`previous_response_id` 或 `resp_llmup_*`。
+7. 合成 key 不得自动设置 `prompt_cache_retention`。Retention 只能来自合法显式请求或 provider-native same-wire request。
+8. Anthropic `cache_control` 与 OpenAI `prompt_cache_key` / retention MUST NOT 硬互转。OpenAI key 可由稳定 prefix digest 合成，但不能声称等价于 Anthropic block-level TTL。
+9. Usage telemetry SHOULD 暴露 provider raw usage 中的 cached tokens、reasoning tokens、prompt/completion tokens。Telemetry 只能用于可观测性，MUST NOT 驱动本地缓存或路由决策。
+10. 若字段长度、字符集、隐私、稳定性或 target support 无法确认，translator MUST omit synthesized key 并 warning，不得让普通请求因此失败。
 
-### Reasoning / thinking
+## Tool / SSE 合同
 
-Phase 1 目标是可用性：
+1. Tool conversion MUST 是结构化路径。`tool_use`、`tool_result`、function call、tool output 的 id/name/arguments/result 必须优先进入目标协议原生字段。
+2. Tool call id 缺失时 MAY 合成稳定 shim；已有 id MUST 保留。并行或交错工具调用必须按 id 和 block index 关联。
+3. Partial JSON MUST 被 stream reducer 支持。OpenAI-compatible arguments delta 要聚合并映射为 Anthropic `input_json_delta` / final tool block；不得因 chunk 边界不同生成非法 JSON。
+4. Anthropic SSE lifecycle MUST 完整：`message_start`、`content_block_start`、`content_block_delta`、`content_block_stop`、`message_delta`、`message_stop`。
+5. Finish reason MUST 稳定映射：工具调用结束为 Anthropic `tool_use`，普通停止为 `end_turn`，长度为 `max_tokens`，stop sequence 为 `stop_sequence`，未知 provider reason 进入 warning trace。
+6. Usage MUST 在 stream 结束时尽量补齐。若 upstream 分片缺 usage，translator 可输出未知/缺省 telemetry，但不得伪造 token count。
+7. 只有目标协议完全无法结构化表达、且请求仍满足完整可见 history 时，MAY warning 后把工具相关内容降级为普通文本。这是最后兜底，不是默认行为。
 
-- 请求满足完整可见 history 时，top-level Anthropic `thinking` 先 `warn+drop`。
-- 只有 unsigned plain visible thinking text 可在 Phase 1 尽量保留为 OpenAI-compatible side channel，例如已有的 `reasoning_content`，或在目标不支持时作为普通 assistant context。
-- signed thinking（`signature` present）、omitted/non-string thinking、`redacted_thinking` 和 opaque-only thinking 在 Phase 1 仍 fail closed，不做 warn+drop 降级。
-- SSE translation 继续保留 Anthropic event lifecycle：`message_start`、`content_block_start/delta/stop`、`message_delta`、`message_stop`；OpenAI-compatible streaming 侧要按 block id/index 跟踪 text/thinking/tool，避免并行工具调用串线。
+## 轻量状态边界
 
-Phase 2 目标是经济和能力：
+1. `llmup` MAY 使用纯内存、进程内、TTL/max-bytes 限制的 transcript bridge，只为把 provider-state-style client 请求展开成完整可见 history。
+2. 该 bridge MUST 是 `llmup` 自己拥有的可见 transcript，不得导入外部 provider opaque state 并假装可理解。
+3. 缺失、过期、超出 max bytes、进程重启后不存在的 state MUST 直接 fail closed。不得尝试摘要、猜测、远程恢复或创建持久占位。
+4. MUST NOT 引入厚重数据库、跨进程恢复、admin 会话浏览、provider resource 生命周期管理或 Conversations API 完整模拟。
+5. Context editing 只能是确定性、无 LLM、输入 history 完整的本地 edit。支持项必须显式列出；未知 edit、compact、opaque state 或 provider resource 依赖必须 fail closed。
 
-- 增加最小 `ModelSurface.reasoning`，只表达 target 是否支持 OpenAI Chat `reasoning_effort` / Responses `reasoning.effort`。
-- 如果 surface 明确支持，将 Anthropic `thinking.type=adaptive` / `enabled budget_tokens` 启发式映射为 `reasoning_effort`。
-- 默认不向未知 OpenAI-compatible provider 注入 reasoning field，避免上游 400。
-- 支持显式 `extra_body.openai.reasoning_effort` 覆盖，非法值 fail closed。
-- signed/omitted/redacted thinking 的任何放宽都必须作为 Phase 2 子任务或独立 reasoning/matrix follow-up，先同步 `docs/protocol-compatibility-matrix.md` 并明确 round-trip / 降级语义；未完成前沿用 Phase 1 hard fail。
+## Codebase 重构点
 
-## 开发阶段
+实现 MAY 大幅重构，但 SHOULD 保持模块边界清晰：
 
-### Phase 0: TDD 锁定当前 bug 和 gate 口径
+- `src/translate/internal/assessment.rs`：从 hard reject 列表改为 field disposition classifier，输出 `map/synthesize/warn+drop/fallback-text/fail-closed` 和完整可见 history 判断结果。
+- `src/translate/internal.rs`：让 Anthropic -> OpenAI construction 消费规范化 IR，保证 Anthropic-only 字段不会泄露到上游。
+- Content block IR：统一 text、thinking、tool_use、tool_result、partial JSON、media/source 和 block id/index，降低 request 与 stream 两边的重复逻辑。
+- Reasoning surface：增加最小 provider capability，例如是否支持 OpenAI `reasoning_effort`、允许 effort 集合、是否支持 reasoning content delta；不得引入用户可见兼容等级。
+- Prompt cache controls：把显式 mapping、controlled key synthesis、prefix stability check、usage telemetry 放在 provider-side hint 模块中；继续禁止 `llmup` cache。
+- Stream reducer：集中处理 OpenAI-compatible chunks -> Anthropic SSE lifecycle，维护 block id/index、tool argument buffer、reasoning delta、finish reason 和 usage accumulator。
+- Warning/debug trace：每个 drop/fallback/synthesis MUST 有机器可读 disposition reason；普通日志不得输出完整 synthesized cache key 或敏感 prompt。
+- Real CLI matrix：Claude -> OpenAI-compatible MUST 进入 positive usable suite；negative fail-closed suite 只验证真正不可兼容的 provider-owned state/resource 和非法显式字段。
 
-目标：先证明当前行为不满足产品目标。
+## TDD / 验收测试矩阵
 
-任务：
+Focused Rust tests MUST 覆盖：
 
-- 固化文档同步 gate：Phase 1 必须同步 compatibility/state-continuity 合同，覆盖 top-level `thinking` / `context_management` / 普通无资源 `container` hint；Phase 3B 和 Phase 4 必须先走独立 follow-up review。
-- 新增 Rust test：Anthropic request 带 top-level `thinking` / `context_management` / 普通无资源 `container` 转 OpenAI Chat 不应被 assessment reject。
-- 新增 translation test：同一 request 翻译后不含 `thinking` / `context_management` / `container`，但保留 messages/tools/model。
-- 新增 proxy-level test：`/anthropic/v1/messages` 选择 OpenAI-compatible alias 时不返回本地 400。
-- 修改 Python matrix test：Claude -> `preset-openai-compatible` 不再 blanket `expected_fail_closed`。
-- 把负向 fail-closed case 移到单独 negative suite 或显式 `must_fail_closed` expectation。
+- assessment 对 top-level `thinking` / `context_management` / 普通无资源 `container` 给出 warning disposition，而不是 hard reject。
+- translation 后 OpenAI request 不含 Anthropic-only 顶层字段，但保留 model/messages/tools/tool_choice/stream 参数。
+- provider-owned container/server tool/resource、opaque-only state、non-fallbackable unsupported media/source、invalid tool schema 仍在上游前 fail closed。
+- top-level `thinking` 在 surface 支持或显式 override 时映射为合法 `reasoning_effort`；未知 target warning+drop。
+- visible unsigned thinking 被保留到 reasoning side channel 或普通上下文。
+- signed thinking visible text 可保留且 signature carrier 被 warning/drop；opaque-only、redacted-only、encrypted-only thinking fail closed。
+- Anthropic `cache_control` 不会变成 OpenAI `prompt_cache_key`；显式 OpenAI key/retention 被保留并校验。
+- 合成 `prompt_cache_key` 对同一 namespace/upstream/model/static-prefix 稳定，对 system/tools 改变敏感；digest 输入只含 canonicalized static prefix，不含最后用户消息、dynamic transcript tail、raw prompt text 明文、request id、timestamp、trace ids、conversation/container ids、provider credentials 或 `resp_llmup_*`。
+- tool_use/tool_result 结构化 round-trip、并行工具 id 关联、partial JSON streaming、finish reason 映射和 usage telemetry。
+- in-memory transcript bridge 只能展开 `llmup` 自有可见 transcript；TTL/max bytes/restart missing 直接 fail closed。
 
-验收：
+Python / script tests MUST 覆盖：
 
-- 当前实现先红，修复后绿。
-- 矩阵报告能明确区分 positive usable pass 和 negative fail-closed pass。
-- 初始开发 handoff scope 明确为 Phase 0 + Phase 1 + Phase 5；Phase 3B / Phase 4 不混入首批实现。
+- `tests/test_real_cli_matrix.py` 不再把 Claude non-Anthropic upstream blanket 标为预期拒绝。
+- Positive usable suite 和 negative fail-closed suite 分开展示；positive 中出现预期拒绝必须失败。
+- Report markdown/json 明确展示真实可用 pass、真实失败、负向拒绝 pass。
 
-### Phase 1: 降级放行 Claude Code 常见 Anthropic controls
+真实 CLI / E2E MUST 覆盖：
 
-目标：让 `scripts/run_claude_proxy.sh --model preset-openai-compatible` 的普通 `hi` 不再 400。
+- `scripts/run_claude_proxy.sh --model preset-openai-compatible --proxy-port <free-port>` 后 Claude Code 普通 `hi` 成功返回。
+- Claude Code streaming tool-use fixture。
+- Claude Code public editing tool workspace edit fixture。
+- Claude native Anthropic-compatible baseline 继续通过。
+- Codex -> OpenAI-compatible baseline 继续通过，避免修 Claude 路径时破坏现有 OpenAI-compatible 路径。
 
-任务：
+负向 E2E MUST 覆盖：
 
-- 同步 `docs/protocol-compatibility-matrix.md` 和 `docs/protocol-baselines/capabilities/state-continuity.md`，把 Anthropic top-level `thinking` / `context_management` / 普通无资源 `container` hint 从 blanket fail-closed 改成“完整可见 history 下 warn+drop”；把 provider-owned resource/container runtime、opaque/missing-history 继续标为 hard fail。旧 state-continuity baseline 中 containers 非 portable 合同必须同步为“普通无资源 container hint 可降级，provider-owned resource/container runtime 仍 hard fail”。
-- 将 top-level `thinking` / `context_management` 从 `anthropic_nonportable_request_controls_for_translate()` 移到 warning-only 分类。
-- 将 `container` 拆分为：
-  - `warn+drop`：请求满足完整可见 history，且无 skills/code-execution/MCP/server resource 依赖的普通 container hint。
-  - hard fail：明确需要 provider-owned runtime 的 container/server tool。
-- 确保 `claude_to_openai()` 构造 request 时不会泄露 Anthropic-only 顶层字段。
-- warning headers/debug trace 记录字段被 drop 的原因。
-- 保留 hard fail：signed thinking（`signature` present）、omitted/non-string thinking、`redacted_thinking`、opaque-only thinking、provider-owned container/server tools、unsupported media/source、invalid tool schema。
-
-验收：
-
-- Claude Code -> OpenAI-compatible smoke 可返回。
-- 带 top-level `thinking` / `context_management` / 普通无资源 `container` hint 的 request 有 warning，没有本地 400。
-- 带 provider-owned container/server tool 的 request 仍在上游前 fail closed。
-- 带 signed/omitted/redacted/opaque-only thinking 的 request 仍在上游前 fail closed。
-- 旧合同文档不再与 Phase 1 行为相反。
-
-### Phase 2: Reasoning 最大安全映射
-
-目标：在不破坏 OpenAI-compatible 普适性的前提下，尽量保留 reasoning 能力。
-
-任务：
-
-- 设计最小 `ModelSurface.reasoning` 字段，不引入兼容等级：
-  - `supports_openai_reasoning_effort: bool`
-  - 可选 `allowed_efforts`
-- 支持显式 `extra_body.openai.reasoning_effort`。
-- 当 surface 明确支持时，把 Anthropic top-level `thinking` 映射为 OpenAI reasoning hint：
-  - `adaptive` + effort -> 对应 effort。
-  - `enabled budget_tokens` -> bounded heuristic：小预算 `low`，中等 `medium`，大预算 `high`；不生成 `xhigh`，除非显式请求且 surface 允许。
-  - `disabled` -> `none` / omit，取决于 surface 允许值。
-- 对未知 target 默认继续 `warn+drop`，不注入 reasoning field。
-- unsigned plain visible thinking blocks 继续保留；signature/omitted/redacted/opaque carrier 未完成矩阵同步前仍不跨 provider。
-
-验收：
-
-- 未声明 reasoning support 的 OpenAI-compatible target 不多出 reasoning field。
-- 声明 support 的 target 收到合法 `reasoning_effort`。
-- 非法 explicit effort fail closed。
-- signed/omitted/redacted/opaque-only reasoning request 在未完成矩阵同步前仍 fail closed。
-
-### Phase 3: OpenAI provider prompt-cache hint
-
-目标：提升 Claude Code -> OpenAI-compatible 的 provider-side prompt cache 命中概率，且不实现 `llmup` cache。
-
-任务：
-
-- Phase 3A：先实现 prefix 稳定性审计和显式 provider field 路径。
-  - 保留显式 `extra_body.openai.prompt_cache_key` 优先级。
-  - 不自动设置 `prompt_cache_retention: "24h"`。
-  - 确认翻译后的 tools/system/message 顺序稳定。
-  - 为 translated route 增加 OpenAI `cached_tokens` 可见性检查；`provider_cache_usage` 仍只在能拿到真实 raw upstream usage 时输出。
-- Phase 3B：如进入目标 provider hint synthesis，再实现 deterministic static-prefix hint。
-  - 先同步 `docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md`、`docs/protocol-baselines/capabilities/cache.md`、`docs/max-compat-design.md`，并完成独立 follow-up review；未完成则不得实现 Phase 3B。
-  - 在 Anthropic -> OpenAI-family translation 完成后、upstream request 前，如果没有显式 `prompt_cache_key`，生成目标 provider hint。
-  - 初版只对 system prompt + tools 做 canonical digest，不包含最后用户消息。
-  - key 格式使用稳定短前缀，例如 `llmup:v1:<namespace-fp>:<upstream-fp>:<model-fp>:<static-prefix-fp>`。
-  - key 长度或字符集不满足目标 provider 要求时 omit+warning，不让普通请求 fail。
-  - Debug trace/hook 增加新 disposition，例如 `target_hint_synthesized`，但不记录完整 key。
-
-验收：
-
-- Phase 3A：显式 key 不被覆盖，Anthropic `cache_control` 仍不会被伪装成 OpenAI key。
-- Phase 3A：翻译不引入随机前缀扰动；同一输入的 upstream tools/system/message 前缀 byte-stable 或 canonical-stable。
-- Phase 3B：同一 alias、同一 system/tools、不同 user prompt 生成相同 `prompt_cache_key`。
-- Phase 3B：system/tools 改变时 key 改变。
-- Phase 3B：key 不含原文、provider key、request id、timestamp、conversation/container id、`resp_llmup_*`。
-- Phase 3B：旧 prompt-cache 合同已同步为有界修订，不再同时声称“永不生成”。
-- `provider_cache_usage` 仍只是 usage telemetry，不驱动 routing/cache。
-
-### Phase 4: 最小 Anthropic context editing adapter
-
-目标：只在需要时实现轻量本地 context editing，不做 LLM summarization。
-
-触发条件：
-
-- Phase 1/2 后真实 Claude Code 长上下文或工具循环仍因 `context_management` 降级过度导致明显失败。
-- 已先同步 `docs/engineering/pre-ga-conversation-state-bridge-plan.md`、`docs/protocol-baselines/capabilities/state-continuity.md` 和 compatibility matrix，并完成独立 follow-up review。
-
-任务：
-
-- 明确 Phase 4 与现有 state bridge 的边界：不保存跨请求状态，不消费 provider state handle，不模拟 Conversations API，不做摘要/compaction 产品化。
-- 只支持可确定的 edit：
-  - `clear_tool_uses_20250919`：按 Anthropic 官方策略清理旧 tool results，替换为可见 placeholder。
-  - `clear_thinking_20251015`：只删除旧 unsigned plain visible thinking blocks，保留最近 N turn。
-- 不实现 server-side compaction、SDK compaction、摘要生成、任务预算、跨请求容器状态。
-- signed/omitted/redacted thinking 仍不由 Phase 4 顺手放宽；如需处理，必须先走 Phase 2 或独立 reasoning/matrix follow-up。
-- 输入必须满足完整可见 history；否则 fail closed。
-- 所有 edit 都在 translation 前发生，并记录 warning/trace。
-
-验收：
-
-- 只有支持的 edit type 被执行。
-- 未知 edit type、compact、opaque-only state fail closed。
-- 编辑后 transcript 顺序仍满足 OpenAI Chat tool call/result 约束。
-- state bridge / context-management 文档已同步，不把 Phase 4 误写成持久状态桥或 provider-owned state 重建。
-
-### Phase 5: Real CLI / E2E 矩阵收敛
-
-目标：让 gate 证明真实可用，而不是证明“按预期拒绝”。
-
-正向 required cases：
-
-- `claude__preset-openai-compatible__smoke_pong`
-- `claude__preset-openai-compatible__tool_identity_public_contract`
-- `claude__preset-openai-compatible__public_editing_tool_workspace_edit_contract`
-- 保留 `claude__preset-anthropic-compatible__*` 作为 native baseline。
-- 保留 Codex -> OpenAI-compatible baseline，避免修 Claude 时破坏 Codex。
-
-负向 cases：
-
-- provider-owned container/server tool。
-- signed/omitted/redacted/opaque-only thinking。
-- unsupported media/source。
+- provider-owned container/server tool/resource。
+- opaque-only signed/redacted/encrypted thinking。
+- non-fallbackable unsupported media/source。
 - invalid explicit `extra_body.openai` cache/reasoning field。
+- 缺失或过期的 `llmup` in-memory transcript bridge state。
 
-验收：
+## 旧文档同步要求
 
-- positive suite 中 `expected_fail_closed > 0` 时整体失败。
-- negative suite 中 fail-closed 不计入 positive pass。
-- 发布说明不能再写“E2E 通过”而不区分 positive/negative。
+因为项目仍处于 Pre-GA，本合同是最终行为口径。相关旧文档 MUST 作为同一开发交付物同步，不能继续作为相反约束、额外准入条件或独立实施顺序存在：
 
-## 测试清单
+- `docs/protocol-compatibility-matrix.md` 和 `docs/protocol-baselines/capabilities/state-continuity.md` MUST 把 Anthropic top-level `thinking` / `context_management` / 普通无资源 `container` 从 blanket cross-provider fail-closed 改为“完整可见 history 下 map 或 warn+drop；provider-owned state/resource 仍 fail closed”。
+- `docs/engineering/pre-ga-request-processing-prompt-cache-support-plan.md`、`docs/protocol-baselines/capabilities/cache.md` 和 `docs/max-compat-design.md` MUST 同步为：允许受控合成 OpenAI provider-side `prompt_cache_key`，但不做 `llmup` response/semantic cache，不把 Anthropic `cache_control` 与 OpenAI key/retention 硬互转。
+- `docs/engineering/pre-ga-conversation-state-bridge-plan.md` 和 state-continuity baseline MUST 同步为：只允许纯内存、TTL/max-bytes、`llmup` 自有可见 transcript 展开；不做持久化、provider-owned state 重建或完整 Conversations API 模拟。
+- 所有旧 fail-closed/cache/state 文档 MUST 使用本合同的字段 disposition、完整可见 history 定义、合成数据边界、thinking/reasoning 规则和 prompt-cache 规则。
 
-Rust focused tests：
+## 非目标与边界
 
-Phase 0/1 初始 handoff：
-
-- `assess_request_translation_*claude_to_openai*_thinking_context_management_container_warns`
-- `translate_request_claude_to_openai_drops_top_level_controls`
-- `translate_request_claude_to_openai_rejects_provider_owned_container`
-- `translate_request_claude_to_openai_preserves_unsigned_plain_visible_thinking`
-- `translate_request_claude_to_openai_rejects_signed_thinking_phase1`
-- `translate_request_claude_to_openai_rejects_omitted_or_redacted_thinking_phase1`
-- `translate_request_claude_to_openai_rejects_opaque_only_thinking`
-
-Phase 2 follow-up only：
-
-- `translate_request_claude_to_openai_reasoning_effort_surface_gate`
-- signed/omitted/redacted thinking 的任何新降级测试只能在 protocol compatibility matrix 同步后加入。
-
-Phase 3A follow-up only：
-
-- `translate_request_claude_to_openai_preserves_prefix_stability_for_prompt_cache`
-- `translate_request_claude_to_openai_preserves_explicit_prompt_cache_key`
-
-Phase 3B follow-up only：
-
-- `translate_request_claude_to_openai_synthesizes_prompt_cache_key`
-
-Python / script tests：
-
-Phase 0/5 初始 handoff：
-
-- `tests/test_real_cli_matrix.py` 移除 Claude non-Anthropic blanket expected-fail。
-- positive/negative suite 汇总逻辑测试。
-- report markdown/json 明确展示 usable pass 与 expected fail-closed。
-
-Manual / real CLI：
-
-Phase 5 初始 handoff：
-
-- `scripts/run_claude_proxy.sh --model preset-openai-compatible --proxy-port <free-port>` 后发送 `hi`。
-- Claude Code workspace edit fixture。
-- Streaming tool-use fixture。
-
-Gate 原则：
-
-- 每次只跑相关小范围测试。
-- 行为稳定后再跑全量 `cargo test` / Python suite / clippy。
-
-## 风险与边界
-
-- 降级 `context_management` 可能增加 token 使用或导致长上下文失败；这是比普通请求直接 400 更符合最大兼容的初始取舍。
-- 合成 `prompt_cache_key` 可能改变 OpenAI routing bucket；Phase 3B 必须保持稳定、短、不可包含敏感原文，并允许显式 key 覆盖。Phase 3A 不合成 key。
-- 对未知 OpenAI-compatible provider 注入 reasoning field 可能导致上游 400；因此必须由 surface 或显式 extra_body 控制。
-- 不模拟 Anthropic code execution / skills / MCP / server tools；这些需要 provider runtime。
-- 不为了 cache 命中而改变 tool order、message order 或 schema 内容。
-
-## Handoff 顺序
-
-1. 初始开发 handoff 推荐只做 Phase 0 + Phase 1 + Phase 5：修复当前 Claude Code -> OpenAI-compatible 400，并让 gate 证明正向可用。
-2. Phase 1 合并前必须同步 compatibility matrix 和 state-continuity baseline，覆盖 top-level `thinking` / `context_management` / 普通无资源 `container` hint，避免旧文档继续声明 blanket fail-closed / same-wire only 或 containers 一律非 portable；signed/omitted/redacted thinking 仍保持 hard fail。
-3. Phase 3A cache prefix stability 和显式 key 路径是后续经济性增强；它仍不自动生成 `prompt_cache_key`。
-4. Phase 3B synthesized target hint 不属于初始 handoff。必须先同步 prompt-cache 计划、cache baseline、max-compat design，并通过独立 follow-up review。
-5. Phase 4 context editing 不属于初始 handoff。必须先同步 state bridge / state-continuity / compatibility 文档，并通过独立 follow-up review；只有真实 Claude Code 行为证明需要时才做。
-6. Phase 2 reasoning mapping 由真实 provider capability 驱动，不阻塞首批可用性修复，也不要和 Phase 3B / Phase 4 绑成大包。
-
-## 非目标
-
-- 不实现 `llmup` response/result cache。
-- 不实现 semantic cache。
-- 不保存 provider KV cache 或 provider cache resource。
-- 不导入外部 `resp_*` / `conv_*` / Anthropic container IDs 作为本地状态。
-- 不做持久化、跨进程恢复、admin 会话浏览。
-- 不引入用户可见兼容等级或模式开关。
-- 不把 `llmup` 发展成 LiteLLM/OpenRouter/Portkey 风格的完整路由产品。
+- MUST NOT 实现 `llmup` response/result cache。
+- MUST NOT 实现 semantic cache。
+- MUST NOT 保存 provider KV cache、provider prompt cache 内容或 provider cache resource。
+- MUST NOT 导入外部 `resp_*` / `conv_*` / Anthropic container id 作为可理解的本地状态。
+- MUST NOT 做持久化、跨进程恢复、admin 会话浏览、完整 Conversations API 模拟。
+- MUST NOT 模拟 Anthropic code execution、skills、MCP、server tools 或 provider container runtime。
+- MUST NOT 为了 cache 命中重排 message/tool 顺序、修改 tool schema 语义或注入随机前缀。
+- MUST NOT 引入用户可见兼容等级。
+- MUST NOT 把 `llmup` 扩展成 LiteLLM / OpenRouter / Portkey 风格的通用路由、fallback、guardrail 或 agent runtime 产品。
