@@ -31,6 +31,8 @@ The launchers own the repetitive local wiring:
 
 Codex state is kept under `~/.llmup-codex` by default and exposed to Codex through `CODEX_HOME`. Claude Code state is kept under `~/.llmup-claude` by default and exposed through `CLAUDE_CONFIG_DIR`.
 
+For Codex, launcher-generated provider hints use live `llmup.surface` metadata when it is available from the configured alias, so the native client sees the capability shape owned by the proxy config.
+
 The original home directory is not rewritten by default, so tools that run inside Codex or Claude Code can still find normal git, SSH, package-manager, and language-tool caches.
 
 ## Native Arguments

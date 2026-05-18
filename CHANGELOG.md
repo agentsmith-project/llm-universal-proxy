@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.33 - 2026-05-18
+
+- Restored full repository documentation contract coverage after the user-facing README / clients simplification: README now keeps pointers to the advanced compatibility, protocol matrix, and design docs while the quick start remains focused on install -> configure -> launch.
+- Clarified that launcher-managed Codex setup uses live `llmup.surface` metadata when available, preserving configured model capability truth without reintroducing manual proxy wiring into the beginner path.
+- Advanced the main-branch release identity to Cargo package version `0.2.33`, the next patch version after the unpublished `0.2.32` failed release identity and the published, occupied `v0.2.30` tag, without moving, deleting, or reusing the existing tag.
+
 ## v0.2.32 - 2026-05-18
 
 - Added the user-facing tooling layer: `llmup-config`, `llmup-codex`, and `llmup-claude` now provide a low-friction local setup path while preserving the existing `llm-universal-proxy --config ...` advanced server mode.
