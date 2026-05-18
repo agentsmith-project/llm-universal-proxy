@@ -2,7 +2,7 @@
 
 use llm_universal_proxy::config::Config;
 use llm_universal_proxy::formats::UpstreamFormat;
-use llm_universal_proxy::server::{run_with_listener_with_data_auth, DataAuthConfig};
+use llm_universal_proxy::server::{DataAuthConfig, run_with_listener_with_data_auth};
 use std::time::Duration;
 use tokio::net::TcpListener;
 

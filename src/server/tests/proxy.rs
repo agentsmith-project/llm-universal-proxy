@@ -499,6 +499,111 @@ async fn spawn_openai_completion_raw_mock(
     (format!("http://{addr}"), requests, server)
 }
 
+async fn spawn_openai_completion_prompt_cache_echo_error_mock()
+-> (String, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>) {
+    #[derive(Clone)]
+    struct MockState {
+        requests: Arc<Mutex<Vec<Value>>>,
+    }
+
+    async fn handle_chat_completions(
+        State(state): State<MockState>,
+        Json(body): Json<Value>,
+    ) -> Response<Body> {
+        let prompt_cache_key = body
+            .get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .unwrap_or("<missing>")
+            .to_string();
+        state.requests.lock().await.push(body);
+        Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "error": {
+                        "message": format!("upstream echoed prompt_cache_key {prompt_cache_key}"),
+                        "prompt_cache_key": prompt_cache_key
+                    }
+                })
+                .to_string(),
+            ))
+            .expect("prompt-cache echo error mock response")
+    }
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new()
+        .route("/chat/completions", post(handle_chat_completions))
+        .with_state(MockState {
+            requests: requests.clone(),
+        });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind prompt-cache echo OpenAI mock upstream");
+    let addr = listener
+        .local_addr()
+        .expect("prompt-cache echo OpenAI mock local addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("prompt-cache echo OpenAI mock server");
+    });
+
+    (format!("http://{addr}"), requests, server)
+}
+
+async fn spawn_openai_completion_prompt_cache_echo_header_mock(
+    status: StatusCode,
+    response_body: Value,
+) -> (String, Arc<Mutex<Vec<Value>>>, tokio::task::JoinHandle<()>) {
+    #[derive(Clone)]
+    struct MockState {
+        requests: Arc<Mutex<Vec<Value>>>,
+        status: StatusCode,
+        response_body: Value,
+    }
+
+    async fn handle_chat_completions(
+        State(state): State<MockState>,
+        Json(body): Json<Value>,
+    ) -> Response<Body> {
+        let prompt_cache_key = body
+            .get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .unwrap_or("<missing>")
+            .to_string();
+        state.requests.lock().await.push(body);
+        Response::builder()
+            .status(state.status)
+            .header("Content-Type", "application/json")
+            .header("x-request-id", format!("upstream-echo-{prompt_cache_key}"))
+            .body(Body::from(state.response_body.to_string()))
+            .expect("prompt-cache echo header mock response")
+    }
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new()
+        .route("/chat/completions", post(handle_chat_completions))
+        .with_state(MockState {
+            requests: requests.clone(),
+            status,
+            response_body,
+        });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind prompt-cache echo header OpenAI mock upstream");
+    let addr = listener
+        .local_addr()
+        .expect("prompt-cache echo header OpenAI mock local addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("prompt-cache echo header OpenAI mock server");
+    });
+
+    (format!("http://{addr}"), requests, server)
+}
+
 async fn spawn_openai_raw_mock(
     status: StatusCode,
     response_body: String,
@@ -1125,8 +1230,8 @@ fn anthropic_commentary_then_tool_use_events() -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_from_response_and_logs(
-) {
+async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_from_response_and_logs()
+ {
     let _env_guard = SECRET_REDACTION_ENV_LOCK.lock().await;
     let _provider_env =
         ScopedEnvVar::set(PROVIDER_ENV_REDACTION_ENV, PROVIDER_ENV_REDACTION_SECRET);
@@ -1734,6 +1839,10 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
     let _ = response_text(response).await;
 
     let trace = wait_for_debug_trace_response(&trace_path).await;
+    assert!(
+        !trace.contains("llmup:v1:"),
+        "debug trace must not contain full synthesized prompt_cache_key: {trace}"
+    );
     let request_entry = debug_trace_request_entry(&trace);
     assert_debug_trace_omits_stable_prefix(&trace, &request_entry);
     for payload in [
@@ -2036,8 +2145,8 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_map
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn debug_trace_records_prompt_cache_components_for_openai_to_anthropic_mixed_mapping_and_drop(
-) {
+async fn debug_trace_records_prompt_cache_components_for_openai_to_anthropic_mixed_mapping_and_drop()
+ {
     let server_response_body = serde_json::json!({
         "id": "msg_mixed_cache_mapping",
         "type": "message",
@@ -2267,8 +2376,8 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mappin
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn debug_trace_records_prompt_cache_components_for_anthropic_to_openai_mixed_mapping_and_drop(
-) {
+async fn debug_trace_records_prompt_cache_components_for_anthropic_to_openai_mixed_mapping_and_drop()
+ {
     let server_response_body = serde_json::json!({
         "id": "chatcmpl_mixed_openai_cache_mapping",
         "object": "chat.completion",
@@ -2401,10 +2510,262 @@ async fn debug_trace_records_prompt_cache_components_for_anthropic_to_openai_mix
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cache_control_without_synthesizing_openai_key(
-) {
+async fn anthropic_to_openai_chat_synthesizes_prompt_cache_key_from_final_static_prefix() {
     let server_response_body = serde_json::json!({
-        "id": "chatcmpl_dropped_cache_control",
+        "id": "chatcmpl_synthesized_cache_key",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+
+    async fn send(
+        state: Arc<AppState>,
+        user_text: &str,
+        system_text: &str,
+        tool_schema: Value,
+    ) -> Response<Body> {
+        handle_request_core(
+            state,
+            DEFAULT_NAMESPACE.to_string(),
+            HeaderMap::new(),
+            "/anthropic/v1/messages".to_string(),
+            serde_json::json!({
+                "model": "gpt-4o-mini",
+                "max_tokens": 32,
+                "system": [{ "type": "text", "text": system_text }],
+                "messages": [{
+                    "role": "user",
+                    "content": [{ "type": "text", "text": user_text }]
+                }],
+                "tools": [{
+                    "name": "lookup",
+                    "description": "Look up static facts.",
+                    "input_schema": tool_schema
+                }],
+                "stream": false
+            }),
+            "gpt-4o-mini".to_string(),
+            crate::formats::UpstreamFormat::Anthropic,
+            None,
+        )
+        .await
+    }
+
+    let base_schema = serde_json::json!({
+        "type": "object",
+        "properties": { "query": { "type": "string" } },
+        "required": ["query"]
+    });
+    let changed_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "query": { "type": "string" },
+            "locale": { "type": "string" }
+        },
+        "required": ["query"]
+    });
+
+    for response in [
+        send(
+            state.clone(),
+            "dynamic tail one",
+            "Be terse and precise.",
+            base_schema.clone(),
+        )
+        .await,
+        send(
+            state.clone(),
+            "dynamic tail two",
+            "Be terse and precise.",
+            base_schema.clone(),
+        )
+        .await,
+        send(
+            state.clone(),
+            "dynamic tail two",
+            "Be expansive and precise.",
+            base_schema.clone(),
+        )
+        .await,
+        send(
+            state,
+            "dynamic tail two",
+            "Be terse and precise.",
+            changed_schema,
+        )
+        .await,
+    ] {
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = response_text(response).await;
+    }
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 4);
+    let keys = requests
+        .iter()
+        .map(|request| {
+            let key = request["prompt_cache_key"]
+                .as_str()
+                .expect("synthesized prompt_cache_key")
+                .to_string();
+            assert!(
+                key.starts_with("llmup:v1:"),
+                "synthesized key should use llmup v1 fingerprint format: {key}"
+            );
+            assert!(
+                !key.contains("dynamic tail") && !key.contains("Be terse"),
+                "synthesized key must not contain prompt text: {key}"
+            );
+            assert!(
+                request.get("prompt_cache_retention").is_none(),
+                "synthesis must not set retention: {request:?}"
+            );
+            key
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        keys[0], keys[1],
+        "different final user messages must share the same static-prefix key"
+    );
+    assert_ne!(keys[0], keys[2], "system changes must change the key");
+    assert_ne!(keys[0], keys[3], "tool schema changes must change the key");
+
+    upstream_server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_to_openai_responses_synthesizes_prompt_cache_key_without_retention() {
+    let server_response_body = serde_json::json!({
+        "id": "resp_synthesized_cache_key",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": []
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_responses_mock(server_response_body).await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiResponses);
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/anthropic/v1/messages".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "max_tokens": 32,
+            "system": [{ "type": "text", "text": "Be terse." }],
+            "messages": [{
+                "role": "user",
+                "content": [{ "type": "text", "text": "Hi" }]
+            }],
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::Anthropic,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response_text(response).await;
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    let key = requests[0]["prompt_cache_key"]
+        .as_str()
+        .expect("synthesized prompt_cache_key");
+    assert!(key.starts_with("llmup:v1:"), "key = {key}");
+    assert!(
+        requests[0].get("prompt_cache_retention").is_none(),
+        "synthesis must not set retention: {:?}",
+        requests[0]
+    );
+
+    upstream_server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_cache_control_changes_do_not_drive_synthesized_openai_key() {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_cache_control_independent_key",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+
+    for ttl in ["5m", "1h"] {
+        let response = handle_request_core(
+            state.clone(),
+            DEFAULT_NAMESPACE.to_string(),
+            HeaderMap::new(),
+            "/anthropic/v1/messages".to_string(),
+            serde_json::json!({
+                "model": "gpt-4o-mini",
+                "max_tokens": 32,
+                "system": [{
+                    "type": "text",
+                    "text": "Stable system text.",
+                    "cache_control": { "type": "ephemeral", "ttl": ttl }
+                }],
+                "messages": [{
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "Hi" }]
+                }],
+                "stream": false
+            }),
+            "gpt-4o-mini".to_string(),
+            crate::formats::UpstreamFormat::Anthropic,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = response_text(response).await;
+    }
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0]["prompt_cache_key"], requests[1]["prompt_cache_key"],
+        "Anthropic cache_control TTL must not directly determine the OpenAI prompt_cache_key"
+    );
+    for request in requests.iter() {
+        assert!(
+            !json_contains_key(request, "cache_control"),
+            "upstream body must not hard-map Anthropic cache_control: {request:?}"
+        );
+    }
+
+    upstream_server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn debug_trace_records_prompt_cache_disposition_for_synthesized_openai_key_and_dropped_anthropic_cache_control()
+ {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_synthesized_cache_control",
         "object": "chat.completion",
         "created": 123,
         "model": "gpt-4o-mini",
@@ -2472,11 +2833,32 @@ async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cach
 
     let trace = wait_for_debug_trace_response(&trace_path).await;
     let request_entry = debug_trace_request_entry(&trace);
-    assert_llmup_external_observability(&request_entry, "constructed", "dropped");
+    assert_llmup_external_observability(&request_entry, "constructed", "synthesized");
+    let prompt_cache_detail = &request_entry["request"]["prompt_cache_request_control"];
+    assert_eq!(prompt_cache_detail["target_provider"], "openai_family");
+    assert_eq!(prompt_cache_detail["disposition"], "synthesized");
     assert_eq!(
-        request_entry["request"]["prompt_cache_request_control"],
-        serde_json::json!({
-            "target_provider": "openai_family",
+        prompt_cache_detail["synthesis_reason"],
+        "canonical_static_prefix_digest"
+    );
+    assert_eq!(
+        prompt_cache_detail["target_fields"],
+        serde_json::json!(["prompt_cache_key"])
+    );
+    let key_fingerprint = prompt_cache_detail["key_fingerprint"]
+        .as_str()
+        .expect("synthesized key fingerprint");
+    assert_eq!(key_fingerprint.len(), 12);
+    assert!(prompt_cache_detail.get("prompt_cache_key").is_none());
+    assert!(
+        !serde_json::to_string(prompt_cache_detail)
+            .expect("prompt-cache trace detail serializes")
+            .contains("llmup:v1:"),
+        "prompt-cache trace detail must not contain full synthesized key: {prompt_cache_detail:?}"
+    );
+    assert_eq!(
+        prompt_cache_detail["components"],
+        serde_json::json!([{
             "disposition": "dropped",
             "source_fields": [
                 "cache_control",
@@ -2486,20 +2868,24 @@ async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cach
             ],
             "target_fields": [],
             "omitted_reason": "anthropic_cache_control_not_openai_prompt_cache_key"
-        }),
+        }]),
         "request_entry = {request_entry:?}"
     );
     let hook_payload = wait_for_hook_payload(&hook_payloads).await;
-    assert_llmup_external_observability(&hook_payload, "constructed", "dropped");
+    assert_llmup_external_observability(&hook_payload, "constructed", "synthesized");
     assert_prompt_cache_request_control_detail_absent_from_hook_payload(&hook_payload);
+    let hook_text = serde_json::to_string(&hook_payload).expect("hook payload json");
+    assert!(
+        !hook_text.contains("llmup:v1:"),
+        "hook payload must not contain full synthesized prompt_cache_key: {hook_text}"
+    );
 
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 1);
-    assert!(
-        requests[0].get("prompt_cache_key").is_none(),
-        "upstream body = {:?}",
-        requests[0]
-    );
+    let synthesized_key = requests[0]["prompt_cache_key"]
+        .as_str()
+        .expect("synthesized prompt_cache_key");
+    assert!(synthesized_key.starts_with("llmup:v1:"));
     assert!(
         requests[0].get("prompt_cache_retention").is_none(),
         "upstream body = {:?}",
@@ -2512,8 +2898,8 @@ async fn debug_trace_records_prompt_cache_disposition_for_dropped_anthropic_cach
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn debug_trace_records_prompt_cache_detail_for_dropped_openai_key_to_anthropic_without_cache_control(
-) {
+async fn debug_trace_records_prompt_cache_detail_for_dropped_openai_key_to_anthropic_without_cache_control()
+ {
     let server_response_body = serde_json::json!({
         "id": "msg_dropped_openai_prompt_cache_key",
         "type": "message",
@@ -2658,6 +3044,192 @@ async fn constructed_non_stream_upstream_error_preserves_portability_warning_hea
         "upstream body = {:?}",
         requests[0]
     );
+    upstream_server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prompt_cache_synthesized_key_echoed_by_upstream_error_is_redacted_everywhere() {
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_prompt_cache_echo_error_mock().await;
+    let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
+    let trace_path = enable_debug_trace_for_default_namespace(&state).await;
+
+    let (response, logs) = capture_error_logs(handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/anthropic/v1/messages".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "max_tokens": 32,
+            "system": [{ "type": "text", "text": "Stable system prefix." }],
+            "messages": [{
+                "role": "user",
+                "content": [{ "type": "text", "text": "Hi" }]
+            }],
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::Anthropic,
+        None,
+    ))
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body_text = response_text(response).await;
+    let request_entries = wait_for_debug_trace_request_count(&trace_path, 1).await;
+    let trace = std::fs::read_to_string(&trace_path).expect("debug trace should be readable");
+    let hook_text = serde_json::to_string(&hook_payloads.snapshot().await).expect("hook json");
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    let synthesized_key = requests[0]["prompt_cache_key"]
+        .as_str()
+        .expect("synthesized prompt_cache_key");
+    assert!(synthesized_key.starts_with("llmup:v1:"));
+    assert_eq!(request_entries.len(), 1);
+
+    for (surface, text) in [
+        ("public error response", body_text.as_str()),
+        ("error logs", logs.as_str()),
+        ("debug trace", trace.as_str()),
+        ("hook payload", hook_text.as_str()),
+    ] {
+        assert!(
+            !text.contains(synthesized_key),
+            "{surface} must not leak full synthesized prompt_cache_key: {text}"
+        );
+    }
+
+    upstream_server.abort();
+    hook_server.abort();
+    let _ = std::fs::remove_file(trace_path);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prompt_cache_synthesized_key_echoed_by_upstream_success_header_is_redacted() {
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_prompt_cache_header_success",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_prompt_cache_echo_header_mock(StatusCode::OK, server_response_body)
+            .await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/chat/completions".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [
+                { "role": "system", "content": "Stable static prefix." },
+                { "role": "user", "content": "Hi" }
+            ],
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let header_value = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("forwarded x-request-id")
+        .to_string();
+    assert!(
+        header_value.contains("[REDACTED]"),
+        "header = {header_value}"
+    );
+    let _ = response_text(response).await;
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    let synthesized_key = requests[0]["prompt_cache_key"]
+        .as_str()
+        .expect("synthesized prompt_cache_key");
+    assert!(
+        !header_value.contains(synthesized_key),
+        "forwarded success header must not leak full synthesized prompt_cache_key: {header_value}"
+    );
+
+    upstream_server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prompt_cache_synthesized_key_echoed_by_upstream_error_header_is_redacted() {
+    let server_response_body = serde_json::json!({
+        "error": { "message": "upstream rejected" }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_prompt_cache_echo_header_mock(
+            StatusCode::BAD_REQUEST,
+            server_response_body,
+        )
+        .await;
+    let state =
+        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+
+    let response = handle_request_core(
+        state,
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/chat/completions".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [
+                { "role": "system", "content": "Stable static prefix." },
+                { "role": "user", "content": "Hi" }
+            ],
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::OpenAiCompletion,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let header_value = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("forwarded x-request-id")
+        .to_string();
+    assert!(
+        header_value.contains("[REDACTED]"),
+        "header = {header_value}"
+    );
+    let _ = response_text(response).await;
+
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    let synthesized_key = requests[0]["prompt_cache_key"]
+        .as_str()
+        .expect("synthesized prompt_cache_key");
+    assert!(
+        !header_value.contains(synthesized_key),
+        "forwarded error header must not leak full synthesized prompt_cache_key: {header_value}"
+    );
+
     upstream_server.abort();
 }
 
@@ -3111,9 +3683,11 @@ fn classify_request_boundary_keeps_portability_warning_path() {
     let RequestBoundaryDecision::AllowWithWarnings(warnings) = decision else {
         panic!("expected warning path, got {decision:?}");
     };
-    assert!(warnings
-        .iter()
-        .any(|warning| warning.contains("non-function Responses tools")));
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("non-function Responses tools"))
+    );
 }
 
 fn request_processing_input<'a>(
@@ -3197,14 +3771,15 @@ fn assert_prompt_cache_request_control_detail_absent_from_hook_payload(hook_payl
 }
 
 #[test]
-fn request_processing_provider_prompt_cache_request_control_serializes_only_supported_contract_states(
-) {
+fn request_processing_provider_prompt_cache_request_control_serializes_only_supported_contract_states()
+ {
     use crate::request_processing::PromptCacheRequestControl as Control;
 
     let states = [
         Control::None,
         Control::Preserved,
         Control::ExplicitExtensionMapped,
+        Control::Synthesized,
         Control::Dropped,
     ];
 
@@ -3213,6 +3788,7 @@ fn request_processing_provider_prompt_cache_request_control_serializes_only_supp
             Control::None
             | Control::Preserved
             | Control::ExplicitExtensionMapped
+            | Control::Synthesized
             | Control::Dropped => {}
         }
     }
@@ -3228,11 +3804,11 @@ fn request_processing_provider_prompt_cache_request_control_serializes_only_supp
             serde_json::json!("none"),
             serde_json::json!("preserved_native"),
             serde_json::json!("explicit_extension_mapped"),
+            serde_json::json!("synthesized"),
             serde_json::json!("dropped"),
         ]
     );
     assert!(!serialized.contains(&serde_json::json!("preserved")));
-    assert!(!serialized.contains(&serde_json::json!("synthesized")));
 }
 
 #[test]
@@ -3711,8 +4287,8 @@ fn classify_request_processing_preserves_openai_family_prompt_cache_across_trans
 }
 
 #[test]
-fn classify_request_processing_marks_openai_to_anthropic_explicit_cache_control_extension_as_mapped(
-) {
+fn classify_request_processing_marks_openai_to_anthropic_explicit_cache_control_extension_as_mapped()
+ {
     let chat_body = serde_json::json!({
         "model": "claude-3",
         "messages": [{ "role": "user", "content": "Hi" }],
@@ -3787,8 +4363,8 @@ fn classify_request_processing_marks_anthropic_to_openai_explicit_prompt_cache_e
 }
 
 #[test]
-fn classify_request_processing_does_not_mark_anthropic_to_openai_prompt_cache_retention_extension_as_mapped(
-) {
+fn classify_request_processing_does_not_mark_anthropic_to_openai_prompt_cache_retention_extension_as_mapped()
+ {
     let anthropic_body = serde_json::json!({
         "model": "claude-3",
         "messages": [{ "role": "user", "content": "Hi" }],
@@ -4796,8 +5372,8 @@ async fn live_responses_grammar_custom_tool_bridge_to_openai_uses_default_bridge
 }
 
 #[tokio::test]
-async fn live_responses_grammar_custom_tool_bridge_to_openai_default_allows_with_warning_and_stable_names(
-) {
+async fn live_responses_grammar_custom_tool_bridge_to_openai_default_allows_with_warning_and_stable_names()
+ {
     let response_body = serde_json::json!({
         "id": "chatcmpl_1",
         "object": "chat.completion",
@@ -5013,8 +5589,8 @@ async fn live_responses_grammar_custom_tool_bridge_to_anthropic_uses_default_bri
 }
 
 #[tokio::test]
-async fn live_responses_grammar_custom_tool_bridge_to_anthropic_default_allows_with_warning_and_stable_names(
-) {
+async fn live_responses_grammar_custom_tool_bridge_to_anthropic_default_allows_with_warning_and_stable_names()
+ {
     let response_body = serde_json::json!({
         "id": "msg_1",
         "type": "message",
@@ -5460,8 +6036,7 @@ async fn live_openai_same_format_request_applies_surface_parallel_tool_gate() {
     assert_eq!(recorded.len(), 1, "requests = {recorded:?}");
     assert_eq!(recorded[0]["model"], "gpt-4o-mini");
     assert_eq!(
-        recorded[0]["parallel_tool_calls"],
-        false,
+        recorded[0]["parallel_tool_calls"], false,
         "same-format request should still inherit ModelSurface parallel-call policy before hitting the upstream: {:?}",
         recorded[0]
     );

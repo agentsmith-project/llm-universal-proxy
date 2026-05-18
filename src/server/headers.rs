@@ -5,7 +5,7 @@ use axum::{
 use tracing::debug;
 
 use crate::formats::UpstreamFormat;
-use crate::hooks::{fingerprint_credential, CredentialSource};
+use crate::hooks::{CredentialSource, fingerprint_credential};
 
 use super::data_auth::{DataAccess, RequestAuthContext, RequestAuthorization};
 use super::secret_redaction::SecretRedactor;
@@ -16,6 +16,25 @@ use crate::config::DataAuthMode;
 pub(super) struct EffectiveCredential {
     pub(super) source: CredentialSource,
     pub(super) fingerprint: Option<String>,
+}
+
+pub(super) trait HeaderValueRedactor {
+    fn redact_header_value(&self, value: &str) -> String;
+}
+
+impl HeaderValueRedactor for SecretRedactor {
+    fn redact_header_value(&self, value: &str) -> String {
+        self.redact_text(value)
+    }
+}
+
+impl<F> HeaderValueRedactor for F
+where
+    F: Fn(&str) -> String,
+{
+    fn redact_header_value(&self, value: &str) -> String {
+        self(value)
+    }
 }
 
 pub(super) fn apply_upstream_headers(
@@ -99,7 +118,7 @@ pub(super) fn build_auth_headers(
 pub(super) fn append_upstream_protocol_response_headers(
     response: &mut Response<Body>,
     upstream_headers: &reqwest::header::HeaderMap,
-    redactor: &SecretRedactor,
+    redactor: &impl HeaderValueRedactor,
 ) {
     for (name, value) in upstream_headers.iter() {
         if is_forwardable_upstream_protocol_response_header(name.as_str())
@@ -108,7 +127,7 @@ pub(super) fn append_upstream_protocol_response_headers(
             let Ok(value) = value.to_str() else {
                 continue;
             };
-            let redacted_value = redactor.redact_text(value);
+            let redacted_value = redactor.redact_header_value(value);
             let Ok(redacted_value) = HeaderValue::from_str(&redacted_value) else {
                 continue;
             };
@@ -121,7 +140,7 @@ pub(super) fn append_raw_upstream_response_headers(
     response: &mut Response<Body>,
     upstream_headers: &reqwest::header::HeaderMap,
     body_len: usize,
-    redactor: &SecretRedactor,
+    redactor: &impl HeaderValueRedactor,
 ) {
     if let Some(value) = upstream_headers.get(reqwest::header::CONTENT_TYPE) {
         response
@@ -153,7 +172,7 @@ pub(super) fn append_raw_upstream_response_headers(
             let Ok(value) = value.to_str() else {
                 continue;
             };
-            let redacted_value = redactor.redact_text(value);
+            let redacted_value = redactor.redact_header_value(value);
             let Ok(redacted_value) = HeaderValue::from_str(&redacted_value) else {
                 continue;
             };
@@ -165,7 +184,7 @@ pub(super) fn append_raw_upstream_response_headers(
 pub(super) fn append_raw_upstream_stream_response_headers(
     response: &mut Response<Body>,
     upstream_headers: &reqwest::header::HeaderMap,
-    redactor: &SecretRedactor,
+    redactor: &impl HeaderValueRedactor,
 ) {
     if let Some(value) = upstream_headers.get(reqwest::header::CONTENT_TYPE) {
         response
@@ -191,7 +210,7 @@ pub(super) fn append_raw_upstream_stream_response_headers(
             let Ok(value) = value.to_str() else {
                 continue;
             };
-            let redacted_value = redactor.redact_text(value);
+            let redacted_value = redactor.redact_header_value(value);
             let Ok(redacted_value) = HeaderValue::from_str(&redacted_value) else {
                 continue;
             };
@@ -332,11 +351,15 @@ mod tests {
 
         strip_auth_headers(&mut headers);
 
-        assert!(!headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("x-goog-api-key")));
-        assert!(headers
-            .iter()
-            .any(|(name, value)| name == "openai-organization" && value == "org_123"));
+        assert!(
+            !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("x-goog-api-key"))
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(name, value)| name == "openai-organization" && value == "org_123")
+        );
     }
 }

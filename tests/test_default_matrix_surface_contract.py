@@ -56,12 +56,33 @@ class DefaultMatrixSurfaceContractTests(unittest.TestCase):
 
         self.assertIn("PRESET-ANTHROPIC-COMPATIBLE", parsed.upstream_surface_defaults)
         self.assertIn("PRESET-OPENAI-COMPATIBLE", parsed.upstream_surface_defaults)
+        self.assertIn("PRESET-OPENAI-RESPONSES-COMPATIBLE", parsed.upstream_surface_defaults)
         self.assertNotIn("PRESET-ANTHROPIC-COMPATIBLE", parsed.upstream_codex_metadata)
         self.assertNotIn("PRESET-OPENAI-COMPATIBLE", parsed.upstream_codex_metadata)
+        self.assertNotIn(
+            "PRESET-OPENAI-RESPONSES-COMPATIBLE",
+            parsed.upstream_codex_metadata,
+        )
+
+        targets = {
+            target.name: target
+            for target in module.resolve_matrix_targets(parsed, PRESET_ENV)
+        }
+        self.assertTrue(targets["preset-openai-compatible"].required)
+        self.assertEqual(
+            targets["preset-openai-compatible"].upstream_format,
+            "openai-completion",
+        )
+        self.assertTrue(targets["preset-openai-responses-compatible"].required)
+        self.assertEqual(
+            targets["preset-openai-responses-compatible"].upstream_format,
+            "openai-responses",
+        )
 
         for model_name in (
             "preset-anthropic-compatible",
             "preset-openai-compatible",
+            "preset-openai-responses-compatible",
         ):
             with self.subTest(model_name=model_name):
                 surface = effective_surface_for_model(module, parsed, model_name)
@@ -92,6 +113,7 @@ class DefaultMatrixSurfaceContractTests(unittest.TestCase):
         for model_name in (
             "preset-anthropic-compatible",
             "preset-openai-compatible",
+            "preset-openai-responses-compatible",
         ):
             with self.subTest(model_name=model_name):
                 surface = effective_surface_for_model(module, runtime_parsed, model_name)

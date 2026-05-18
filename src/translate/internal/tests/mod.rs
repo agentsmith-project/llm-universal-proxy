@@ -103,6 +103,15 @@ fn assert_openai_file_mime_conflict_variant(
     }
 }
 
+fn assert_no_anthropic_only_top_level_fields(body: &serde_json::Value) {
+    for field in ["thinking", "context_management", "container", "extra_body"] {
+        assert!(
+            body.get(field).is_none(),
+            "field = {field}, body = {body:?}"
+        );
+    }
+}
+
 #[test]
 fn media_source_validator_rejects_encoded_controls_and_raw_unicode_boundaries() {
     for value in [
@@ -5477,7 +5486,7 @@ fn translate_request_responses_to_claude_rejects_known_tool_cache_control_positi
 }
 
 #[test]
-fn assess_request_translation_claude_to_openai_rejects_top_level_thinking_and_context_management() {
+fn assess_request_translation_claude_to_openai_family_warns_for_dropped_anthropic_hint_controls() {
     let body = json!({
         "model": "claude-3",
         "thinking": {
@@ -5487,7 +5496,100 @@ fn assess_request_translation_claude_to_openai_rejects_top_level_thinking_and_co
         "context_management": {
             "type": "auto"
         },
+        "container": {
+            "type": "ephemeral"
+        },
         "messages": [{ "role": "user", "content": "Hi" }]
+    });
+
+    for upstream_format in [
+        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiResponses,
+    ] {
+        let assessment =
+            assess_request_translation(UpstreamFormat::Anthropic, upstream_format, &body);
+        let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
+            panic!("expected warning policy for {upstream_format}, got {assessment:?}");
+        };
+        let joined = warnings.join("\n");
+        for field in ["thinking", "context_management", "container"] {
+            assert!(
+                joined.contains(field),
+                "field = {field}, warnings = {warnings:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_rejects_context_management_native_state_handles() {
+    for (label, context_management) in [
+        (
+            "compact_id",
+            json!({
+                "type": "compact",
+                "id": "ctx_compact_123"
+            }),
+        ),
+        (
+            "opaque_handle",
+            json!({
+                "type": "opaque_handle",
+                "handle": "ctx_handle_123"
+            }),
+        ),
+    ] {
+        let body = json!({
+            "model": "claude-3",
+            "context_management": context_management,
+            "messages": [{ "role": "user", "content": "Hi" }]
+        });
+
+        let assessment = assess_request_translation(
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiCompletion,
+            &body,
+        );
+        let TranslationDecision::Reject(message) = assessment.decision() else {
+            panic!("expected native context_management state to fail closed for {label}, got {assessment:?}");
+        };
+        assert!(
+            message.contains("context_management"),
+            "label = {label}, message = {message}"
+        );
+    }
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_rejects_context_controls_without_visible_user_context(
+) {
+    let body = json!({
+        "model": "claude-3",
+        "context_management": {
+            "type": "auto"
+        },
+        "container": {
+            "type": "ephemeral"
+        },
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "lookup",
+                    "input": { "query": "weather" }
+                }]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "sunny"
+                }]
+            }
+        ]
     });
 
     let assessment = assess_request_translation(
@@ -5496,11 +5598,144 @@ fn assess_request_translation_claude_to_openai_rejects_top_level_thinking_and_co
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
-        panic!("expected reject policy, got {assessment:?}");
+        panic!("expected context controls without visible user/context to fail closed, got {assessment:?}");
     };
-    assert!(message.contains("thinking"), "message = {message}");
     assert!(
-        message.contains("context_management"),
+        message.contains("complete visible history"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_rejects_unpaired_tool_result_with_context_hint() {
+    let body = json!({
+        "model": "claude-3",
+        "context_management": {
+            "type": "auto"
+        },
+        "container": {
+            "type": "ephemeral"
+        },
+        "messages": [
+            {
+                "role": "user",
+                "content": "Continue with this result."
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_missing",
+                    "content": "sunny"
+                }]
+            }
+        ]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected unpaired tool_result with context controls to fail closed, got {assessment:?}");
+    };
+    assert!(
+        message.contains("complete visible history"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_rejects_unpaired_assistant_tool_use_with_context_hint(
+) {
+    let body = json!({
+        "model": "claude-3",
+        "context_management": {
+            "type": "auto"
+        },
+        "messages": [
+            {
+                "role": "user",
+                "content": "Use the lookup result when available."
+            },
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_pending",
+                    "name": "lookup",
+                    "input": { "query": "weather" }
+                }]
+            }
+        ]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected unpaired assistant tool_use with context controls to fail closed, got {assessment:?}");
+    };
+    assert!(
+        message.contains("complete visible history"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn assess_request_translation_claude_to_openai_rejects_duplicate_tool_use_id_with_single_result_and_context_hint(
+) {
+    let body = json!({
+        "model": "claude-3",
+        "context_management": {
+            "type": "auto"
+        },
+        "messages": [
+            {
+                "role": "user",
+                "content": "Use both lookups."
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_duplicate",
+                        "name": "lookup",
+                        "input": { "query": "weather" }
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_duplicate",
+                        "name": "lookup",
+                        "input": { "query": "forecast" }
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_duplicate",
+                    "content": "sunny"
+                }]
+            }
+        ]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        &body,
+    );
+    let TranslationDecision::Reject(message) = assessment.decision() else {
+        panic!("expected duplicate assistant tool_use ids with only one result to fail closed, got {assessment:?}");
+    };
+    assert!(
+        message.contains("complete visible history"),
         "message = {message}"
     );
 }
@@ -5536,23 +5771,36 @@ fn assess_request_translation_claude_to_openai_still_warns_on_dropped_cache_cont
 
 #[test]
 fn assess_request_translation_claude_to_openai_still_rejects_container_state_surface() {
-    let body = json!({
-        "model": "claude-3",
-        "container": {
-            "id": "container_123"
-        },
-        "messages": [{ "role": "user", "content": "Hi" }]
-    });
+    for (label, container) in [
+        ("provider_id", json!({ "id": "container_123" })),
+        ("skills", json!({ "skills": [{ "name": "python" }] })),
+        ("code_execution", json!({ "code_execution": true })),
+        ("mcp", json!({ "mcp_servers": [{ "name": "filesystem" }] })),
+        (
+            "nested_metadata_id",
+            json!({ "metadata": { "id": "container_123" } }),
+        ),
+        (
+            "nested_state_handle",
+            json!({ "state": { "handle": "container_handle_123" } }),
+        ),
+    ] {
+        let body = json!({
+            "model": "claude-3",
+            "container": container,
+            "messages": [{ "role": "user", "content": "Hi" }]
+        });
 
-    let assessment = assess_request_translation(
-        UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
-        &body,
-    );
-    let TranslationDecision::Reject(message) = assessment.decision() else {
-        panic!("expected reject policy, got {assessment:?}");
-    };
-    assert!(message.contains("container"), "message = {message}");
+        let assessment = assess_request_translation(
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiCompletion,
+            &body,
+        );
+        let TranslationDecision::Reject(message) = assessment.decision() else {
+            panic!("expected reject policy for {label}, got {assessment:?}");
+        };
+        assert!(message.contains("container"), "message = {message}");
+    }
 }
 
 #[test]
@@ -6823,6 +7071,92 @@ fn translate_request_claude_to_responses_maps_extra_body_openai_prompt_cache_con
 }
 
 #[test]
+fn translate_request_claude_to_openai_family_maps_extra_body_openai_reasoning_effort() {
+    let mut chat_body = json!({
+        "model": "claude-3",
+        "max_tokens": 32,
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "openai": {
+                "reasoning_effort": "high"
+            }
+        }
+    });
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut chat_body,
+        false,
+    )
+    .expect("explicit OpenAI reasoning effort should map to Chat");
+
+    assert_eq!(chat_body["reasoning_effort"], "high");
+    assert!(chat_body.get("reasoning").is_none(), "body = {chat_body:?}");
+    assert_no_anthropic_only_top_level_fields(&chat_body);
+
+    let mut responses_body = json!({
+        "model": "claude-3",
+        "max_tokens": 32,
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "extra_body": {
+            "openai": {
+                "reasoning_effort": "medium"
+            }
+        }
+    });
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiResponses,
+        "gpt-4o",
+        &mut responses_body,
+        false,
+    )
+    .expect("explicit OpenAI reasoning effort should map to Responses");
+
+    assert_eq!(responses_body["reasoning"]["effort"], "medium");
+    assert!(responses_body.get("reasoning_effort").is_none());
+    assert_no_anthropic_only_top_level_fields(&responses_body);
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_rejects_invalid_extra_body_openai_reasoning_effort() {
+    for (label, upstream_format, reasoning_effort) in [
+        (
+            "unknown_value",
+            UpstreamFormat::OpenAiCompletion,
+            json!("maximum"),
+        ),
+        ("non_string", UpstreamFormat::OpenAiResponses, json!(5)),
+    ] {
+        let mut body = json!({
+            "model": "claude-3",
+            "max_tokens": 32,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": {
+                "openai": {
+                    "reasoning_effort": reasoning_effort
+                }
+            }
+        });
+
+        let err = translate_request(
+            UpstreamFormat::Anthropic,
+            upstream_format,
+            "gpt-4o",
+            &mut body,
+            false,
+        )
+        .expect_err("invalid extra_body.openai.reasoning_effort should fail closed");
+
+        assert!(
+            err.contains("extra_body.openai.reasoning_effort"),
+            "label = {label}, err = {err}"
+        );
+    }
+}
+
+#[test]
 fn translate_request_claude_to_openai_rejects_invalid_extra_body_openai_prompt_cache_controls() {
     let cases = [
         ("non_object", json!("stable-prefix")),
@@ -7222,7 +7556,7 @@ fn translate_request_claude_to_openai_default_maps_multiblock_system_without_inj
 }
 
 #[test]
-fn translate_request_claude_to_openai_rejects_top_level_thinking_and_context_management() {
+fn translate_request_claude_to_openai_drops_anthropic_hint_controls_and_keeps_chat_shape() {
     let mut body = json!({
         "model": "claude-3",
         "thinking": {
@@ -7232,7 +7566,25 @@ fn translate_request_claude_to_openai_rejects_top_level_thinking_and_context_man
         "context_management": {
             "type": "auto"
         },
+        "container": {
+            "type": "ephemeral"
+        },
         "cache_control": { "type": "ephemeral" },
+        "tool_choice": {
+            "type": "tool",
+            "name": "lookup"
+        },
+        "tools": [{
+            "name": "lookup",
+            "description": "Look up a value",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }
+        }],
         "system": [{
             "type": "text",
             "text": "System policy",
@@ -7245,20 +7597,91 @@ fn translate_request_claude_to_openai_rejects_top_level_thinking_and_context_man
                 "text": "Hi",
                 "cache_control": { "type": "ephemeral" }
             }]
-        }]
+        }],
+        "stream": true
     });
 
-    let err = translate_request(
+    translate_request(
         UpstreamFormat::Anthropic,
         UpstreamFormat::OpenAiCompletion,
-        "claude-3",
+        "gpt-4o",
         &mut body,
-        false,
+        true,
     )
-    .expect_err("top-level Anthropic thinking/context_management should fail closed");
+    .expect("portable Anthropic hint controls should warn and drop for Chat targets");
 
-    assert!(err.contains("thinking"), "err = {err}");
-    assert!(err.contains("context_management"), "err = {err}");
+    assert_no_anthropic_only_top_level_fields(&body);
+    assert_eq!(body["model"], "claude-3");
+    assert_eq!(body["stream"], true);
+    assert!(body["messages"].is_array(), "body = {body:?}");
+    assert!(body["tools"].is_array(), "body = {body:?}");
+    assert_eq!(body["tool_choice"]["type"], "function");
+    assert_eq!(body["tool_choice"]["function"]["name"], "lookup");
+}
+
+#[test]
+fn translate_request_claude_to_responses_drops_anthropic_hint_controls_and_keeps_responses_shape() {
+    let mut body = json!({
+        "model": "claude-3",
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048
+        },
+        "context_management": {
+            "type": "auto"
+        },
+        "container": {
+            "type": "ephemeral"
+        },
+        "tool_choice": {
+            "type": "tool",
+            "name": "lookup"
+        },
+        "tools": [{
+            "name": "lookup",
+            "description": "Look up a value",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }
+        }],
+        "system": [{
+            "type": "text",
+            "text": "System policy"
+        }],
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "Hi"
+            }]
+        }],
+        "stream": true
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiResponses,
+        "gpt-4o",
+        &mut body,
+        true,
+    )
+    .expect("portable Anthropic hint controls should warn and drop for Responses targets");
+
+    assert_no_anthropic_only_top_level_fields(&body);
+    assert_eq!(body["model"], "claude-3");
+    assert_eq!(body["stream"], true);
+    assert!(body.get("messages").is_none(), "body = {body:?}");
+    assert_eq!(body["instructions"], "System policy");
+    let input = body["input"].as_array().expect("responses input");
+    assert_eq!(input[0]["type"], "message");
+    assert_eq!(input[0]["role"], "user");
+    assert!(body["tools"].is_array(), "body = {body:?}");
+    assert_eq!(body["tool_choice"]["type"], "function");
+    assert_eq!(body["tool_choice"]["name"], "lookup");
 }
 
 #[test]
@@ -7323,6 +7746,159 @@ fn translate_request_claude_passthrough_preserves_native_thinking_blocks() {
     .expect("same-protocol Anthropic passthrough should preserve native thinking blocks");
 
     assert_eq!(body, original);
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_preserves_visible_signed_thinking_text_only() {
+    let mut chat_body = json!({
+        "model": "claude-3",
+        "messages": [
+            { "role": "user", "content": "Think visibly" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "internal reasoning",
+                        "signature": "sig_123"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Visible answer"
+                    }
+                ]
+            },
+            { "role": "user", "content": "Continue" }
+        ]
+    });
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiCompletion,
+        "gpt-4o",
+        &mut chat_body,
+        false,
+    )
+    .expect("visible signed thinking text should degrade to unsigned Chat reasoning text");
+
+    let messages = chat_body["messages"].as_array().expect("chat messages");
+    assert_eq!(messages[1]["reasoning_content"], "internal reasoning");
+    assert_eq!(messages[1]["content"], "Visible answer");
+    let serialized = serde_json::to_string(&chat_body).unwrap();
+    assert!(!serialized.contains("signature"), "body = {chat_body:?}");
+    assert!(!serialized.contains("sig_123"), "body = {chat_body:?}");
+    assert!(
+        !serialized.contains("encrypted_content"),
+        "body = {chat_body:?}"
+    );
+
+    let mut responses_body = json!({
+        "model": "claude-3",
+        "messages": [
+            { "role": "user", "content": "Think visibly" },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "internal reasoning",
+                        "signature": "sig_123"
+                    },
+                    {
+                        "type": "text",
+                        "text": "Visible answer"
+                    }
+                ]
+            },
+            { "role": "user", "content": "Continue" }
+        ]
+    });
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiResponses,
+        "gpt-4o",
+        &mut responses_body,
+        false,
+    )
+    .expect("visible signed thinking text should degrade to unsigned Responses reasoning summary");
+
+    let input = responses_body["input"].as_array().expect("responses input");
+    let reasoning_item = input
+        .iter()
+        .find(|item| item["type"] == "reasoning")
+        .expect("reasoning item");
+    assert_eq!(reasoning_item["summary"][0]["text"], "internal reasoning");
+    let serialized = serde_json::to_string(&responses_body).unwrap();
+    assert!(
+        !serialized.contains("signature"),
+        "body = {responses_body:?}"
+    );
+    assert!(!serialized.contains("sig_123"), "body = {responses_body:?}");
+    assert!(
+        !serialized.contains("encrypted_content"),
+        "body = {responses_body:?}"
+    );
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_rejects_opaque_thinking_only_carriers() {
+    for (label, content) in [
+        (
+            "omitted_thinking",
+            json!([{
+                "type": "thinking",
+                "thinking": { "display": "omitted" },
+                "signature": "sig_opaque"
+            }]),
+        ),
+        (
+            "missing_text",
+            json!([{
+                "type": "thinking",
+                "signature": "sig_opaque"
+            }]),
+        ),
+        (
+            "redacted_thinking",
+            json!([{
+                "type": "redacted_thinking",
+                "data": "opaque_provider_state"
+            }]),
+        ),
+        (
+            "encrypted_thinking",
+            json!([{
+                "type": "encrypted_thinking",
+                "encrypted_content": "opaque_provider_state"
+            }]),
+        ),
+    ] {
+        for upstream_format in [
+            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiResponses,
+        ] {
+            let mut body = json!({
+                "model": "claude-3",
+                "messages": [{
+                    "role": "assistant",
+                    "content": content.clone()
+                }]
+            });
+
+            let err = translate_request(
+                UpstreamFormat::Anthropic,
+                upstream_format,
+                "gpt-4o",
+                &mut body,
+                false,
+            )
+            .expect_err("opaque-only thinking carrier should fail closed");
+
+            assert!(
+                err.contains("thinking"),
+                "label = {label}, target = {upstream_format}, err = {err}"
+            );
+        }
+    }
 }
 
 #[test]

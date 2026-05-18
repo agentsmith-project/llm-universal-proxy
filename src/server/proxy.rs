@@ -6,11 +6,11 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::{
+    Extension, Json,
     body::Body,
     extract::{Path, Request, State},
     http::{HeaderMap, Response, StatusCode},
     response::IntoResponse,
-    Extension, Json,
 };
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
@@ -22,27 +22,32 @@ use crate::debug_trace::{ConversationStateBridgeDebugTrace, DebugTraceContext};
 use crate::downstream::DownstreamCancellation;
 use crate::formats::UpstreamFormat;
 use crate::hooks::{
-    capture_headers, json_response_headers, new_request_id, now_timestamp_ms, sse_response_headers,
-    HeaderEntry, HookRequestContext,
+    HeaderEntry, HookRequestContext, capture_headers, json_response_headers, new_request_id,
+    now_timestamp_ms, sse_response_headers,
+};
+use crate::prompt_cache_controls::{
+    OpenAiFamilyPromptCacheKeySynthesisContext,
+    synthesize_openai_family_prompt_cache_key_from_source,
 };
 use crate::provider_state_controls::{
     provider_state_control_enabled, responses_stateful_request_controls,
 };
 use crate::request_processing::{
-    classify_request_processing, RequestProcessing, RequestProcessingInput, StateBridgeModifier,
+    PromptCacheRequestControl, RequestProcessing, RequestProcessingInput, StateBridgeModifier,
+    classify_request_processing,
 };
-use crate::streaming::{needs_stream_translation, GuardedSseStream, TranslateSseStream};
+use crate::streaming::{GuardedSseStream, TranslateSseStream, needs_stream_translation};
 use crate::translate::{
+    RequestTranslationPolicy, ResponseTranslationContext, TranslationDecision,
     assess_request_translation_with_surface, translate_request_with_policy,
-    translate_response_with_context, RequestTranslationPolicy, ResponseTranslationContext,
-    TranslationDecision,
+    translate_response_with_context,
 };
 use crate::upstream;
 
-use super::body_limits::{read_limited_json_request, JsonRequestBody};
+use super::body_limits::{JsonRequestBody, read_limited_json_request};
 use super::conversation_state_bridge::{
-    BridgeRouteConfigFingerprint, ConversationStateBridgeStore, StoredBridgeResponse,
-    LOCAL_REPLAY_SCHEMA_VERSION, LOCAL_RESPONSE_ID_PREFIX,
+    BridgeRouteConfigFingerprint, ConversationStateBridgeStore, LOCAL_REPLAY_SCHEMA_VERSION,
+    LOCAL_RESPONSE_ID_PREFIX, StoredBridgeResponse,
 };
 use super::data_auth::{self, RequestAuthContext};
 use super::errors::{
@@ -55,14 +60,14 @@ use super::headers::{
     append_upstream_protocol_response_headers, apply_upstream_headers, build_auth_headers,
 };
 use super::public_boundary::{
-    reject_internal_request_scoped_tool_bridge_context,
-    validate_provider_forwarding_request_boundary, REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD,
+    REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD, reject_internal_request_scoped_tool_bridge_context,
+    validate_provider_forwarding_request_boundary,
 };
 use super::responses_resources::resolve_native_responses_stateful_route_or_error;
 use super::secret_redaction::{
-    redactor_for_request, RedactingSseObservationTransform, RedactingSseStream, SecretRedactor,
+    RedactingSseObservationTransform, RedactingSseStream, SecretRedactor, redactor_for_request,
 };
-use super::state::{AppState, RuntimeNamespaceState, DEFAULT_NAMESPACE};
+use super::state::{AppState, DEFAULT_NAMESPACE, RuntimeNamespaceState};
 use super::tracked_body::TrackedBodyStream;
 
 const TOOL_BRIDGE_CONTEXT_VERSION: u64 = 2;
@@ -245,7 +250,9 @@ where
                             }
                             Ok(None) => {}
                             Err(message) => {
-                                warn!("conversation_state_bridge streaming capture skipped: {message}");
+                                warn!(
+                                    "conversation_state_bridge streaming capture skipped: {message}"
+                                );
                             }
                         }
                         this.commit = None;
@@ -797,6 +804,44 @@ fn response_with_portability_warning_headers(
     response
 }
 
+fn upstream_request_body_with_synthesized_prompt_cache_key_redacted(
+    upstream_request_body: &Value,
+    key_fingerprint: &str,
+) -> Value {
+    let mut redacted = upstream_request_body.clone();
+    if let Some(object) = redacted.as_object_mut() {
+        if object.get("prompt_cache_key").is_some() {
+            object.insert(
+                "prompt_cache_key".to_string(),
+                Value::String(format!("[SYNTHESIZED:{key_fingerprint}]")),
+            );
+        }
+    }
+    redacted
+}
+
+fn redact_text_with_prompt_cache_key(
+    request_redactor: &SecretRedactor,
+    prompt_cache_key_redactor: Option<&SecretRedactor>,
+    value: &str,
+) -> String {
+    let redacted = request_redactor.redact_text(value);
+    prompt_cache_key_redactor
+        .map(|redactor| redactor.redact_text(&redacted))
+        .unwrap_or(redacted)
+}
+
+fn redact_value_with_prompt_cache_key(
+    request_redactor: &SecretRedactor,
+    prompt_cache_key_redactor: Option<&SecretRedactor>,
+    value: &Value,
+) -> Value {
+    let redacted = request_redactor.redact_value(value);
+    prompt_cache_key_redactor
+        .map(|redactor| redactor.redact_value(&redacted))
+        .unwrap_or(redacted)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_request_core_with_downstream_cancellation(
     state: Arc<AppState>,
@@ -1116,7 +1161,7 @@ async fn handle_request_core_with_downstream_cancellation(
         );
     }
 
-    let (upstream_request_body, raw_upstream_request_body, request_scoped_tool_bridge_context) =
+    let (mut upstream_request_body, raw_upstream_request_body, request_scoped_tool_bridge_context) =
         if llmup.request_processing == RequestProcessing::RequestTransformationNotRequired {
             if let Err(e) =
                 validate_provider_forwarding_request_boundary(client_format, &original_body)
@@ -1172,11 +1217,54 @@ async fn handle_request_core_with_downstream_cancellation(
             (body.clone(), None, request_scoped_tool_bridge_context)
         };
 
+    let prompt_cache_key_synthesis = if raw_upstream_request_body.is_none() {
+        synthesize_openai_family_prompt_cache_key_from_source(
+            OpenAiFamilyPromptCacheKeySynthesisContext {
+                namespace: &namespace,
+                upstream_name: &resolved_model.upstream_name,
+                upstream_model: &resolved_model.upstream_model,
+                upstream_format,
+            },
+            client_format,
+            &original_body,
+            &mut upstream_request_body,
+        )
+    } else {
+        None
+    };
+    if let Some(synthesis) = prompt_cache_key_synthesis.as_ref() {
+        llmup.provider_native_prompt_cache = PromptCacheRequestControl::Synthesized;
+        tracker.set_request_processing(llmup);
+        debug!(
+            "Synthesized OpenAI-family prompt_cache_key fingerprint={}",
+            synthesis.key_fingerprint()
+        );
+    }
+    let prompt_cache_key_redactor = prompt_cache_key_synthesis
+        .as_ref()
+        .map(|synthesis| SecretRedactor::new([synthesis.key().to_string()]));
+    let response_header_redactor = |value: &str| {
+        redact_text_with_prompt_cache_key(
+            &request_redactor,
+            prompt_cache_key_redactor.as_ref(),
+            value,
+        )
+    };
+
+    let upstream_request_body_for_debug = prompt_cache_key_synthesis
+        .as_ref()
+        .map(|synthesis| {
+            upstream_request_body_with_synthesized_prompt_cache_key_redacted(
+                &upstream_request_body,
+                synthesis.key_fingerprint(),
+            )
+        })
+        .unwrap_or_else(|| upstream_request_body.clone());
     debug!(
         "Upstream request body: {}",
         request_redactor.redact_text(
-            &serde_json::to_string_pretty(&upstream_request_body)
-                .unwrap_or_else(|_| upstream_request_body.to_string())
+            &serde_json::to_string_pretty(&upstream_request_body_for_debug)
+                .unwrap_or_else(|_| upstream_request_body_for_debug.to_string())
         )
     );
 
@@ -1239,10 +1327,15 @@ async fn handle_request_core_with_downstream_cancellation(
         });
     if let (Some(recorder), Some(ctx)) = (namespace_state.debug_trace.as_ref(), debug_ctx.as_ref())
     {
+        let redacted_upstream_request_body = redact_value_with_prompt_cache_key(
+            &request_redactor,
+            prompt_cache_key_redactor.as_ref(),
+            &upstream_request_body_for_debug,
+        );
         recorder.record_request_with_upstream_and_bridge_trace(
             ctx,
             &redacted_original_body,
-            &request_redactor.redact_value(&upstream_request_body),
+            &redacted_upstream_request_body,
             bridge_debug_trace.as_ref(),
         );
     }
@@ -1287,7 +1380,11 @@ async fn handle_request_core_with_downstream_cancellation(
         Ok(r) => r,
         Err(upstream::DownstreamAwareError::Inner(e)) => {
             tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
-            let message = request_redactor.redact_text(&e.to_string());
+            let message = redact_text_with_prompt_cache_key(
+                &request_redactor,
+                prompt_cache_key_redactor.as_ref(),
+                &e.to_string(),
+            );
             let response = if stream {
                 streaming_error_response(client_format, StatusCode::BAD_GATEWAY, &message)
             } else {
@@ -1364,7 +1461,7 @@ async fn handle_request_core_with_downstream_cancellation(
                     &mut response,
                     &upstream_response_headers,
                     body_len,
-                    &request_redactor,
+                    &response_header_redactor,
                 );
                 return response_with_portability_warning_headers(response, &portability_warnings);
             }
@@ -1430,7 +1527,7 @@ async fn handle_request_core_with_downstream_cancellation(
             append_raw_upstream_stream_response_headers(
                 &mut response,
                 &upstream_response_headers,
-                &request_redactor,
+                &response_header_redactor,
             );
             return response_with_portability_warning_headers(response, &portability_warnings);
         }
@@ -1470,7 +1567,11 @@ async fn handle_request_core_with_downstream_cancellation(
                     return client_closed_response(client_format);
                 }
             };
-            let redacted_error_body = request_redactor.redact_text(&error_body);
+            let redacted_error_body = redact_text_with_prompt_cache_key(
+                &request_redactor,
+                prompt_cache_key_redactor.as_ref(),
+                &error_body,
+            );
             error!(
                 "Upstream returned error for streaming request: {} - {}",
                 status, redacted_error_body
@@ -1481,7 +1582,11 @@ async fn handle_request_core_with_downstream_cancellation(
             } else {
                 format!("upstream streaming error body: {error_body}")
             };
-            let public_error_body = request_redactor.redact_text(&public_error_body);
+            let public_error_body = redact_text_with_prompt_cache_key(
+                &request_redactor,
+                prompt_cache_key_redactor.as_ref(),
+                &public_error_body,
+            );
             let mut response = streaming_error_response(
                 client_format,
                 StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -1491,7 +1596,7 @@ async fn handle_request_core_with_downstream_cancellation(
                 append_upstream_protocol_response_headers(
                     &mut response,
                     &upstream_response_headers,
-                    &request_redactor,
+                    &response_header_redactor,
                 );
             }
             return response_with_portability_warning_headers(response, &portability_warnings);
@@ -1543,6 +1648,9 @@ async fn handle_request_core_with_downstream_cancellation(
             body_stream,
             request_redactor.clone(),
         ));
+        if let Some(redactor) = prompt_cache_key_redactor.clone() {
+            body_stream = Box::pin(RedactingSseStream::new(body_stream, redactor));
+        }
         if let (Some(dispatcher), Some(ctx)) = (namespace_state.hooks.clone(), hook_ctx.clone()) {
             body_stream = Box::pin(dispatcher.wrap_stream(
                 body_stream,
@@ -1571,7 +1679,7 @@ async fn handle_request_core_with_downstream_cancellation(
         append_upstream_protocol_response_headers(
             &mut response,
             &upstream_response_headers,
-            &request_redactor,
+            &response_header_redactor,
         );
         return response_with_portability_warning_headers(response, &portability_warnings);
     }
@@ -1674,13 +1782,17 @@ async fn handle_request_core_with_downstream_cancellation(
             &mut response,
             &upstream_response_headers,
             body_len,
-            &request_redactor,
+            &response_header_redactor,
         );
         return response_with_portability_warning_headers(response, &portability_warnings);
     }
     if !status.is_success() {
         error!("Upstream returned non-success status: {}", status);
-        let redacted_upstream_body = request_redactor.redact_text(&String::from_utf8_lossy(&bytes));
+        let redacted_upstream_body = redact_text_with_prompt_cache_key(
+            &request_redactor,
+            prompt_cache_key_redactor.as_ref(),
+            &String::from_utf8_lossy(&bytes),
+        );
         error!("Upstream response body: {}", redacted_upstream_body);
         tracker.finish_error(status.as_u16());
         let upstream_error_body = String::from_utf8_lossy(&bytes);
@@ -1689,7 +1801,11 @@ async fn handle_request_core_with_downstream_cancellation(
         } else {
             format!("upstream error body: {upstream_error_body}")
         };
-        let public_error_body = request_redactor.redact_text(&public_error_body);
+        let public_error_body = redact_text_with_prompt_cache_key(
+            &request_redactor,
+            prompt_cache_key_redactor.as_ref(),
+            &public_error_body,
+        );
         let mut response = error_response(
             client_format,
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -1699,7 +1815,7 @@ async fn handle_request_core_with_downstream_cancellation(
             append_upstream_protocol_response_headers(
                 &mut response,
                 &upstream_response_headers,
-                &request_redactor,
+                &response_header_redactor,
             );
         }
         return response_with_portability_warning_headers(response, &portability_warnings);
@@ -1707,8 +1823,11 @@ async fn handle_request_core_with_downstream_cancellation(
     let upstream_body: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(_) => {
-            let redacted_upstream_body =
-                request_redactor.redact_text(&String::from_utf8_lossy(&bytes));
+            let redacted_upstream_body = redact_text_with_prompt_cache_key(
+                &request_redactor,
+                prompt_cache_key_redactor.as_ref(),
+                &String::from_utf8_lossy(&bytes),
+            );
             error!(
                 "Upstream returned invalid JSON body: {}",
                 redacted_upstream_body
@@ -1729,13 +1848,17 @@ async fn handle_request_core_with_downstream_cancellation(
         normalized_non_stream_upstream_error(upstream_format, client_format, &upstream_body)
     {
         tracker.finish_error(status.as_u16());
-        let mut response =
-            redacted_error_response(client_format, status, &message, &request_redactor);
+        let message = redact_text_with_prompt_cache_key(
+            &request_redactor,
+            prompt_cache_key_redactor.as_ref(),
+            &message,
+        );
+        let mut response = error_response(client_format, status, &message);
         if preserve_native_upstream_protocol_headers {
             append_upstream_protocol_response_headers(
                 &mut response,
                 &upstream_response_headers,
-                &request_redactor,
+                &response_header_redactor,
             );
         }
         return response_with_portability_warning_headers(response, &portability_warnings);
@@ -1755,13 +1878,13 @@ async fn handle_request_core_with_downstream_cancellation(
         Ok(v) => v,
         Err(e) => {
             tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
+            let message = redact_text_with_prompt_cache_key(
+                &request_redactor,
+                prompt_cache_key_redactor.as_ref(),
+                &e,
+            );
             return response_with_portability_warning_headers(
-                redacted_error_response(
-                    client_format,
-                    StatusCode::BAD_GATEWAY,
-                    &e,
-                    &request_redactor,
-                ),
+                error_response(client_format, StatusCode::BAD_GATEWAY, &message),
                 &portability_warnings,
             );
         }
@@ -1787,7 +1910,11 @@ async fn handle_request_core_with_downstream_cancellation(
             }
         }
     }
-    let public_out = request_redactor.redact_value(&out);
+    let public_out = redact_value_with_prompt_cache_key(
+        &request_redactor,
+        prompt_cache_key_redactor.as_ref(),
+        &out,
+    );
     if let (Some(dispatcher), Some(ctx)) = (namespace_state.hooks.as_ref(), hook_ctx) {
         dispatcher.emit_non_stream(
             ctx,
@@ -1816,7 +1943,7 @@ async fn handle_request_core_with_downstream_cancellation(
         append_upstream_protocol_response_headers(
             &mut response,
             &upstream_response_headers,
-            &request_redactor,
+            &response_header_redactor,
         );
     }
     response_with_portability_warning_headers(response, &portability_warnings)
@@ -2140,7 +2267,7 @@ fn responses_text_content(content: Option<&Value>) -> Result<String, String> {
                     _ => {
                         return Err(
                             "conversation_state_bridge MVP only supports text content".to_string()
-                        )
+                        );
                     }
                 }
             }

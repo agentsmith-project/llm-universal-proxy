@@ -41,9 +41,27 @@ upstreams:
         apply_patch_transport: freeform
         supports_parallel_calls: false
 
+  PRESET-OPENAI-RESPONSES-COMPATIBLE:
+    api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
+    format: openai-responses
+    provider_key_env: PRESET_ENDPOINT_API_KEY
+    limits:
+      context_window: 200000
+      max_output_tokens: 128000
+    surface_defaults:
+      modalities:
+        input: ["text"]
+        output: ["text"]
+      tools:
+        supports_search: false
+        supports_view_image: false
+        apply_patch_transport: freeform
+        supports_parallel_calls: false
+
 model_aliases:
   preset-anthropic-compatible: "PRESET-ANTHROPIC-COMPATIBLE:PRESET_ENDPOINT_MODEL"
   preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL"
+  preset-openai-responses-compatible: "PRESET-OPENAI-RESPONSES-COMPATIBLE:PRESET_ENDPOINT_MODEL"
 
 debug_trace:
   path: /tmp/llm-proxy-test-debug.jsonl

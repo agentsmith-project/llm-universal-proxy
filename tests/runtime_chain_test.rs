@@ -1352,8 +1352,19 @@ async fn exchange_hook_non_stream_transformation_required_redacts_request_body_a
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
+    let response_headers = format!("{:?}", response.headers());
+    assert_no_secret_leak(
+        &response_headers,
+        TEST_PROVIDER_KEY,
+        "public non-stream response headers",
+    );
+    assert!(
+        !response_headers.contains("llmup:v1:"),
+        "headers = {response_headers}"
+    );
     let body = response.text().await.unwrap();
     assert_no_secret_leak(&body, TEST_PROVIDER_KEY, "public non-stream response");
+    assert!(!body.contains("llmup:v1:"), "body = {body}");
     assert!(body.contains("[REDACTED]"), "body = {body}");
     let public_body: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(public_body["model"], upstream_model);
@@ -1362,7 +1373,7 @@ async fn exchange_hook_non_stream_transformation_required_redacts_request_body_a
     let exchange_payload = exchange_payloads.last().unwrap();
     assert_eq!(exchange_payload["client_model"], alias_model);
     assert_eq!(exchange_payload["upstream_model"], upstream_model);
-    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "none");
+    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "synthesized");
     assert_eq!(
         exchange_payload["response"]["body"]["model"],
         upstream_model
@@ -1372,6 +1383,10 @@ async fn exchange_hook_non_stream_transformation_required_redacts_request_body_a
         &payload_text,
         TEST_PROVIDER_KEY,
         "non-stream exchange hook payload",
+    );
+    assert!(
+        !payload_text.contains("llmup:v1:"),
+        "payload = {payload_text}"
     );
     assert!(
         payload_text.contains("[REDACTED]"),
@@ -1425,21 +1440,36 @@ async fn exchange_hook_streaming_redacts_request_body_and_plain_header_metadata(
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
+    let response_headers = format!("{:?}", response.headers());
+    assert_no_secret_leak(
+        &response_headers,
+        TEST_PROVIDER_KEY,
+        "public streaming response headers",
+    );
+    assert!(
+        !response_headers.contains("llmup:v1:"),
+        "headers = {response_headers}"
+    );
     let body = response.text().await.unwrap();
     assert!(body.contains("data: [DONE]"), "body = {body}");
     assert_no_secret_leak(&body, TEST_PROVIDER_KEY, "public streaming response");
+    assert!(!body.contains("llmup:v1:"), "body = {body}");
     assert!(body.contains("[REDACTED]"), "body = {body}");
 
     let exchange_payloads = wait_for_payloads(&exchange, 1).await;
     let exchange_payload = exchange_payloads.last().unwrap();
     assert_eq!(exchange_payload["client_model"], alias_model);
     assert_eq!(exchange_payload["upstream_model"], upstream_model);
-    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "none");
+    assert_llmup_external_contract(&exchange_payload["llmup"], "constructed", "synthesized");
     let payload_text = serde_json::to_string(exchange_payload).unwrap();
     assert_no_secret_leak(
         &payload_text,
         TEST_PROVIDER_KEY,
         "streaming exchange hook payload",
+    );
+    assert!(
+        !payload_text.contains("llmup:v1:"),
+        "payload = {payload_text}"
     );
     assert!(
         payload_text.contains("[REDACTED]"),

@@ -94,7 +94,6 @@ pub fn translate_request_with_policy(
         apply_request_translation_policy_defaults(upstream_format, &policy, body);
         return Ok(());
     }
-    let translated_from_openai_completion = client_format == UpstreamFormat::OpenAiCompletion;
     // Step 1: client → openai (if client is not openai)
     if client_format != UpstreamFormat::OpenAiCompletion {
         client_to_openai_completion(client_format, upstream_format, body)?;
@@ -105,9 +104,7 @@ pub fn translate_request_with_policy(
     if upstream_format != UpstreamFormat::OpenAiCompletion {
         openai_completion_to_upstream(upstream_format, model, body)?;
         if stream {
-            if upstream_format == UpstreamFormat::OpenAiResponses
-                && translated_from_openai_completion
-            {
+            if upstream_format == UpstreamFormat::OpenAiResponses {
                 hoist_and_merge_system_messages(body);
             } else {
                 normalize_openai_roles_for_compatibility(upstream_format, body);
@@ -1079,35 +1076,6 @@ fn anthropic_nonportable_content_block_message(body: &Value, target_label: &str)
     None
 }
 
-fn anthropic_request_has_nonportable_thinking_provenance(body: &Value) -> bool {
-    if let Some(system) = body.get("system") {
-        match system {
-            Value::Array(blocks)
-                if anthropic_blocks_have_nonportable_thinking_provenance(blocks) =>
-            {
-                return true;
-            }
-            Value::Object(_) if anthropic_block_has_nonportable_thinking_provenance(system) => {
-                return true;
-            }
-            _ => {}
-        }
-    }
-
-    body.get("messages")
-        .and_then(Value::as_array)
-        .map(|messages| {
-            messages.iter().any(|message| {
-                message
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .map(|blocks| anthropic_blocks_have_nonportable_thinking_provenance(blocks))
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false)
-}
-
 fn anthropic_request_nonportable_tool_definition_message(
     body: &Value,
     target_label: &str,
@@ -1419,9 +1387,120 @@ pub(crate) fn classify_portable_non_success_terminal(code_or_reason: Option<&str
     "error"
 }
 
-fn claude_to_openai(body: &mut Value, preserve_reasoning_replay: bool) -> Result<(), String> {
+#[derive(Debug, Clone, PartialEq)]
+struct AnthropicExtraBodyOpenAiControls {
+    prompt_cache_key: Option<Value>,
+    prompt_cache_retention: Option<Value>,
+    reasoning_effort: Option<Value>,
+}
+
+fn validate_anthropic_extra_body_openai_controls(body: &Value) -> Result<(), String> {
+    validated_anthropic_extra_body_openai_controls(body).map(|_| ())
+}
+
+fn validated_anthropic_extra_body_openai_controls(
+    body: &Value,
+) -> Result<Option<AnthropicExtraBodyOpenAiControls>, String> {
+    let Some(openai) = body
+        .get("extra_body")
+        .and_then(|extra_body| extra_body.get("openai"))
+    else {
+        return Ok(None);
+    };
+    let Some(object) = openai.as_object() else {
+        return Err(anthropic_extra_body_openai_controls_message(
+            "value must be an object",
+        ));
+    };
+    if object.is_empty() {
+        return Err(anthropic_extra_body_openai_controls_message(
+            "at least one supported OpenAI control is required",
+        ));
+    }
+
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "prompt_cache_key" | "prompt_cache_retention" | "reasoning_effort"
+        ) {
+            return Err(anthropic_extra_body_openai_controls_message(
+                "only `prompt_cache_key`, optional `prompt_cache_retention`, and `reasoning_effort` are supported",
+            ));
+        }
+    }
+
+    let (prompt_cache_key, prompt_cache_retention) = if object.get("prompt_cache_key").is_some()
+        || object.get("prompt_cache_retention").is_some()
+    {
+        let mut prompt_cache_openai = serde_json::Map::new();
+        if let Some(prompt_cache_key) = object.get("prompt_cache_key") {
+            prompt_cache_openai.insert("prompt_cache_key".to_string(), prompt_cache_key.clone());
+        }
+        if let Some(prompt_cache_retention) = object.get("prompt_cache_retention") {
+            prompt_cache_openai.insert(
+                "prompt_cache_retention".to_string(),
+                prompt_cache_retention.clone(),
+            );
+        }
+        let prompt_cache_body = serde_json::json!({
+            "extra_body": {
+                "openai": Value::Object(prompt_cache_openai)
+            }
+        });
+        let prompt_cache_controls =
+            validated_anthropic_extra_body_openai_prompt_cache_controls(&prompt_cache_body)?
+                .expect("synthetic prompt cache body has extra_body.openai");
+        (
+            Some(prompt_cache_controls.prompt_cache_key),
+            prompt_cache_controls.prompt_cache_retention,
+        )
+    } else {
+        (None, None)
+    };
+
+    if prompt_cache_key.is_none()
+        && prompt_cache_retention.is_none()
+        && object.get("reasoning_effort").is_none()
+    {
+        return Err(anthropic_extra_body_openai_controls_message(
+            "at least one supported OpenAI control is required",
+        ));
+    }
+
+    let reasoning_effort = if let Some(reasoning_effort) = object.get("reasoning_effort") {
+        match reasoning_effort.as_str() {
+            Some("minimal" | "low" | "medium" | "high") => Some(reasoning_effort.clone()),
+            Some(_) => {
+                return Err(anthropic_extra_body_openai_controls_message(
+                    "extra_body.openai.reasoning_effort must be one of \"minimal\", \"low\", \"medium\", or \"high\"",
+                ));
+            }
+            None => {
+                return Err(anthropic_extra_body_openai_controls_message(
+                    "extra_body.openai.reasoning_effort must be a string",
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(Some(AnthropicExtraBodyOpenAiControls {
+        prompt_cache_key,
+        prompt_cache_retention,
+        reasoning_effort,
+    }))
+}
+
+fn anthropic_extra_body_openai_controls_message(detail: &str) -> String {
+    format!(
+        "extra_body.openai supports non-empty string `prompt_cache_key`, optional `prompt_cache_retention`: \"in_memory\" or \"24h\", and optional `reasoning_effort`: \"minimal\", \"low\", \"medium\", or \"high\"; {detail}"
+    )
+}
+
+fn claude_to_openai(body: &mut Value, decode_custom_bridge: bool) -> Result<(), String> {
     let bridge_context = request_scoped_tool_bridge_context_from_body(body);
-    let prompt_cache_controls = validated_anthropic_extra_body_openai_prompt_cache_controls(body)?;
+    let openai_controls = validated_anthropic_extra_body_openai_controls(body)?;
     let mut result = serde_json::json!({
         "model": body.get("model").cloned().unwrap_or(serde_json::Value::Null),
         "messages": [],
@@ -1450,7 +1529,7 @@ fn claude_to_openai(body: &mut Value, preserve_reasoning_replay: bool) -> Result
     if let Some(tool_choice) = body.get("tool_choice").filter(|value| !value.is_null()) {
         if let Some((mapped_tool_choice, disable_parallel)) = anthropic_tool_choice_to_openai(
             tool_choice,
-            preserve_reasoning_replay,
+            decode_custom_bridge,
             bridge_context.as_ref(),
         )? {
             result["tool_choice"] = mapped_tool_choice;
@@ -1471,37 +1550,11 @@ fn claude_to_openai(body: &mut Value, preserve_reasoning_replay: bool) -> Result
     }
     if let Some(messages) = body.get("messages").and_then(Value::as_array) {
         for msg in messages {
-            let thinking_blocks = msg
-                .get("content")
-                .and_then(Value::as_array)
-                .map(|blocks| {
-                    blocks
-                        .iter()
-                        .filter(|block| {
-                            block.get("type").and_then(Value::as_str) == Some("thinking")
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let preserve_message_replay = preserve_reasoning_replay
-                && msg.get("role").and_then(Value::as_str) == Some("assistant")
-                && anthropic_blocks_have_nonportable_thinking_provenance(&thinking_blocks);
-            if let Some(mut openai_msg) = convert_claude_message_to_openai_impl(
+            if let Some(openai_msg) = convert_claude_message_to_openai_impl(
                 msg,
-                preserve_reasoning_replay,
+                decode_custom_bridge,
                 bridge_context.as_ref(),
             )? {
-                if preserve_message_replay {
-                    for translated_msg in openai_msg.iter_mut() {
-                        if translated_msg.get("role").and_then(Value::as_str) == Some("assistant") {
-                            append_openai_message_anthropic_reasoning_replay_blocks(
-                                translated_msg,
-                                thinking_blocks.clone(),
-                            );
-                        }
-                    }
-                }
                 for m in openai_msg {
                     result["messages"].as_array_mut().unwrap().push(m);
                 }
@@ -1516,7 +1569,7 @@ fn claude_to_openai(body: &mut Value, preserve_reasoning_replay: bool) -> Result
                 continue;
             };
             validate_public_tool_name_not_reserved(name)?;
-            if preserve_reasoning_replay
+            if decode_custom_bridge
                 && request_scoped_openai_custom_bridge_expects_canonical_input_wrapper(
                     bridge_context.as_ref(),
                     name,
@@ -1547,10 +1600,15 @@ fn claude_to_openai(body: &mut Value, preserve_reasoning_replay: bool) -> Result
     if let Some(bridge_context) = bridge_context.as_ref() {
         insert_request_scoped_tool_bridge_context(&mut result, bridge_context);
     }
-    if let Some(prompt_cache_controls) = prompt_cache_controls {
-        result["prompt_cache_key"] = prompt_cache_controls.prompt_cache_key;
-        if let Some(prompt_cache_retention) = prompt_cache_controls.prompt_cache_retention {
+    if let Some(openai_controls) = openai_controls {
+        if let Some(prompt_cache_key) = openai_controls.prompt_cache_key {
+            result["prompt_cache_key"] = prompt_cache_key;
+        }
+        if let Some(prompt_cache_retention) = openai_controls.prompt_cache_retention {
             result["prompt_cache_retention"] = prompt_cache_retention;
+        }
+        if let Some(reasoning_effort) = openai_controls.reasoning_effort {
+            result["reasoning_effort"] = reasoning_effort;
         }
     }
     *body = result;

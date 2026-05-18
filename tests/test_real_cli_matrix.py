@@ -191,6 +191,20 @@ def make_fixture(
     )
 
 
+def make_expected_fail_closed_fixture(module):
+    return make_fixture(
+        module,
+        fixture_id="negative_provider_state_resource",
+        verifier={
+            "type": "expected_fail_closed",
+            "category": "provider_owned_state_resource",
+            "reason": "provider-owned state/resource must fail closed",
+            "required_all": ["provider-owned state"],
+            "required_any": ["conversation", "previous_response_id"],
+        },
+    )
+
+
 def make_context(module, client_name: str):
     return module.VerifierContext(client_name=client_name)
 
@@ -671,6 +685,10 @@ class RealCliMatrixTests(unittest.TestCase):
             "provider-live-model",
         )
         self.assertEqual(
+            targets["preset-openai-responses-compatible"].upstream_model,
+            "provider-live-model",
+        )
+        self.assertEqual(
             targets["preset-anthropic-compatible"].upstream_model,
             "provider-live-model",
         )
@@ -693,6 +711,10 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertEqual(
             targets["preset-openai-compatible"].upstream_format,
             "openai-completion",
+        )
+        self.assertEqual(
+            targets["preset-openai-responses-compatible"].upstream_format,
+            "openai-responses",
         )
 
         qwen_targets = {
@@ -857,11 +879,16 @@ class RealCliMatrixTests(unittest.TestCase):
 
         self.assertIn("PRESET-OPENAI-COMPATIBLE:", rendered)
         self.assertIn("api_root: https://openai-compatible.example/v1", rendered)
+        self.assertIn("PRESET-OPENAI-RESPONSES-COMPATIBLE:", rendered)
         self.assertIn("PRESET-ANTHROPIC-COMPATIBLE:", rendered)
         self.assertIn("api_root: https://anthropic-compatible.example/v1", rendered)
-        self.assertEqual(rendered.count("provider_key_env: PRESET_ENDPOINT_API_KEY"), 2)
+        self.assertEqual(rendered.count("provider_key_env: PRESET_ENDPOINT_API_KEY"), 3)
         self.assertIn(
             'preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:provider-configured-model"',
+            rendered,
+        )
+        self.assertIn(
+            'preset-openai-responses-compatible: "PRESET-OPENAI-RESPONSES-COMPATIBLE:provider-configured-model"',
             rendered,
         )
         self.assertIn(
@@ -869,6 +896,8 @@ class RealCliMatrixTests(unittest.TestCase):
             rendered,
         )
         self.assertNotIn("proxy-only-secret", rendered)
+        self.assertNotIn("PRESET_ENDPOINT_MODEL", rendered)
+        self.assertNotIn("api_root: PRESET_", rendered)
         self.assertNotIn("MINIMAX", rendered.upper())
 
     def test_build_runtime_config_fails_fast_when_preset_endpoint_env_is_missing(self):
@@ -2049,7 +2078,34 @@ class RealCliMatrixTests(unittest.TestCase):
             [15, module.DEFAULT_POST_KILL_WAIT_SECS],
         )
 
-    def test_expected_fail_closed_classifies_claude_by_upstream_format(self):
+    def test_expected_fail_closed_keeps_claude_openai_family_targets_positive(self):
+        module = load_module()
+        for target_name, upstream_name, upstream_format in (
+            (
+                "preset-openai-compatible",
+                "PRESET-OPENAI-COMPATIBLE",
+                "openai-completion",
+            ),
+            (
+                "preset-openai-responses-compatible",
+                "PRESET-OPENAI-RESPONSES-COMPATIBLE",
+                "openai-responses",
+            ),
+        ):
+            with self.subTest(target_name=target_name):
+                case = make_case(
+                    module,
+                    client_name="claude",
+                    target=make_target(
+                        module,
+                        name=target_name,
+                        upstream_name=upstream_name,
+                        upstream_format=upstream_format,
+                    ),
+                )
+                self.assertIsNone(module.expected_fail_closed_for_case(case))
+
+    def test_expected_fail_closed_uses_negative_fixture_semantics(self):
         module = load_module()
         case = make_case(
             module,
@@ -2060,54 +2116,25 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
                 upstream_format="openai-completion",
             ),
+            fixture=make_expected_fail_closed_fixture(module),
         )
 
         expectation = module.expected_fail_closed_for_case(case)
 
         self.assertIsNotNone(expectation)
-        self.assertEqual(expectation.category, "anthropic_native_controls")
+        self.assertEqual(expectation.category, "provider_owned_state_resource")
         self.assertTrue(
             module.expected_fail_closed_error_matches(
                 expectation,
-                "Anthropic request controls thinking, context_management require native provider semantics",
+                "provider-owned state conversation cannot be expanded",
             )
         )
         self.assertFalse(
             module.expected_fail_closed_error_matches(
                 expectation,
-                "HTTP 500 from upstream",
+                "Anthropic request controls thinking, context_management rejected",
             )
         )
-
-        for upstream_format in ("anthropic", "claude"):
-            with self.subTest(native_alias=upstream_format):
-                native_case = make_case(
-                    module,
-                    client_name="claude",
-                    target=make_target(module, upstream_format=upstream_format),
-                )
-                self.assertIsNone(module.expected_fail_closed_for_case(native_case))
-
-        for upstream_format in ("openai", "chat"):
-            with self.subTest(non_native_alias=upstream_format):
-                alias_case = make_case(
-                    module,
-                    client_name="claude",
-                    target=make_target(module, upstream_format=upstream_format),
-                )
-                alias_expectation = module.expected_fail_closed_for_case(alias_case)
-                self.assertIsNotNone(alias_expectation)
-                self.assertEqual(
-                    alias_expectation.category,
-                    "anthropic_native_controls",
-                )
-
-        native_case = make_case(
-            module,
-            client_name="claude",
-            target=make_target(module, upstream_format="anthropic"),
-        )
-        self.assertIsNone(module.expected_fail_closed_for_case(native_case))
 
     def test_classify_target_health_skips_optional_qwen_probe_failures(self):
         module = load_module()
@@ -2955,7 +2982,7 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assert_path_uses_opaque_case_token(observed["cwd"], case)
         self.assert_path_uses_opaque_case_token(observed["home"], case)
 
-    def test_run_matrix_case_classifies_expected_fail_closed_nonzero_without_failure(self):
+    def test_run_matrix_case_counts_claude_openai_controls_error_as_positive_failure(self):
         module = load_module()
         case = make_case(
             module,
@@ -2991,8 +3018,49 @@ class RealCliMatrixTests(unittest.TestCase):
                     {"PATH": os.environ.get("PATH", "")},
                 )
 
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("expected_fail_closed", result)
+        self.assertIn("exit code 1", result["message"])
+        self.assertEqual(module.summarize_results([result]), (0, 1, 0, 0))
+
+    def test_run_matrix_case_classifies_negative_fixture_fail_closed_nonzero_without_failure(self):
+        module = load_module()
+        case = make_case(
+            module,
+            client_name="claude",
+            target=make_target(
+                module,
+                name="preset-openai-compatible",
+                upstream_name="PRESET-OPENAI-COMPATIBLE",
+                upstream_format="openai-completion",
+            ),
+            fixture=make_expected_fail_closed_fixture(module),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_dir = pathlib.Path(temp_dir)
+            with mock.patch.object(
+                module.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    ["claude"],
+                    1,
+                    stdout="",
+                    stderr=(
+                        "provider-owned state conversation cannot be expanded "
+                        "and must fail closed"
+                    ),
+                ),
+            ):
+                result = module.run_matrix_case(
+                    case,
+                    "http://127.0.0.1:18888",
+                    report_dir,
+                    {"PATH": os.environ.get("PATH", "")},
+                )
+
         self.assertEqual(result["status"], "expected_fail_closed")
-        self.assertEqual(result["expected_fail_closed"], "anthropic_native_controls")
+        self.assertEqual(result["expected_fail_closed"], "provider_owned_state_resource")
         self.assertIn("exit code 1", result["message"])
         self.assertEqual(module.summarize_results([result]), (0, 0, 0, 1))
 
@@ -3007,7 +3075,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
                 upstream_format="openai-completion",
             ),
-            fixture=make_fixture(module),
+            fixture=make_expected_fail_closed_fixture(module),
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3030,9 +3098,34 @@ class RealCliMatrixTests(unittest.TestCase):
                 )
 
         self.assertEqual(result["status"], "unexpected_success")
-        self.assertEqual(result["expected_fail_closed"], "anthropic_native_controls")
+        self.assertEqual(result["expected_fail_closed"], "provider_owned_state_resource")
         self.assertIn("expected fail-closed", result["message"])
         self.assertEqual(module.summarize_results([result]), (0, 1, 0, 0))
+
+    def test_summarize_results_treats_positive_expected_fail_closed_as_failure(self):
+        module = load_module()
+        positive_misclassified = {
+            "case_id": "claude__preset-openai-compatible__smoke_pong",
+            "client": "claude",
+            "target": "preset-openai-compatible",
+            "fixture": "smoke_pong",
+            "status": module.EXPECTED_FAIL_CLOSED_STATUS,
+            "message": "legacy blanket fail-closed",
+        }
+        negative_expected = {
+            "case_id": "claude__preset-openai-compatible__negative_provider_state_resource",
+            "client": "claude",
+            "target": "preset-openai-compatible",
+            "fixture": "negative_provider_state_resource",
+            "status": module.EXPECTED_FAIL_CLOSED_STATUS,
+            "expected_outcome": "negative_fail_closed",
+            "message": "fixture-declared fail-closed",
+        }
+
+        self.assertEqual(
+            module.summarize_results([positive_misclassified, negative_expected]),
+            (0, 1, 0, 1),
+        )
 
     def test_wait_for_health_rejects_old_proxy_health_without_owned_listening_proof(self):
         module = load_module()

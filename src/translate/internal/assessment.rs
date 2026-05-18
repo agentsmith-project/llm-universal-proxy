@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -24,9 +24,7 @@ use super::models::{
     SemanticToolKind, SharedControlProfile, TranslationAssessment,
 };
 use super::openai_family::{
-    openai_extra_body_google_cached_content,
-    validated_anthropic_extra_body_openai_prompt_cache_controls,
-    validated_openai_extra_body_anthropic_cache_control,
+    openai_extra_body_google_cached_content, validated_openai_extra_body_anthropic_cache_control,
 };
 use super::openai_responses::{
     responses_compaction_summary_text, responses_input_item_is_compaction,
@@ -40,9 +38,8 @@ use super::tools::{
 };
 use super::{
     anthropic_nonportable_content_block_message,
-    anthropic_request_has_nonportable_thinking_provenance,
     anthropic_request_nonportable_tool_definition_message,
-    anthropic_request_tool_result_order_message,
+    anthropic_request_tool_result_order_message, validate_anthropic_extra_body_openai_controls,
 };
 
 fn openai_family_format(format: UpstreamFormat) -> bool {
@@ -129,7 +126,7 @@ fn assess_anthropic_prompt_cache_extensions(
         return;
     }
 
-    if let Err(message) = validated_anthropic_extra_body_openai_prompt_cache_controls(body) {
+    if let Err(message) = validate_anthropic_extra_body_openai_controls(body) {
         assessment.reject(message);
     }
 }
@@ -1625,16 +1622,444 @@ pub(super) fn anthropic_warning_only_request_controls_for_translate(
     controls
 }
 
-pub(super) fn anthropic_nonportable_request_controls_for_translate(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnthropicRequestControlDisposition {
+    WarnDrop,
+    FailClosed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AnthropicRequestControlAssessment {
+    field: &'static str,
+    disposition: AnthropicRequestControlDisposition,
+    reason: String,
+}
+
+fn anthropic_top_level_request_control_assessments(
     body: &Value,
-) -> Vec<&'static str> {
-    let mut controls = Vec::new();
-    for field in ["container", "thinking", "context_management"] {
-        if body.get(field).is_some() {
-            controls.push(field);
+    target_label: &str,
+) -> Vec<AnthropicRequestControlAssessment> {
+    let has_complete_visible_history = anthropic_request_has_complete_visible_history(body);
+    let mut assessments = Vec::new();
+
+    if body.get("thinking").is_some() {
+        assessments.push(if has_complete_visible_history {
+            AnthropicRequestControlAssessment {
+                field: "thinking",
+                disposition: AnthropicRequestControlDisposition::WarnDrop,
+                reason:
+                    "top-level Anthropic thinking is a provider-specific capability hint"
+                        .to_string(),
+            }
+        } else {
+            AnthropicRequestControlAssessment {
+                field: "thinking",
+                disposition: AnthropicRequestControlDisposition::FailClosed,
+                reason: format!(
+                    "top-level Anthropic thinking requires complete visible history before translation to {target_label}"
+                ),
+            }
+        });
+    }
+
+    if let Some(context_management) = body.get("context_management") {
+        assessments.push(if anthropic_context_management_requires_native_state(context_management) {
+            AnthropicRequestControlAssessment {
+                field: "context_management",
+                disposition: AnthropicRequestControlDisposition::FailClosed,
+                reason: format!(
+                    "Anthropic context_management depends on provider-owned state/resource semantics and cannot be translated to {target_label}"
+                ),
+            }
+        } else if has_complete_visible_history {
+            AnthropicRequestControlAssessment {
+                field: "context_management",
+                disposition: AnthropicRequestControlDisposition::WarnDrop,
+                reason:
+                    "Anthropic context_management is a request-local context editing hint"
+                        .to_string(),
+            }
+        } else {
+            AnthropicRequestControlAssessment {
+                field: "context_management",
+                disposition: AnthropicRequestControlDisposition::FailClosed,
+                reason: format!(
+                    "Anthropic context_management requires complete visible history before translation to {target_label}"
+                ),
+            }
+        });
+    }
+
+    if let Some(container) = body.get("container") {
+        assessments.push(if anthropic_container_requires_provider_runtime(container) {
+            AnthropicRequestControlAssessment {
+                field: "container",
+                disposition: AnthropicRequestControlDisposition::FailClosed,
+                reason: format!(
+                    "Anthropic container depends on provider-owned runtime/state/resource semantics and cannot be translated to {target_label}"
+                ),
+            }
+        } else if has_complete_visible_history {
+            AnthropicRequestControlAssessment {
+                field: "container",
+                disposition: AnthropicRequestControlDisposition::WarnDrop,
+                reason: "Anthropic container is a request-local hint without portable OpenAI-family semantics"
+                    .to_string(),
+            }
+        } else {
+            AnthropicRequestControlAssessment {
+                field: "container",
+                disposition: AnthropicRequestControlDisposition::FailClosed,
+                reason: format!(
+                    "Anthropic container hints require complete visible history before translation to {target_label}"
+                ),
+            }
+        });
+    }
+
+    assessments
+}
+
+fn anthropic_request_has_complete_visible_history(body: &Value) -> bool {
+    let Some(messages) = body.get("messages").and_then(Value::as_array) else {
+        return false;
+    };
+    if messages.is_empty() {
+        return false;
+    }
+
+    if anthropic_content_has_provider_owned_state_hint(body.get("system")) {
+        return false;
+    }
+
+    let mut has_visible_user_context =
+        anthropic_content_has_visible_user_context(body.get("system"));
+    let mut pending_tool_use_ids = BTreeMap::new();
+
+    for message in messages {
+        let role = message.get("role").and_then(Value::as_str);
+        let content = message.get("content");
+
+        if anthropic_content_has_provider_owned_state_hint(content) {
+            return false;
+        }
+
+        if role == Some("user") && anthropic_content_has_visible_user_context(content) {
+            has_visible_user_context = true;
+        }
+
+        let mut tool_history_is_structural = true;
+        anthropic_visit_content_blocks(content, |block| {
+            match block.get("type").and_then(Value::as_str) {
+                Some("tool_use" | "server_tool_use") if role == Some("assistant") => {
+                    let Some(tool_use_id) = block
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|tool_use_id| !tool_use_id.is_empty())
+                    else {
+                        tool_history_is_structural = false;
+                        return;
+                    };
+                    *pending_tool_use_ids
+                        .entry(tool_use_id.to_string())
+                        .or_insert(0usize) += 1;
+                }
+                Some("tool_result") => {
+                    let Some(tool_use_id) = block
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|tool_use_id| !tool_use_id.is_empty())
+                    else {
+                        tool_history_is_structural = false;
+                        return;
+                    };
+                    match pending_tool_use_ids.get_mut(tool_use_id) {
+                        Some(count) if *count > 1 => {
+                            *count -= 1;
+                        }
+                        Some(_) => {
+                            pending_tool_use_ids.remove(tool_use_id);
+                        }
+                        None => {
+                            tool_history_is_structural = false;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        });
+        if !tool_history_is_structural {
+            return false;
         }
     }
-    controls
+
+    has_visible_user_context && pending_tool_use_ids.is_empty()
+}
+
+fn anthropic_content_has_visible_user_context(content: Option<&Value>) -> bool {
+    match content {
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Array(blocks)) => blocks.iter().any(anthropic_block_has_visible_user_context),
+        Some(Value::Object(_)) => content.is_some_and(anthropic_block_has_visible_user_context),
+        _ => false,
+    }
+}
+
+fn anthropic_block_has_visible_user_context(block: &Value) -> bool {
+    match block.get("type").and_then(Value::as_str) {
+        Some("text") => block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty()),
+        Some("image") => block.get("source").is_some(),
+        _ => false,
+    }
+}
+
+fn anthropic_content_has_provider_owned_state_hint(content: Option<&Value>) -> bool {
+    let mut has_provider_state_hint = false;
+    anthropic_visit_content_blocks(content, |block| {
+        if anthropic_block_has_provider_owned_state_hint(block) {
+            has_provider_state_hint = true;
+        }
+    });
+    has_provider_state_hint
+}
+
+fn anthropic_block_has_provider_owned_state_hint(block: &Value) -> bool {
+    match block.get("type").and_then(Value::as_str) {
+        Some("redacted_thinking" | "encrypted_thinking") => true,
+        Some("thinking") => {
+            let has_visible_thinking = block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|thinking| !thinking.trim().is_empty());
+            !has_visible_thinking
+                || block.get("signature").is_some()
+                || block.get("data").is_some()
+                || block.get("encrypted_content").is_some()
+        }
+        _ => false,
+    }
+}
+
+fn anthropic_visit_content_blocks(content: Option<&Value>, mut visit: impl FnMut(&Value)) {
+    match content {
+        Some(Value::Array(blocks)) => {
+            for block in blocks {
+                visit(block);
+            }
+        }
+        Some(Value::Object(_)) => {
+            if let Some(block) = content {
+                visit(block);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn anthropic_container_requires_provider_runtime(container: &Value) -> bool {
+    match container {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            if value.is_null() || value.as_bool() == Some(false) {
+                return false;
+            }
+            anthropic_container_key_requires_provider_runtime(key)
+                || anthropic_container_requires_provider_runtime(value)
+        }),
+        Value::Array(items) => items
+            .iter()
+            .any(anthropic_container_requires_provider_runtime),
+        Value::String(value) => anthropic_container_string_requires_provider_runtime(value),
+        _ => false,
+    }
+}
+
+fn anthropic_container_key_requires_provider_runtime(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace('-', "_");
+    normalized == "id"
+        || normalized == "handle"
+        || normalized.contains("container")
+        || normalized.contains("skill")
+        || normalized.contains("code_execution")
+        || normalized.contains("mcp")
+        || normalized.contains("server_tool")
+        || normalized.contains("resource")
+        || normalized.contains("runtime")
+        || normalized.contains("opaque")
+        || normalized.contains("encrypted")
+        || normalized.contains("state")
+}
+
+fn anthropic_container_string_requires_provider_runtime(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase().replace('-', "_");
+    normalized.contains("container")
+        || normalized.contains("skill")
+        || normalized.contains("code_execution")
+        || normalized.contains("mcp")
+        || normalized.contains("server_tool")
+        || normalized.contains("resource")
+        || normalized.contains("runtime")
+        || normalized.contains("opaque")
+        || normalized.contains("encrypted")
+        || normalized.contains("state")
+}
+
+fn anthropic_context_management_requires_native_state(context_management: &Value) -> bool {
+    match context_management {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            if value.is_null() || value.as_bool() == Some(false) {
+                return false;
+            }
+            anthropic_context_management_key_requires_native_state(key)
+                || anthropic_context_management_requires_native_state(value)
+        }),
+        Value::Array(items) => items
+            .iter()
+            .any(anthropic_context_management_requires_native_state),
+        Value::String(value) => anthropic_context_management_string_requires_native_state(value),
+        _ => false,
+    }
+}
+
+fn anthropic_context_management_key_requires_native_state(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace('-', "_");
+    normalized == "id"
+        || normalized == "handle"
+        || normalized.contains("container")
+        || normalized.contains("conversation")
+        || normalized.contains("previous_response")
+        || normalized.contains("compact")
+        || normalized.contains("compaction")
+        || normalized.contains("resource")
+        || normalized.contains("hosted")
+        || normalized.contains("prompt")
+        || normalized.contains("opaque")
+        || normalized.contains("encrypted")
+        || normalized.contains("state")
+}
+
+fn anthropic_context_management_string_requires_native_state(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase().replace('-', "_");
+    normalized.contains("container")
+        || normalized.contains("conversation")
+        || normalized.contains("previous_response")
+        || normalized.contains("compact")
+        || normalized.contains("compaction")
+        || normalized.contains("resource")
+        || normalized.contains("hosted")
+        || normalized.contains("prompt")
+        || normalized.contains("opaque")
+        || normalized.contains("encrypted")
+        || normalized.contains("state")
+}
+
+fn anthropic_request_visible_thinking_carrier_fields(body: &Value) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    anthropic_collect_thinking_carrier_fields(body.get("system"), &mut fields);
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        for message in messages {
+            anthropic_collect_thinking_carrier_fields(message.get("content"), &mut fields);
+        }
+    }
+    fields.sort_unstable();
+    fields.dedup();
+    fields
+}
+
+fn anthropic_collect_thinking_carrier_fields(
+    content: Option<&Value>,
+    fields: &mut Vec<&'static str>,
+) {
+    match content {
+        Some(Value::Array(blocks)) => {
+            for block in blocks {
+                anthropic_collect_block_thinking_carrier_fields(block, fields);
+            }
+        }
+        Some(Value::Object(_)) => {
+            if let Some(block) = content {
+                anthropic_collect_block_thinking_carrier_fields(block, fields);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn anthropic_collect_block_thinking_carrier_fields(block: &Value, fields: &mut Vec<&'static str>) {
+    if block.get("type").and_then(Value::as_str) != Some("thinking") {
+        return;
+    }
+    if !block
+        .get("thinking")
+        .and_then(Value::as_str)
+        .is_some_and(|thinking| !thinking.trim().is_empty())
+    {
+        return;
+    }
+    if block.get("signature").is_some() {
+        fields.push("signature");
+    }
+    if block.get("encrypted_content").is_some() {
+        fields.push("encrypted_content");
+    }
+    if block.get("redacted_content").is_some() || block.get("data").is_some() {
+        fields.push("redacted_content");
+    }
+}
+
+fn anthropic_opaque_thinking_carrier_message(body: &Value, target_label: &str) -> Option<String> {
+    anthropic_opaque_thinking_carrier_in_content(body.get("system"), target_label).or_else(|| {
+        body.get("messages")
+            .and_then(Value::as_array)
+            .and_then(|messages| {
+                messages.iter().find_map(|message| {
+                    anthropic_opaque_thinking_carrier_in_content(
+                        message.get("content"),
+                        target_label,
+                    )
+                })
+            })
+    })
+}
+
+fn anthropic_opaque_thinking_carrier_in_content(
+    content: Option<&Value>,
+    target_label: &str,
+) -> Option<String> {
+    match content {
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .find_map(|block| anthropic_opaque_thinking_carrier_in_block(block, target_label)),
+        Some(Value::Object(_)) => content
+            .and_then(|block| anthropic_opaque_thinking_carrier_in_block(block, target_label)),
+        _ => None,
+    }
+}
+
+fn anthropic_opaque_thinking_carrier_in_block(block: &Value, target_label: &str) -> Option<String> {
+    match block.get("type").and_then(Value::as_str) {
+        Some("thinking") => {
+            if block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|thinking| !thinking.trim().is_empty())
+            {
+                None
+            } else {
+                Some(format!(
+                    "Anthropic opaque/redacted/encrypted thinking carriers without visible text require native Anthropic semantics and cannot be faithfully translated to {target_label}"
+                ))
+            }
+        }
+        Some("redacted_thinking" | "encrypted_thinking") => Some(format!(
+            "Anthropic opaque/redacted/encrypted thinking carriers without visible text require native Anthropic semantics and cannot be faithfully translated to {target_label}"
+        )),
+        _ => None,
+    }
 }
 
 pub(crate) fn assess_request_translation(
@@ -1801,16 +2226,45 @@ pub(crate) fn assess_request_translation(
     }
 
     if client_format == UpstreamFormat::Anthropic && upstream_format != UpstreamFormat::Anthropic {
-        let reject_controls = anthropic_nonportable_request_controls_for_translate(body);
+        let target_label = translation_target_label(upstream_format);
+        let top_level_control_assessments =
+            anthropic_top_level_request_control_assessments(body, target_label);
+        let reject_controls = top_level_control_assessments
+            .iter()
+            .filter(|assessment| {
+                assessment.disposition == AnthropicRequestControlDisposition::FailClosed
+            })
+            .collect::<Vec<_>>();
         if !reject_controls.is_empty() {
             let quoted = reject_controls
+                .iter()
+                .map(|assessment| format!("`{}`", assessment.field))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let reasons = reject_controls
+                .iter()
+                .map(|assessment| assessment.reason.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            assessment.reject(format!(
+                "Anthropic request controls {quoted} cannot be faithfully translated to {target_label}: {reasons}"
+            ));
+        }
+        let dropped_hint_controls = top_level_control_assessments
+            .iter()
+            .filter(|assessment| {
+                assessment.disposition == AnthropicRequestControlDisposition::WarnDrop
+            })
+            .map(|assessment| assessment.field)
+            .collect::<Vec<_>>();
+        if !dropped_hint_controls.is_empty() {
+            let quoted = dropped_hint_controls
                 .iter()
                 .map(|field| format!("`{field}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            assessment.reject(format!(
-                "Anthropic request controls {quoted} require native provider semantics and cannot be faithfully translated to {}",
-                translation_target_label(upstream_format)
+            assessment.warning(format!(
+                "Anthropic request controls {quoted} are not portable to {target_label} with complete visible history and will be dropped"
             ));
         }
         let warning_controls = anthropic_warning_only_request_controls_for_translate(body);
@@ -1822,31 +2276,32 @@ pub(crate) fn assess_request_translation(
                 .join(", ");
             assessment.warning(format!(
                 "Anthropic request controls {quoted} are not portable to {} and will be dropped",
-                translation_target_label(upstream_format)
+                target_label
             ));
         }
-        if anthropic_request_has_nonportable_thinking_provenance(body) {
-            assessment.reject(format!(
-                "Anthropic thinking content blocks with `signature` or omitted/non-string `thinking` require native Anthropic semantics and cannot be faithfully translated to {}",
-                translation_target_label(upstream_format)
+        if let Some(message) = anthropic_opaque_thinking_carrier_message(body, target_label) {
+            assessment.reject(message);
+        }
+        let dropped_thinking_carriers = anthropic_request_visible_thinking_carrier_fields(body);
+        if !dropped_thinking_carriers.is_empty() {
+            let quoted = dropped_thinking_carriers
+                .iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            assessment.warning(format!(
+                "Anthropic visible thinking carrier fields {quoted} cannot be translated to {target_label}; visible thinking text will be preserved and carrier fields dropped"
             ));
         }
-        if let Some(message) = anthropic_request_nonportable_tool_definition_message(
-            body,
-            translation_target_label(upstream_format),
-        ) {
+        if let Some(message) =
+            anthropic_request_nonportable_tool_definition_message(body, target_label)
+        {
             assessment.reject(message);
         }
-        if let Some(message) = anthropic_request_tool_result_order_message(
-            body,
-            translation_target_label(upstream_format),
-        ) {
+        if let Some(message) = anthropic_request_tool_result_order_message(body, target_label) {
             assessment.reject(message);
         }
-        if let Some(message) = anthropic_nonportable_content_block_message(
-            body,
-            translation_target_label(upstream_format),
-        ) {
+        if let Some(message) = anthropic_nonportable_content_block_message(body, target_label) {
             assessment.reject(message);
         }
     }

@@ -110,6 +110,7 @@ class DefaultMatrixConfigSourceContractTests(unittest.TestCase):
                 grep -Fq "api_root: https://openai-compatible.example/v1" "$runtime_config"
                 grep -Fq "api_root: https://anthropic-compatible.example/v1" "$runtime_config"
                 grep -Fq '"PRESET-OPENAI-COMPATIBLE:provider-configured-model"' "$runtime_config"
+                grep -Fq '"PRESET-OPENAI-RESPONSES-COMPATIBLE:provider-configured-model"' "$runtime_config"
                 grep -Fq '"PRESET-ANTHROPIC-COMPATIBLE:provider-configured-model"' "$runtime_config"
                 ! grep -Fq "api_root: PRESET_" "$runtime_config"
                 ! grep -Fq "PRESET_ENDPOINT_MODEL" "$runtime_config"
@@ -390,8 +391,10 @@ class DefaultMatrixConfigSourceContractTests(unittest.TestCase):
 
         self.assertIn("provider_key_env: PRESET_ENDPOINT_API_KEY", config_text)
         self.assertIn("PRESET-OPENAI-COMPATIBLE", config_text)
+        self.assertIn("PRESET-OPENAI-RESPONSES-COMPATIBLE", config_text)
         self.assertIn("PRESET-ANTHROPIC-COMPATIBLE", config_text)
         self.assertIn("preset-openai-compatible", config_text)
+        self.assertIn("preset-openai-responses-compatible", config_text)
         self.assertIn("preset-anthropic-compatible", config_text)
         self.assertNotIn("MINIMAX", config_text.upper())
         self.assertNotIn("minimax-openai", config_text)

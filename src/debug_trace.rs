@@ -1,21 +1,22 @@
-use std::fs::{create_dir_all, OpenOptions};
+use std::fs::{OpenOptions, create_dir_all};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use futures_util::Stream;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::config::DebugTraceConfig;
 use crate::formats::UpstreamFormat;
 use crate::prompt_cache_controls::{
-    analyze_provider_prompt_cache_request_control, ProviderPromptCacheRequestControlComponent,
+    ProviderPromptCacheRequestControlComponent, analyze_provider_prompt_cache_request_control,
+    synthesized_prompt_cache_key_debug_fingerprint, synthesized_prompt_cache_key_present,
 };
 use crate::request_processing::{PromptCacheRequestControl, RequestProcessingInfo};
 use crate::stream_observation::StreamObservationTransform;
@@ -881,6 +882,21 @@ fn prompt_cache_request_control_detail(
         ctx.upstream_format,
         original_body,
     );
+    if disposition == PromptCacheRequestControl::Synthesized {
+        let mut detail =
+            prompt_cache_synthesized_detail_value(analysis.target_provider(), upstream_body);
+        let components = analysis
+            .components()
+            .iter()
+            .filter_map(|component| prompt_cache_component_value(component, upstream_body))
+            .collect::<Vec<_>>();
+        if !components.is_empty() {
+            if let Some(object) = detail.as_object_mut() {
+                object.insert("components".to_string(), Value::Array(components));
+            }
+        }
+        return Some(detail);
+    }
     let primary_component = analysis
         .components()
         .iter()
@@ -912,6 +928,49 @@ fn prompt_cache_request_control_detail(
         }
     }
     Some(detail)
+}
+
+fn prompt_cache_synthesized_detail_value(
+    target_provider: &'static str,
+    upstream_body: &Value,
+) -> Value {
+    let mut detail = json!({
+        "target_provider": target_provider,
+        "disposition": PromptCacheRequestControl::Synthesized,
+        "synthesis_reason": "canonical_static_prefix_digest",
+        "source_fields": [],
+        "target_fields": synthesized_prompt_cache_target_fields(upstream_body),
+    });
+    if let Some(key_fingerprint) = synthesized_prompt_cache_trace_fingerprint(upstream_body) {
+        if let Some(object) = detail.as_object_mut() {
+            object.insert(
+                "key_fingerprint".to_string(),
+                Value::String(key_fingerprint),
+            );
+        }
+    }
+    detail
+}
+
+fn synthesized_prompt_cache_target_fields(upstream_body: &Value) -> Vec<&'static str> {
+    if synthesized_prompt_cache_trace_fingerprint(upstream_body).is_some() {
+        vec!["prompt_cache_key"]
+    } else {
+        Vec::new()
+    }
+}
+
+fn synthesized_prompt_cache_trace_fingerprint(upstream_body: &Value) -> Option<String> {
+    let key = upstream_body
+        .get("prompt_cache_key")
+        .and_then(Value::as_str)?;
+    if synthesized_prompt_cache_key_present(upstream_body) {
+        return Some(synthesized_prompt_cache_key_debug_fingerprint(key));
+    }
+    key.strip_prefix("[SYNTHESIZED:")
+        .and_then(|suffix| suffix.strip_suffix(']'))
+        .filter(|fingerprint| !fingerprint.is_empty())
+        .map(ToString::to_string)
 }
 
 fn prompt_cache_minimal_detail_value(
@@ -1794,8 +1853,10 @@ mod tests {
         assert!(reasoning.starts_with("reasoning tr"));
         assert!(reasoning.contains("chars"));
         assert!(tool_calls.len() <= 2);
-        assert!(tool_calls
-            .iter()
-            .any(|value| { value.get("type").and_then(Value::as_str) == Some("truncated") }));
+        assert!(
+            tool_calls
+                .iter()
+                .any(|value| { value.get("type").and_then(Value::as_str) == Some("truncated") })
+        );
     }
 }

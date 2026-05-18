@@ -102,8 +102,10 @@ PRESET_ENDPOINT_API_KEY_ENV = "PRESET_ENDPOINT_API_KEY"
 PRESET_OPENAI_ENDPOINT_BASE_URL_ENV = "PRESET_OPENAI_ENDPOINT_BASE_URL"
 PRESET_ANTHROPIC_ENDPOINT_BASE_URL_ENV = "PRESET_ANTHROPIC_ENDPOINT_BASE_URL"
 PRESET_OPENAI_COMPATIBLE_TARGET = "preset-openai-compatible"
+PRESET_OPENAI_RESPONSES_COMPATIBLE_TARGET = "preset-openai-responses-compatible"
 PRESET_ANTHROPIC_COMPATIBLE_TARGET = "preset-anthropic-compatible"
 PRESET_OPENAI_COMPATIBLE_UPSTREAM = "PRESET-OPENAI-COMPATIBLE"
+PRESET_OPENAI_RESPONSES_COMPATIBLE_UPSTREAM = "PRESET-OPENAI-RESPONSES-COMPATIBLE"
 PRESET_ANTHROPIC_COMPATIBLE_UPSTREAM = "PRESET-ANTHROPIC-COMPATIBLE"
 AUTH_MODE_ENV = "LLM_UNIVERSAL_PROXY_AUTH_MODE"
 PROXY_KEY_ENV = "LLM_UNIVERSAL_PROXY_KEY"
@@ -978,6 +980,11 @@ def _primary_target_specs() -> tuple[tuple[str, bool, str], ...]:
             True,
             PRESET_OPENAI_COMPATIBLE_UPSTREAM,
         ),
+        (
+            PRESET_OPENAI_RESPONSES_COMPATIBLE_TARGET,
+            True,
+            PRESET_OPENAI_RESPONSES_COMPATIBLE_UPSTREAM,
+        ),
     )
 
 
@@ -985,6 +992,10 @@ def _preset_upstream_base_url_envs() -> tuple[tuple[str, str], ...]:
     return (
         (
             PRESET_OPENAI_COMPATIBLE_UPSTREAM,
+            PRESET_OPENAI_ENDPOINT_BASE_URL_ENV,
+        ),
+        (
+            PRESET_OPENAI_RESPONSES_COMPATIBLE_UPSTREAM,
             PRESET_OPENAI_ENDPOINT_BASE_URL_ENV,
         ),
         (
@@ -1795,21 +1806,41 @@ def canonical_upstream_format(upstream_format: str | None) -> str | None:
     return CANONICAL_UPSTREAM_FORMAT_BY_ALIAS.get(normalized, normalized)
 
 
-def expected_fail_closed_for_case(case: MatrixCase) -> ExpectedFailClosed | None:
-    upstream_format = canonical_upstream_format(case.target.upstream_format)
-    if upstream_format is None:
+def _expected_fail_closed_marker_tuple(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        item.strip() for item in value if isinstance(item, str) and item.strip()
+    )
+
+
+def _expected_fail_closed_from_verifier(verifier: object) -> ExpectedFailClosed | None:
+    if not isinstance(verifier, dict):
         return None
-    if (
-        case.client_name == "claude"
-        and upstream_format != ANTHROPIC_NATIVE_UPSTREAM_FORMAT
-    ):
-        return ExpectedFailClosed(
-            category="anthropic_native_controls",
-            reason="Claude request controls require native Anthropic upstream format",
-            required_all=("Anthropic request controls",),
-            required_any=("thinking", "context_management"),
-        )
-    return None
+    if verifier.get("type") != EXPECTED_FAIL_CLOSED_STATUS:
+        return None
+    category = verifier.get("category")
+    if not isinstance(category, str) or not category.strip():
+        return None
+    reason = verifier.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        reason = category
+    required_all = _expected_fail_closed_marker_tuple(verifier.get("required_all"))
+    required_any = _expected_fail_closed_marker_tuple(verifier.get("required_any"))
+    if not required_all and not required_any:
+        return None
+    return ExpectedFailClosed(
+        category=category.strip(),
+        reason=reason.strip(),
+        required_all=required_all,
+        required_any=required_any,
+    )
+
+
+def expected_fail_closed_for_case(case: MatrixCase) -> ExpectedFailClosed | None:
+    return _expected_fail_closed_from_verifier(case.fixture.verifier)
 
 
 def _contains_casefold(text: str, needle: str) -> bool:
@@ -2162,6 +2193,7 @@ def prepare_report_dir(
 
 
 def render_summary_markdown(summary: dict[str, object], results: list[dict[str, object]]) -> str:
+    include_expected_outcome = any("expected_outcome" in result for result in results)
     lines = [
         "# CLI Matrix Report",
         "",
@@ -2172,13 +2204,32 @@ def render_summary_markdown(summary: dict[str, object], results: list[dict[str, 
         f"- Expected Fail-Closed: {summary.get('expected_fail_closed', 0)}",
         f"- Skipped: {summary.get('skip', 0)}",
         "",
-        "| Case | Status | Message |",
-        "| --- | --- | --- |",
     ]
-    for result in results:
-        lines.append(
-            f"| {result['case_id']} | {result['status']} | {result.get('message', '')} |"
+    if include_expected_outcome:
+        lines.extend(
+            [
+                "| Case | Status | Expected Outcome | Message |",
+                "| --- | --- | --- | --- |",
+            ]
         )
+    else:
+        lines.extend(
+            [
+                "| Case | Status | Message |",
+                "| --- | --- | --- |",
+            ]
+        )
+    for result in results:
+        if include_expected_outcome:
+            lines.append(
+                f"| {result['case_id']} | {result['status']} | "
+                f"{result.get('expected_outcome', 'positive_usable')} | "
+                f"{result.get('message', '')} |"
+            )
+        else:
+            lines.append(
+                f"| {result['case_id']} | {result['status']} | {result.get('message', '')} |"
+            )
     lines.append("")
     return "\n".join(lines)
 
@@ -5455,6 +5506,7 @@ def run_matrix_case(
         or build_case_diagnostics(case, trace_entries, workspace_diff_summary),
     }
     if expected_fail_closed is not None:
+        result["expected_outcome"] = "negative_fail_closed"
         result["expected_fail_closed"] = expected_fail_closed.category
     return result
 
@@ -5540,10 +5592,17 @@ def summarize_results(results: list[dict[str, object]]) -> tuple[int, int, int, 
         1
         for item in results
         if item["status"] in {"failed", UNEXPECTED_SUCCESS_STATUS}
+        or (
+            item["status"] == EXPECTED_FAIL_CLOSED_STATUS
+            and item.get("expected_outcome") != "negative_fail_closed"
+        )
     )
     skipped = sum(1 for item in results if item["status"] == "skipped")
     expected_fail_closed = sum(
-        1 for item in results if item["status"] == EXPECTED_FAIL_CLOSED_STATUS
+        1
+        for item in results
+        if item["status"] == EXPECTED_FAIL_CLOSED_STATUS
+        and item.get("expected_outcome") == "negative_fail_closed"
     )
     return passed, failed, skipped, expected_fail_closed
 
