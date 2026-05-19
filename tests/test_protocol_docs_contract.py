@@ -53,7 +53,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
         self.assertIn("Google OpenAI-compatible upstream", text)
-        self.assertIn("`format: openai-completion`", text)
+        self.assertIn("`format: openai-chat-completions`", text)
         self.assertIn(
             "provider surface facts, not llmup product grades",
             text,
@@ -524,7 +524,7 @@ class ProtocolDocsContractTests(unittest.TestCase):
                 self.assertNotIn(snippet, combined)
 
         self.assertIn("Google OpenAI-compatible Gemini", combined)
-        self.assertIn("`format: openai-completion`", combined)
+        self.assertIn("`format: openai-chat-completions`", combined)
 
     def test_active_protocol_baselines_do_not_model_native_gemini_as_active_surface(self):
         active_baselines = (

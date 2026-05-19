@@ -320,7 +320,7 @@ class DocsHomepageContractTests(unittest.TestCase):
             "`data_auth.proxy_key` protects the local proxy",
             "`client_provider_key`",
             "https://generativelanguage.googleapis.com/v1beta/openai",
-            "format: openai-completion",
+            "format: openai-chat-completions",
             "[Admin and Dynamic Config](./admin-dynamic-config.md)",
             "[Container Guide](./container.md)",
         ):

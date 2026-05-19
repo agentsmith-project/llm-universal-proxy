@@ -252,7 +252,7 @@ config:
   upstreams:
     - name: PRESET-OPENAI-COMPATIBLE
       api_root: https://openai-compatible.example/v1
-      fixed_upstream_format: openai-completion
+      fixed_upstream_format: openai-chat-completions
       # Env var name read by the proxy in proxy_key mode.
       provider_key_env: PRESET_ENDPOINT_API_KEY
       surface_defaults:
@@ -292,7 +292,7 @@ curl -fsS \
       {
         "name": "PRESET-OPENAI-COMPATIBLE",
         "api_root": "https://openai-compatible.example/v1",
-        "fixed_upstream_format": "openai-completion",
+        "fixed_upstream_format": "openai-chat-completions",
         "provider_key_env": "PRESET_ENDPOINT_API_KEY",
         "surface_defaults": {
           "modalities": {

@@ -9,6 +9,7 @@ use uuid::Uuid;
 use super::env_file::{read_env_file, EnvFile};
 use super::{env_path_or_default, home_dir_from_env};
 use crate::config::DataAuthMode;
+use crate::formats::UpstreamFormat;
 use crate::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,8 +37,8 @@ impl ProviderInterface {
 
     fn config_format(self) -> &'static str {
         match self {
-            Self::OpenAiChatCompletions => "openai-completion",
-            Self::AnthropicMessages => "anthropic",
+            Self::OpenAiChatCompletions => "openai-chat-completions",
+            Self::AnthropicMessages => "anthropic-messages",
             Self::OpenAiResponses => "openai-responses",
         }
     }
@@ -597,7 +598,7 @@ fn append_upstream_summary(summary: &mut String, config: &Config) {
             let upstream = &config.upstreams[0];
             let format = upstream
                 .fixed_upstream_format
-                .map(|format| format.to_string())
+                .map(user_facing_format_name)
                 .unwrap_or_else(|| "auto".to_string());
             summary.push_str(&format!("  Format: {format}\n"));
             summary.push_str(&format!(
@@ -610,7 +611,7 @@ fn append_upstream_summary(summary: &mut String, config: &Config) {
             for upstream in &config.upstreams {
                 let format = upstream
                     .fixed_upstream_format
-                    .map(|format| format.to_string())
+                    .map(user_facing_format_name)
                     .unwrap_or_else(|| "auto".to_string());
                 summary.push_str(&format!(
                     "    {}: format {}, service URL {}\n",
@@ -621,6 +622,15 @@ fn append_upstream_summary(summary: &mut String, config: &Config) {
             }
         }
     }
+}
+
+fn user_facing_format_name(format: UpstreamFormat) -> String {
+    match format {
+        UpstreamFormat::OpenAiCompletion => "openai-chat-completions",
+        UpstreamFormat::OpenAiResponses => "openai-responses",
+        UpstreamFormat::Anthropic => "anthropic-messages",
+    }
+    .to_string()
 }
 
 fn provider_api_key_configured(config: &Config, secrets: Option<&EnvFile>) -> bool {

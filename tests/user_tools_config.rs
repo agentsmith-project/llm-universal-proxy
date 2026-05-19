@@ -167,7 +167,7 @@ fn interactive_config_wizard_creates_config_instead_of_printing_usage_only() {
     let config_yaml =
         fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
     assert!(config_yaml.contains("api_root: https://api.minimaxi.com/v1"));
-    assert!(config_yaml.contains("format: openai-completion"));
+    assert!(config_yaml.contains("format: openai-chat-completions"));
     assert!(config_yaml.contains("default: DEFAULT:MiniMax-M2.7-highspeed"));
     assert!(!config_yaml.contains("provider-secret-from-prompt"));
 
@@ -203,7 +203,7 @@ fn interactive_config_wizard_allows_protocol_format_selection() {
     let config_yaml =
         fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
     assert!(config_yaml.contains("api_root: https://api.anthropic.example/v1"));
-    assert!(config_yaml.contains("format: anthropic"));
+    assert!(config_yaml.contains("format: anthropic-messages"));
     assert!(config_yaml.contains("default: DEFAULT:claude-compatible-model"));
     assert!(!config_yaml.contains("provider-secret-from-prompt"));
 }
@@ -286,7 +286,7 @@ fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
         llmup_home.join("secrets.env").display()
     )));
     assert!(output.contains("Alias: default -> DEFAULT:MiniMax-M2.7-highspeed"));
-    assert!(output.contains("Format: openai-completion"));
+    assert!(output.contains("Format: openai-chat-completions"));
     assert!(output.contains("Service URL: https://api.minimaxi.com/v1"));
     assert!(output.contains("Provider API key configured: yes"));
     assert!(output.contains("Press Enter to keep it, type reconfigure, or type doctor"));

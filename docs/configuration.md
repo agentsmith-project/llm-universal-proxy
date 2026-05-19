@@ -96,14 +96,14 @@ upstreams:
   PROXY-KEY-OPENAI-COMPATIBLE:
     # Provider API root; include the provider's version segment.
     api_root: https://openai-compatible.example/v1
-    format: openai-completion
+    format: openai-chat-completions
     # Structured env source for this upstream's provider key.
     provider_key:
       env: OPENAI_COMPATIBLE_API_KEY
 
   PROXY-KEY-ANTHROPIC-COMPATIBLE:
     api_root: https://anthropic-compatible.example/v1
-    format: anthropic
+    format: anthropic-messages
     # Legacy env source remains supported for compatibility.
     provider_key_env: ANTHROPIC_COMPATIBLE_API_KEY
 
@@ -127,7 +127,7 @@ data_auth:
 upstreams:
   INLINE-DEMO:
     api_root: https://openai-compatible.example/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key:
       inline: "DEMO_PROVIDER_KEY_DO_NOT_USE"
 
@@ -149,12 +149,12 @@ data_auth:
 upstreams:
   CLIENT-KEY-OPENAI-COMPATIBLE:
     api_root: https://openai-compatible.example/v1
-    format: openai-completion
+    format: openai-chat-completions
     # provider_key / provider_key_env are normally omitted.
 
   CLIENT-KEY-ANTHROPIC-COMPATIBLE:
     api_root: https://anthropic-compatible.example/v1
-    format: anthropic
+    format: anthropic-messages
     # The client key is forwarded upstream.
 
 model_aliases:

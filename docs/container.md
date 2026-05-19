@@ -175,7 +175,7 @@ curl -fsS \
       {
         "name": "OPENAI-COMPATIBLE",
         "api_root": "https://openai-compatible.example/v1",
-        "fixed_upstream_format": "openai-completion",
+        "fixed_upstream_format": "openai-chat-completions",
         "provider_key_env": "OPENAI_COMPATIBLE_API_KEY"
       }
     ],

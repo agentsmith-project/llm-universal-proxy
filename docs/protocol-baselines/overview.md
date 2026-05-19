@@ -26,7 +26,7 @@ The summary matrices deliberately split provider-surface coverage from portabili
 | OpenAI Responses | [`openai-responses.md`](openai-responses.md) | Resource-oriented: responses, conversations, follow-up IDs, compaction | Rich typed SSE events | Function tools plus hosted tools and remote MCP | This is the fastest-moving surface and now the main source of OpenAI-specific stateful semantics. |
 | OpenAI Chat Completions | [`openai-chat-completions.md`](openai-chat-completions.md) | Stateless message replay | Delta SSE plus `[DONE]` | Mostly function-style tool schema | Best portability pivot, but no longer the feature superset in OpenAI's own docs. |
 | Anthropic Messages | [`anthropic-messages.md`](anthropic-messages.md) | Stateless messages with growing beta context-management surfaces | Typed SSE block lifecycle | Client tools, server tools, MCP connector | Stop reasons and tool loops carry workflow semantics that do not map cleanly to OpenAI. |
-| Google Gemini `generateContent` | [`google-gemini.md`](google-gemini.md) | Retired historical reference | Retired historical reference | Retired historical reference | Native Gemini is no longer an active proxy surface; use Google OpenAI-compatible upstreams with `format: openai-completion`. |
+| Google Gemini `generateContent` | [`google-gemini.md`](google-gemini.md) | Retired historical reference | Retired historical reference | Retired historical reference | Native Gemini is no longer an active proxy surface; use Google OpenAI-compatible upstreams with `format: openai-chat-completions`. |
 
 ## Cross-provider headlines
 

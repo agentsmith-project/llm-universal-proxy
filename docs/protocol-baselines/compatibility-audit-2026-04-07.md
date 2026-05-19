@@ -1,7 +1,7 @@
 # Protocol Compatibility Audit — 2026-04-07
 
 - Status: retired historical audit
-- Proxy posture: this file records the pre-removal state captured on 2026-04-07. It is not an active protocol baseline or support commitment. Native Gemini `generateContent` / `streamGenerateContent` wire-format support and `/google/v1beta/*` proxy routes have been removed; Gemini models should use Google's OpenAI-compatible endpoint with `format: openai-completion`.
+- Proxy posture: this file records the pre-removal state captured on 2026-04-07. It is not an active protocol baseline or support commitment. Native Gemini `generateContent` / `streamGenerateContent` wire-format support and `/google/v1beta/*` proxy routes have been removed; Gemini models should use Google's OpenAI-compatible endpoint with `format: openai-chat-completions`.
 
 ## Scope
 

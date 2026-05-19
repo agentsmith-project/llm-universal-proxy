@@ -412,7 +412,7 @@ data_auth:
 upstreams:
   DEFAULT:
     api_root: https://api.example.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key:
       env: LLMUP_PROVIDER_DEFAULT_API_KEY
 model_aliases:

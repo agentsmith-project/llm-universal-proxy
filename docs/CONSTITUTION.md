@@ -8,7 +8,7 @@ LLM Universal Proxy is a **format-agnostic protocol translation middleware** for
 
 **Enable supported LLM API clients to reach configured backends through one stable proxy, with explicit portability boundaries.**
 
-A client using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages should be able to route to configured upstreams through a matching local namespace. The product behavior is maximum safe compatibility: preserve the richest safe portable representation, emit portability warnings when non-portable detail is omitted, and fail closed on unsafe or non-portable semantics instead of hiding the mismatch. Gemini models remain usable through Google OpenAI-compatible upstreams configured with `format: openai-completion`, not through a native Gemini client namespace.
+A client using OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages should be able to route to configured upstreams through a matching local namespace. The product behavior is maximum safe compatibility: preserve the richest safe portable representation, emit portability warnings when non-portable detail is omitted, and fail closed on unsafe or non-portable semantics instead of hiding the mismatch. Gemini models remain usable through Google OpenAI-compatible upstreams configured with `format: openai-chat-completions`, not through a native Gemini client namespace.
 
 ## Core Principles
 

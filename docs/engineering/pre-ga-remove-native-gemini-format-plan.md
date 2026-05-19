@@ -17,7 +17,7 @@
 - OpenAI Responses
 - Anthropic Messages
 
-Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再存在 active `google` / `gemini` format。历史配置里的 `format: google` / `format: gemini` fail closed，并提示迁移到 Google OpenAI-compatible endpoint + `format: openai-completion`。
+Gemini 只能作为 OpenAI-compatible upstream 使用；在 `llmup` 内部不再存在 active `google` / `gemini` format。历史配置里的 `format: google` / `format: gemini` fail closed，并提示迁移到 Google OpenAI-compatible endpoint + `format: openai-chat-completions`。
 
 ## 三计划协同
 
@@ -70,7 +70,7 @@ Native Gemini 是当前复杂度最高、收益最低的一条协议线：
 upstreams:
   - name: gemini-openai-compatible
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    format: openai-completion
+    format: openai-chat-completions
     auth:
       type: bearer
       env: GEMINI_API_KEY
@@ -115,7 +115,7 @@ upstreams:
 删除后：
 
 - 旧配置里的 `format: google` / `format: gemini` 直接配置加载失败。
-- 错误信息应给出简短迁移提示：使用 Google OpenAI-compatible endpoint 并配置 `format: openai-completion`。
+- 错误信息应给出简短迁移提示：使用 Google OpenAI-compatible endpoint 并配置 `format: openai-chat-completions`。
 - `/google/*` 路由返回 404 即可，不需要兼容转发。
 - 不新增 hidden adapter 把 Gemini native 请求偷偷翻成 OpenAI Chat。
 - 不新增 feature flag 暂时保留 Gemini native。
@@ -129,7 +129,7 @@ upstreams:
 - [src/formats.rs](../../src/formats.rs)：`UpstreamFormat` 只剩 Anthropic、OpenAI Chat Completions、OpenAI Responses；`google` / `gemini` 解析直接返回迁移错误。
 - Router 不再注册 `/google/v1beta/*` 或 namespaced Google route；相关测试只应作为 404 / migration negative coverage。
 - Native Gemini translator、Gemini stream source/sink、Google model handler、Google/Gemini observability 分支不再是 active runtime surface。
-- Gemini brand 只保留为 OpenAI-compatible upstream 示例，例如 `https://generativelanguage.googleapis.com/v1beta/openai` + `format: openai-completion`。
+- Gemini brand 只保留为 OpenAI-compatible upstream 示例，例如 `https://generativelanguage.googleapis.com/v1beta/openai` + `format: openai-chat-completions`。
 - 剩余 Gemini 提及必须属于 migration、retired/historical reference、negative test、或 Gemini-as-OpenAI-compatible；不得作为 active native Gemini 支持入口。
 
 ## 开发阶段
@@ -166,7 +166,7 @@ upstreams:
 
 - `format: google` / `format: gemini` 不再能启动服务。
 - `/google/v1beta/models` 和 `/google/v1beta/models/{id}:generateContent` 不再注册。
-- 错误提示包含 `format: openai-completion` 和 Google OpenAI-compatible base URL 迁移方向。
+- 错误提示包含 `format: openai-chat-completions` 和 Google OpenAI-compatible base URL 迁移方向。
 - `UpstreamFormat::Google` active 命中为零。
 
 ### Phase 2：删除 Gemini translation 分支
@@ -326,7 +326,7 @@ upstreams:
 upstreams:
   - name: google-openai-compatible
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    format: openai-completion
+    format: openai-chat-completions
 ```
 
 客户端侧：

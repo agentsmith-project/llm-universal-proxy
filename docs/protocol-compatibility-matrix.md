@@ -64,4 +64,4 @@ The proxy should treat function calling and explicit transcript replay as the co
 - Replayable tool history requires a complete and trusted structured call. When structured replay is unsafe for non-replayable or truncated tool calls, preserve available text/context with a portability warning rather than masquerade as valid structured replay across providers.
 - Unsupported media, unsupported source transports, and unknown typed parts should fail closed before contacting the upstream rather than being silently omitted.
 
-Gemini remains usable as a Google OpenAI-compatible upstream by configuring `api_root: https://generativelanguage.googleapis.com/v1beta/openai` with `format: openai-completion`. Native Gemini `generateContent` is retired from the active proxy compatibility surface.
+Gemini remains usable as a Google OpenAI-compatible upstream by configuring `api_root: https://generativelanguage.googleapis.com/v1beta/openai` with `format: openai-chat-completions`. Native Gemini `generateContent` is retired from the active proxy compatibility surface.

@@ -690,7 +690,7 @@ class GaDocsContractTests(unittest.TestCase):
             "proxy_key static YAML example must show data_auth plus structured and legacy provider key sources",
         )
         self.assertIn("#", proxy_key_block)
-        self.assertIn("format: openai-completion", proxy_key_block)
+        self.assertIn("format: openai-chat-completions", proxy_key_block)
         self.assertIn("format: anthropic", proxy_key_block)
         self.assertNotIn("LLM_UNIVERSAL_PROXY_AUTH_MODE", proxy_key_block)
         self.assertIn("env: LLM_UNIVERSAL_PROXY_KEY", proxy_key_block)
@@ -797,7 +797,7 @@ class GaDocsContractTests(unittest.TestCase):
         yaml_payload = yaml_blocks[0]
         for snippet in (
             "- name: PRESET-OPENAI-COMPATIBLE",
-            "fixed_upstream_format: openai-completion",
+            "fixed_upstream_format: openai-chat-completions",
             "provider_key_env: PRESET_ENDPOINT_API_KEY",
             "upstream_name: PRESET-OPENAI-COMPATIBLE",
             "upstream_model: provider-model-id",
@@ -817,7 +817,7 @@ class GaDocsContractTests(unittest.TestCase):
             "/admin/namespaces/default/config",
             '"upstreams": [',
             '"name": "PRESET-OPENAI-COMPATIBLE"',
-            '"fixed_upstream_format": "openai-completion"',
+            '"fixed_upstream_format": "openai-chat-completions"',
             '"provider_key_env": "PRESET_ENDPOINT_API_KEY"',
             '"upstream_name": "PRESET-OPENAI-COMPATIBLE"',
             '"upstream_model": "provider-model-id"',

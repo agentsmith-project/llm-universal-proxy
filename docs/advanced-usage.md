@@ -28,19 +28,19 @@ data_auth:
 upstreams:
   OPENAI_COMPATIBLE:
     api_root: https://openai-compatible.example/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key:
       env: OPENAI_COMPATIBLE_API_KEY
 
   ANTHROPIC_COMPATIBLE:
     api_root: https://anthropic-compatible.example
-    format: anthropic
+    format: anthropic-messages
     provider_key:
       env: ANTHROPIC_COMPATIBLE_API_KEY
 
   GOOGLE_OPENAI_COMPATIBLE:
     api_root: https://generativelanguage.googleapis.com/v1beta/openai
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: GEMINI_API_KEY
 
 model_aliases:
@@ -89,7 +89,7 @@ Claude Code appends its Messages path to the configured base URL, so the proxy r
 
 ## Google Gemini Through OpenAI Chat Completions
 
-Gemini is supported through Google's OpenAI-compatible endpoint. Configure it as an OpenAI Chat Completions-format upstream with `format: openai-completion` and the API root `https://generativelanguage.googleapis.com/v1beta/openai`.
+Gemini is supported through Google's OpenAI-compatible endpoint. Configure it as an OpenAI Chat Completions-format upstream with `format: openai-chat-completions` and the API root `https://generativelanguage.googleapis.com/v1beta/openai`.
 
 Native Gemini `generateContent` routing is not the active user surface. If a Gemini request depends on native-only semantics that cannot be safely represented through the configured protocol, the proxy should fail closed instead of inventing behavior.
 

@@ -1,7 +1,7 @@
 # Google Gemini GenerateContent / streamGenerateContent - protocol baseline
 
 - Status: retired historical reference only
-- Proxy posture: native Gemini `generateContent` and `streamGenerateContent` are not active `llmup` surfaces. Gemini models should be configured through Google's OpenAI-compatible endpoint with `format: openai-completion`.
+- Proxy posture: native Gemini `generateContent` and `streamGenerateContent` are not active `llmup` surfaces. Gemini models should be configured through Google's OpenAI-compatible endpoint with `format: openai-chat-completions`.
 
 ## Metadata
 

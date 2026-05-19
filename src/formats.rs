@@ -24,7 +24,7 @@ pub enum UpstreamFormat {
 }
 
 pub(crate) fn removed_native_gemini_format_message() -> String {
-    "native Gemini format support has been removed; use Google OpenAI-compatible endpoint https://generativelanguage.googleapis.com/v1beta/openai with format: openai-completion".to_string()
+    "native Gemini format support has been removed; use Google OpenAI-compatible endpoint https://generativelanguage.googleapis.com/v1beta/openai with format: openai-chat-completions".to_string()
 }
 
 impl fmt::Display for UpstreamFormat {
@@ -79,7 +79,7 @@ mod tests {
                 .parse::<UpstreamFormat>()
                 .expect_err("native Gemini formats must be removed");
             assert!(
-                error.contains("format: openai-completion"),
+                error.contains("format: openai-chat-completions"),
                 "error should explain the OpenAI-compatible migration path: {error}"
             );
             assert!(
