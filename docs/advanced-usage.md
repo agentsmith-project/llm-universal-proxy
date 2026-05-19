@@ -14,7 +14,7 @@ The proxy listens on the address in that file. Keep it running while manually wi
 
 ## Multi-Endpoint YAML
 
-This example exposes one OpenAI Chat Completions-compatible upstream, one Anthropic Messages-compatible upstream, and Gemini through Google's OpenAI-compatible endpoint configured as the OpenAI Chat Completions wire format. Replace URLs, model names, and environment variable names for your provider.
+This example exposes multiple model services using explicit llmup protocol values: `openai-chat-completions`, `anthropic-messages`, and Gemini configured through the OpenAI Chat Completions wire format. Replace URLs, model names, and environment variable names for your provider.
 
 ```yaml
 listen: 127.0.0.1:18888
@@ -26,27 +26,29 @@ data_auth:
     env: LLM_UNIVERSAL_PROXY_KEY
 
 upstreams:
-  OPENAI_COMPATIBLE:
-    api_root: https://openai-compatible.example/v1
+  openai_chat:
+    api_root: https://chat-completions.example/v1
     format: openai-chat-completions
     provider_key:
-      env: OPENAI_COMPATIBLE_API_KEY
+      env: OPENAI_CHAT_API_KEY
 
-  ANTHROPIC_COMPATIBLE:
-    api_root: https://anthropic-compatible.example
+  anthropic_messages:
+    api_root: https://messages.example
     format: anthropic-messages
     provider_key:
-      env: ANTHROPIC_COMPATIBLE_API_KEY
+      env: ANTHROPIC_MESSAGES_API_KEY
 
-  GOOGLE_OPENAI_COMPATIBLE:
+  google_chat:
     api_root: https://generativelanguage.googleapis.com/v1beta/openai
     format: openai-chat-completions
     provider_key_env: GEMINI_API_KEY
 
 model_aliases:
-  default: "OPENAI_COMPATIBLE:provider-model"
-  claude-like: "ANTHROPIC_COMPATIBLE:provider-model"
-  gemini-flash: "GOOGLE_OPENAI_COMPATIBLE:gemini-2.0-flash"
+  main: "openai_chat:provider-model"
+  fast: "openai_chat:provider-fast-model"
+  sonnet: "anthropic_messages:claude-sonnet-like"
+  opus: "anthropic_messages:claude-opus-like"
+  gemini-flash: "google_chat:gemini-2.0-flash"
 ```
 
 The provider key belongs to the proxy, not to the client. In `proxy_key` mode, the provider keys are read by the proxy from the configured env sources, and clients only send the local proxy key.
@@ -62,7 +64,7 @@ In `client_provider_key` mode, the client SDK key is the real provider key. Use 
 If the first-run wizard did not collect model limits, add them later with the advanced config entrypoint:
 
 ```bash
-llmup-config set-limits --alias default --context-window 200000 --max-output-tokens 128000
+llmup-config set-limits --alias main --context-window 200000 --max-output-tokens 128000
 ```
 
 Use `--alias <name>` to override one model alias, or `--upstream <name>` to set limits shared by aliases that use the same upstream. The command only updates `~/.llmup/config.yaml`; provider secrets stay in `secrets.env`.
@@ -92,14 +94,14 @@ For Claude Code in `proxy_key` mode, the SDK key is also the local proxy key:
 ```bash
 ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY \
 ANTHROPIC_BASE_URL=http://127.0.0.1:18888/anthropic \
-claude --model claude-like
+claude --model sonnet
 ```
 
 Claude Code appends its Messages path to the configured base URL, so the proxy receives Anthropic-style Messages traffic.
 
 ## Google Gemini Through OpenAI Chat Completions
 
-Gemini is supported through Google's OpenAI-compatible endpoint. Configure it as an OpenAI Chat Completions-format upstream with `format: openai-chat-completions` and the API root `https://generativelanguage.googleapis.com/v1beta/openai`.
+Gemini is supported through Google's endpoint that accepts OpenAI Chat Completions-shaped requests. Configure it with `format: openai-chat-completions` and the API root `https://generativelanguage.googleapis.com/v1beta/openai`.
 
 Native Gemini `generateContent` routing is not the active user surface. If a Gemini request depends on native-only semantics that cannot be safely represented through the configured protocol, the proxy should fail closed instead of inventing behavior.
 

@@ -39,7 +39,11 @@ llmup-claude
 
 The real provider key is collected by `llmup-config` and kept in the local proxy configuration, not pasted into Codex or Claude Code. The launchers give the client a local proxy key and keep the upstream provider key on the proxy side.
 
-The launchers also manage the local proxy process, client base URL, default model alias, and llmup-owned Codex/Claude state directories.
+When the wizard asks for a service type, use the API shape your provider documents: `openai-chat-completions`, `openai-responses`, or `anthropic-messages`.
+
+The default local model name is `main`. `llmup-codex` and `llmup-claude` use `main` unless you choose another llmup alias.
+
+The launchers also manage the local proxy process, client base URL, selected model alias, and llmup-owned Codex/Claude state directories.
 
 ## Why There Is No `llmup` Command
 

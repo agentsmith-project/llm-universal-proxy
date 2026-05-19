@@ -32,15 +32,25 @@ The launchers own the repetitive local wiring:
 
 Codex state is kept under `~/.llmup-codex` by default and exposed to Codex through `CODEX_HOME`. Claude Code state is kept under `~/.llmup-claude` by default and exposed through `CLAUDE_CONFIG_DIR`.
 
-In managed profile projection, `--llmup-model <alias>` selects the llmup alias to expose to the native client. The default alias is `default`.
+In managed profile projection, `--llmup-model <alias>` selects the llmup alias to expose to the native client. The default alias is `main`.
 
-For Codex, the launcher still points a `proxy` provider at the local llmup base URL and local proxy key. It also generates a Codex model catalog and supported tool hints from the selected alias's configured limits and surface, the same contract exposed as `llmup.surface` metadata.
+The config protocol values are explicit: `openai-chat-completions`, `openai-responses`, and `anthropic-messages`.
 
-For Claude Code, the launcher does not append an automatic native `--model default` argument. It projects the selected alias through `ANTHROPIC_CUSTOM_MODEL_OPTION` and `ANTHROPIC_MODEL`, and projects configured limits into Claude Code limit env when they are available.
+For Codex, the launcher still points a `proxy` provider at the local llmup base URL and local proxy key. It also generates a Codex model catalog and supported tool hints from the configured aliases' limits and surface, the same contract exposed as `llmup.surface` metadata. The Codex catalog contains every configured llmup alias. Codex UI may or may not display every catalog alias in a given release; llmup does not make that a hard promise. The hard contract is that the selected alias can start the Codex session.
+
+For Claude Code, the launcher does not append an automatic native `--model default` argument because `default` is Claude Code's own special model setting. `main` is the normal selected alias for Claude Code. It projects the selected alias through `ANTHROPIC_CUSTOM_MODEL_OPTION` and `ANTHROPIC_MODEL`, and projects configured limits into Claude Code limit env when they are available.
+
+If the llmup config contains official Claude family aliases, the launcher maps them through Claude Code's documented env variables: `ANTHROPIC_DEFAULT_HAIKU_MODEL=haiku`, `ANTHROPIC_DEFAULT_SONNET_MODEL=sonnet`, and `ANTHROPIC_DEFAULT_OPUS_MODEL=opus`. `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` is not enabled by default.
 
 These projected hints help the native clients present the selected model correctly. Protocol shaping and request enforcement stay in the proxy configuration and server-side conversion path.
 
 The original home directory is not rewritten by default, so tools that run inside Codex or Claude Code can still find normal git, SSH, package-manager, and language-tool caches.
+
+## Inheritance Boundary
+
+The V1 launcher contract is narrow: the main Codex or Claude Code session goes through the local proxy, and native Codex subagents or Claude Code Task/subagent calls created inside the same client runtime inherit that proxy wiring.
+
+V1 does not manage every process below the client. It does not guarantee proxy inheritance for Claude agent teams, bare `codex` or `claude` commands started from a shell, arbitrary shell child processes such as MCP servers, hooks, or scripts, or background tasks that continue after the launcher-managed parent exits.
 
 ## Native Arguments
 
@@ -58,4 +68,4 @@ For commands that should not go through the proxy, such as login, native help, n
 
 `llmup-config` stores provider credentials for the proxy. The launchers give Codex or Claude Code only the local proxy credential needed to call the proxy. This keeps the provider key on the proxy side instead of putting it into the client environment.
 
-For manual auth modes, explicit base URLs, direct proxy startup, multi-endpoint YAML, Gemini through Google's OpenAI-compatible endpoint as OpenAI Chat Completions format, or container/admin links, use [Advanced Usage](./advanced-usage.md).
+For manual auth modes, explicit base URLs, direct proxy startup, multi-endpoint YAML, Gemini configured with `format: openai-chat-completions`, or container/admin links, use [Advanced Usage](./advanced-usage.md).

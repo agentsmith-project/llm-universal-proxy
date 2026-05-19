@@ -11,6 +11,7 @@ const AUTO_COMPACT_DENOMINATOR: u128 = 100;
 const CODEX_TRUNCATION_LIMIT_BYTES: u64 = 10_000;
 const PUBLIC_APPLY_PATCH_TOOL_TYPE: &str = "freeform";
 const CODEX_BASE_INSTRUCTIONS: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+pub const DEFAULT_AGENT_MODEL_ALIAS: &str = "main";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentModelProfile {
@@ -52,6 +53,29 @@ impl AgentModelProfile {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentModelCatalog {
+    pub selected: AgentModelProfile,
+    pub profiles: Vec<AgentModelProfile>,
+}
+
+impl AgentModelCatalog {
+    pub fn from_config(config: &Config, selected_alias: &str) -> Result<Self, String> {
+        let selected = AgentModelProfile::from_config(config, selected_alias)
+            .map_err(|_| selected_alias_error(config, selected_alias))?;
+        let profiles = config
+            .model_aliases
+            .keys()
+            .map(|alias| AgentModelProfile::from_config(config, alias))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { selected, profiles })
+    }
+
+    pub fn has_alias(&self, alias: &str) -> bool {
+        self.profiles.iter().any(|profile| profile.alias == alias)
+    }
+}
+
 pub fn codex_auto_compact_token_limit(
     alias: &str,
     limits: Option<&ModelLimits>,
@@ -77,6 +101,25 @@ pub fn codex_auto_compact_token_limit(
 }
 
 pub fn build_codex_model_catalog(profile: &AgentModelProfile) -> Result<Value, String> {
+    build_codex_model_catalog_for_profiles(std::slice::from_ref(profile))
+}
+
+pub fn build_codex_model_catalog_for_profiles(
+    profiles: &[AgentModelProfile],
+) -> Result<Value, String> {
+    if profiles.is_empty() {
+        return Err("codex model catalog requires at least one model alias".to_string());
+    }
+    let models = profiles
+        .iter()
+        .map(|profile| codex_catalog_entry(profile).map(Value::Object))
+        .collect::<Result<Vec<_>, _>>()?;
+    let payload = json!({ "models": models });
+    reject_internal_tool_artifacts(&payload, "codex model catalog")?;
+    Ok(payload)
+}
+
+fn codex_catalog_entry(profile: &AgentModelProfile) -> Result<Map<String, Value>, String> {
     let mut entry = default_codex_catalog_entry(&profile.alias);
     let codex_auto_compact_token_limit =
         codex_auto_compact_token_limit(&profile.alias, profile.limits.as_ref())?;
@@ -120,9 +163,7 @@ pub fn build_codex_model_catalog(profile: &AgentModelProfile) -> Result<Value, S
         }
     }
 
-    let payload = json!({ "models": [Value::Object(entry)] });
-    reject_internal_tool_artifacts(&payload, "codex model catalog")?;
-    Ok(payload)
+    Ok(entry)
 }
 
 fn codex_auto_compact_token_limit_for_profile(limits: Option<&ModelLimits>) -> Option<u64> {
@@ -166,6 +207,21 @@ pub fn write_codex_model_catalog(
     run_dir: impl AsRef<Path>,
 ) -> Result<PathBuf, String> {
     let catalog = build_codex_model_catalog(profile)?;
+    write_codex_model_catalog_value(&catalog, run_dir)
+}
+
+pub fn write_codex_model_catalog_for_profiles(
+    profiles: &[AgentModelProfile],
+    run_dir: impl AsRef<Path>,
+) -> Result<PathBuf, String> {
+    let catalog = build_codex_model_catalog_for_profiles(profiles)?;
+    write_codex_model_catalog_value(&catalog, run_dir)
+}
+
+fn write_codex_model_catalog_value(
+    catalog: &Value,
+    run_dir: impl AsRef<Path>,
+) -> Result<PathBuf, String> {
     let catalog_dir = run_dir.as_ref().join("codex");
     fs::create_dir_all(&catalog_dir).map_err(|error| {
         format!(
@@ -185,10 +241,26 @@ pub fn write_codex_model_catalog(
     Ok(catalog_path)
 }
 
+fn selected_alias_error(config: &Config, selected_alias: &str) -> String {
+    if selected_alias == DEFAULT_AGENT_MODEL_ALIAS
+        && !config.model_aliases.contains_key(DEFAULT_AGENT_MODEL_ALIAS)
+        && config.model_aliases.contains_key("default")
+    {
+        return "default llmup model alias `main` was not found, and this config still has the legacy alias `default`; run `llmup-config` to rename `default` to `main`, or run `llmup-config list` to view configured aliases. Pass `--llmup-model default` only when you intentionally want the legacy alias.".to_string();
+    }
+    format!(
+        "unknown llmup model alias `{selected_alias}`; run `llmup-config list` to view configured aliases"
+    )
+}
+
 fn default_codex_catalog_entry(alias: &str) -> Map<String, Value> {
     let mut entry = Map::new();
     entry.insert("slug".to_string(), json!(alias));
     entry.insert("display_name".to_string(), json!(alias));
+    entry.insert(
+        "description".to_string(),
+        json!(format!("llmup proxy model {alias}")),
+    );
     entry.insert(
         "supported_reasoning_levels".to_string(),
         json!([

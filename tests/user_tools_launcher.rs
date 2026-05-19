@@ -10,7 +10,7 @@ use llm_universal_proxy::user_tools::agent_launcher::{
     run_cli, validate_native_model_flags, write_runtime_config_for_port, AgentKind, LauncherHomes,
     ProfileProjection, ProxyMode,
 };
-use llm_universal_proxy::user_tools::agent_model_profile::AgentModelProfile;
+use llm_universal_proxy::user_tools::agent_model_profile::AgentModelCatalog;
 use llm_universal_proxy::user_tools::env_file::{parse_env_file_str, EnvFile};
 use llm_universal_proxy::Config;
 
@@ -95,7 +95,10 @@ upstreams:
         apply_patch_transport: freeform
         supports_parallel_calls: false
 model_aliases:
-  default: DEFAULT:test-model
+  main: DEFAULT:test-model
+  haiku: DEFAULT:test-haiku-model
+  opus: DEFAULT:test-opus-model
+  sonnet: DEFAULT:test-sonnet-model
   vision:
     target: DEFAULT:vision-model
     surface:
@@ -118,8 +121,8 @@ fn managed_mode(port: u16) -> ProxyMode {
 
 fn enabled_projection(alias: &str) -> ProfileProjection {
     ProfileProjection::Enabled {
-        profile: AgentModelProfile::from_config(&launcher_profile_config(), alias)
-            .expect("profile should resolve"),
+        model_catalog: AgentModelCatalog::from_config(&launcher_profile_config(), alias)
+            .expect("model catalog should resolve"),
         codex_catalog_path: None,
     }
 }
@@ -217,7 +220,7 @@ fn launcher_model_flags_parse_and_validate_before_native_args() {
 
 #[test]
 fn managed_projection_rejects_native_model_flags_unless_profile_projection_is_disabled() {
-    let projection = enabled_projection("default");
+    let projection = enabled_projection("main");
 
     for native in [
         os_vec(&["-m", "native"]),
@@ -227,6 +230,7 @@ fn managed_projection_rejects_native_model_flags_unless_profile_projection_is_di
         os_vec(&["-cmodel=\"native\""]),
         os_vec(&["-c=model_provider=\"openai\""]),
         os_vec(&["--config", "model_provider=\"openai\""]),
+        os_vec(&["-c", "openai_base_url=\"https://api.openai.com/v1\""]),
         os_vec(&["-c", "model_catalog_json=\"/tmp/native-catalog.json\""]),
         os_vec(&["--config=model_providers.proxy.base_url=\"http://127.0.0.1:1/openai/v1\""]),
         os_vec(&["--oss"]),
@@ -340,12 +344,12 @@ model_aliases:
 }
 
 #[test]
-fn managed_projection_injects_codex_profile_catalog_and_keeps_no_profile_simple() {
+fn managed_projection_injects_codex_multi_alias_catalog_and_selected_model_argv() {
     let temp = TempDir::new("codex-profile");
     let projection = prepare_profile_projection(
         AgentKind::Codex,
-        AgentModelProfile::from_config(&launcher_profile_config(), "default")
-            .expect("profile should resolve"),
+        AgentModelCatalog::from_config(&launcher_profile_config(), "vision")
+            .expect("model catalog should resolve"),
         temp.path(),
     )
     .expect("codex projection should prepare");
@@ -360,13 +364,16 @@ fn managed_projection_injects_codex_profile_catalog_and_keeps_no_profile_simple(
     assert!(codex.contains(&OsString::from(
         "model_providers.proxy.base_url=\"http://127.0.0.1:31337/openai/v1\""
     )));
+    assert!(codex.windows(2).any(|pair| {
+        pair == os_vec(&["-c", "openai_base_url=\"http://127.0.0.1:31337/openai/v1\""])
+    }));
     assert!(codex
         .windows(2)
-        .any(|pair| pair == os_vec(&["-m", "default"])));
+        .any(|pair| pair == os_vec(&["-m", "vision"])));
     assert!(codex
         .iter()
         .any(|arg| { arg.to_string_lossy().starts_with("model_catalog_json=\"") }));
-    assert!(codex
+    assert!(!codex
         .windows(2)
         .any(|pair| pair == os_vec(&["-c", "tools.web_search=false"])));
     let joined = codex
@@ -388,9 +395,22 @@ fn managed_projection_injects_codex_profile_catalog_and_keeps_no_profile_simple(
     let catalog: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(catalog_path).expect("read generated catalog"))
             .expect("catalog should be JSON");
-    let entry = &catalog["models"][0];
-    assert_eq!(entry["slug"], "default");
-    assert_eq!(entry["display_name"], "default");
+    let models = catalog["models"]
+        .as_array()
+        .expect("catalog models should be array");
+    assert_eq!(models.len(), 5);
+    assert_eq!(
+        models
+            .iter()
+            .map(|entry| entry["slug"].as_str().expect("slug should be string"))
+            .collect::<Vec<_>>(),
+        vec!["haiku", "main", "opus", "sonnet", "vision"]
+    );
+    let entry = models
+        .iter()
+        .find(|entry| entry["slug"] == "main")
+        .expect("main entry");
+    assert_eq!(entry["display_name"], "main");
     assert_eq!(entry["shell_type"], "shell_command");
     assert_eq!(entry["visibility"], "list");
     assert_eq!(entry["supported_in_api"], true);
@@ -407,6 +427,15 @@ fn managed_projection_injects_codex_profile_catalog_and_keeps_no_profile_simple(
     assert_eq!(entry["auto_compact_token_limit"], 61200);
     assert_eq!(entry["input_modalities"], serde_json::json!(["text"]));
     assert_eq!(entry["supports_search_tool"], false);
+    let vision = models
+        .iter()
+        .find(|entry| entry["slug"] == "vision")
+        .expect("vision entry");
+    assert_eq!(
+        vision["input_modalities"],
+        serde_json::json!(["text", "image"])
+    );
+    assert_eq!(vision["supports_search_tool"], true);
 
     let no_proxy = build_client_argv(
         AgentKind::Codex,
@@ -427,7 +456,7 @@ fn managed_projection_injects_codex_profile_catalog_and_keeps_no_profile_simple(
     )));
     assert!(!no_profile
         .windows(2)
-        .any(|pair| pair == os_vec(&["-m", "default"])));
+        .any(|pair| pair == os_vec(&["-m", "main"])));
     assert!(!no_profile
         .iter()
         .any(|arg| { arg.to_string_lossy().starts_with("model_catalog_json=\"") }));
@@ -449,21 +478,21 @@ upstreams:
       context_window: 200000
       max_output_tokens: 200000
 model_aliases:
-  default: DEFAULT:test-model
+  main: DEFAULT:test-model
 "#,
     )
     .expect("profile config should parse");
     config.validate().expect("config should validate");
-    let profile = AgentModelProfile::from_config(&config, "default")
-        .expect("generic profile should allow Claude-compatible limits");
+    let model_catalog = AgentModelCatalog::from_config(&config, "main")
+        .expect("generic model catalog should allow Claude-compatible limits");
     let temp = TempDir::new("projection-invalid-budget");
 
-    let err = prepare_profile_projection(AgentKind::Codex, profile.clone(), temp.path())
+    let err = prepare_profile_projection(AgentKind::Codex, model_catalog.clone(), temp.path())
         .expect_err("Codex projection should fail before startup");
     assert!(err.contains("max_output_tokens"));
     assert!(err.contains("context_window"));
 
-    let projection = prepare_profile_projection(AgentKind::Claude, profile, temp.path())
+    let projection = prepare_profile_projection(AgentKind::Claude, model_catalog, temp.path())
         .expect("Claude projection should not run Codex input-budget checks");
     let ProfileProjection::Enabled {
         codex_catalog_path, ..
@@ -475,13 +504,13 @@ model_aliases:
 }
 
 #[test]
-fn claude_managed_projection_uses_custom_model_env_without_model_arg_or_capabilities() {
+fn claude_managed_projection_uses_main_and_family_model_env_without_capabilities_or_discovery() {
     let homes = LauncherHomes {
         llmup_home: PathBuf::from("/tmp/llmup"),
         codex_home: PathBuf::from("/tmp/llmup-codex"),
         claude_config_dir: PathBuf::from("/tmp/llmup-claude"),
     };
-    let projection = enabled_projection("default");
+    let projection = enabled_projection("main");
 
     let claude = build_client_argv(
         AgentKind::Claude,
@@ -530,7 +559,7 @@ fn claude_managed_projection_uses_custom_model_env_without_model_arg_or_capabili
             OsString::from("1"),
         ),
     ]);
-    let profile_scrubbed = [
+    let profile_env_keys = [
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
         "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
         "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
@@ -548,7 +577,7 @@ fn claude_managed_projection_uses_custom_model_env_without_model_arg_or_capabili
         "ANTHROPIC_SMALL_FAST_MODEL_DESCRIPTION",
         "ANTHROPIC_SMALL_FAST_MODEL_SUPPORTED_CAPABILITIES",
     ];
-    for key in profile_scrubbed {
+    for key in profile_env_keys {
         parent.insert(OsString::from(key), OsString::from(format!("parent-{key}")));
     }
     let env = build_client_environment(
@@ -562,19 +591,23 @@ fn claude_managed_projection_uses_custom_model_env_without_model_arg_or_capabili
 
     assert_eq!(
         env.get(&OsString::from("ANTHROPIC_MODEL")),
-        Some(&OsString::from("default"))
+        Some(&OsString::from("main"))
     );
     assert_eq!(
         env.get(&OsString::from("ANTHROPIC_CUSTOM_MODEL_OPTION")),
-        Some(&OsString::from("default"))
+        Some(&OsString::from("main"))
     );
     assert_eq!(
         env.get(&OsString::from("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME")),
-        Some(&OsString::from("default"))
+        Some(&OsString::from("main"))
     );
     assert_eq!(
         env.get(&OsString::from("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION")),
-        Some(&OsString::from("llmup proxy model default"))
+        Some(&OsString::from("llmup proxy model main"))
+    );
+    assert_eq!(
+        env.get(&OsString::from("CLAUDE_CODE_SUBAGENT_MODEL")),
+        Some(&OsString::from("main"))
     );
     assert_eq!(
         env.get(&OsString::from("CLAUDE_CODE_MAX_OUTPUT_TOKENS")),
@@ -591,12 +624,140 @@ fn claude_managed_projection_uses_custom_model_env_without_model_arg_or_capabili
     assert!(!env.contains_key(&OsString::from(
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
     )));
-    for key in profile_scrubbed {
+    for family in ["HAIKU", "SONNET", "OPUS"] {
+        let alias = family.to_ascii_lowercase();
+        assert_eq!(
+            env.get(&OsString::from(format!("ANTHROPIC_DEFAULT_{family}_MODEL"))),
+            Some(&OsString::from(alias.as_str()))
+        );
+        assert_eq!(
+            env.get(&OsString::from(format!(
+                "ANTHROPIC_DEFAULT_{family}_MODEL_NAME"
+            ))),
+            Some(&OsString::from(alias.as_str()))
+        );
+        assert_eq!(
+            env.get(&OsString::from(format!(
+                "ANTHROPIC_DEFAULT_{family}_MODEL_DESCRIPTION"
+            ))),
+            Some(&OsString::from(format!("llmup proxy model {alias}")))
+        );
         assert!(
-            !env.contains_key(&OsString::from(key)),
-            "{key} should be scrubbed"
+            !env.contains_key(&OsString::from(format!(
+                "ANTHROPIC_DEFAULT_{family}_MODEL_SUPPORTED_CAPABILITIES"
+            ))),
+            "{family} capabilities must not be injected"
         );
     }
+    assert!(!env.contains_key(&OsString::from("ANTHROPIC_SMALL_FAST_MODEL")));
+    assert!(!env.contains_key(&OsString::from("ANTHROPIC_SMALL_FAST_MODEL_NAME")));
+    assert!(!env.contains_key(&OsString::from("ANTHROPIC_SMALL_FAST_MODEL_DESCRIPTION")));
+    assert!(!env.contains_key(&OsString::from(
+        "ANTHROPIC_SMALL_FAST_MODEL_SUPPORTED_CAPABILITIES"
+    )));
+}
+
+#[test]
+fn claude_managed_projection_does_not_inject_family_model_env_without_family_aliases() {
+    let homes = LauncherHomes {
+        llmup_home: PathBuf::from("/tmp/llmup"),
+        codex_home: PathBuf::from("/tmp/llmup-codex"),
+        claude_config_dir: PathBuf::from("/tmp/llmup-claude"),
+    };
+    let config = Config::from_yaml_str(
+        r#"
+listen: 127.0.0.1:8080
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-responses
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  main: DEFAULT:test-model
+"#,
+    )
+    .expect("config should parse");
+    config.validate().expect("config should validate");
+    let projection = ProfileProjection::Enabled {
+        model_catalog: AgentModelCatalog::from_config(&config, "main")
+            .expect("model catalog should resolve"),
+        codex_catalog_path: None,
+    };
+    let parent = BTreeMap::from([
+        (
+            OsString::from("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+            OsString::from("parent-haiku"),
+        ),
+        (
+            OsString::from("ANTHROPIC_DEFAULT_SONNET_MODEL"),
+            OsString::from("parent-sonnet"),
+        ),
+        (
+            OsString::from("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            OsString::from("parent-opus"),
+        ),
+    ]);
+
+    let env = build_client_environment(
+        AgentKind::Claude,
+        parent,
+        &managed_mode(19002),
+        &homes,
+        &projection,
+    )
+    .expect("claude env should build");
+
+    for family in ["HAIKU", "SONNET", "OPUS"] {
+        assert!(!env.contains_key(&OsString::from(format!("ANTHROPIC_DEFAULT_{family}_MODEL"))));
+        assert!(!env.contains_key(&OsString::from(format!(
+            "ANTHROPIC_DEFAULT_{family}_MODEL_NAME"
+        ))));
+        assert!(!env.contains_key(&OsString::from(format!(
+            "ANTHROPIC_DEFAULT_{family}_MODEL_DESCRIPTION"
+        ))));
+        assert!(!env.contains_key(&OsString::from(format!(
+            "ANTHROPIC_DEFAULT_{family}_MODEL_SUPPORTED_CAPABILITIES"
+        ))));
+    }
+}
+
+#[test]
+fn claude_managed_projection_controls_subagent_model_and_attribution_env() {
+    let homes = LauncherHomes {
+        llmup_home: PathBuf::from("/tmp/llmup"),
+        codex_home: PathBuf::from("/tmp/llmup-codex"),
+        claude_config_dir: PathBuf::from("/tmp/llmup-claude"),
+    };
+    let projection = enabled_projection("vision");
+    let parent = BTreeMap::from([
+        (
+            OsString::from("CLAUDE_CODE_SUBAGENT_MODEL"),
+            OsString::from("parent-subagent-model"),
+        ),
+        (
+            OsString::from("CLAUDE_CODE_ATTRIBUTION_HEADER"),
+            OsString::from("1"),
+        ),
+    ]);
+
+    let env = build_client_environment(
+        AgentKind::Claude,
+        parent,
+        &managed_mode(19002),
+        &homes,
+        &projection,
+    )
+    .expect("claude env should build");
+
+    assert_eq!(
+        env.get(&OsString::from("CLAUDE_CODE_SUBAGENT_MODEL")),
+        Some(&OsString::from("vision"))
+    );
+    assert_eq!(
+        env.get(&OsString::from("CLAUDE_CODE_ATTRIBUTION_HEADER")),
+        Some(&OsString::from("0"))
+    );
 }
 
 #[test]
@@ -628,6 +789,43 @@ fn managed_no_profile_does_not_inject_profile_specific_claude_env() {
 }
 
 #[test]
+fn claude_managed_no_profile_keeps_user_subagent_model_but_disables_attribution() {
+    let homes = LauncherHomes {
+        llmup_home: PathBuf::from("/tmp/llmup"),
+        codex_home: PathBuf::from("/tmp/llmup-codex"),
+        claude_config_dir: PathBuf::from("/tmp/llmup-claude"),
+    };
+    let parent = BTreeMap::from([
+        (
+            OsString::from("CLAUDE_CODE_SUBAGENT_MODEL"),
+            OsString::from("parent-subagent-model"),
+        ),
+        (
+            OsString::from("CLAUDE_CODE_ATTRIBUTION_HEADER"),
+            OsString::from("1"),
+        ),
+    ]);
+
+    let env = build_client_environment(
+        AgentKind::Claude,
+        parent,
+        &managed_mode(19002),
+        &homes,
+        &ProfileProjection::Disabled,
+    )
+    .expect("claude env should build");
+
+    assert_eq!(
+        env.get(&OsString::from("CLAUDE_CODE_SUBAGENT_MODEL")),
+        Some(&OsString::from("parent-subagent-model"))
+    );
+    assert_eq!(
+        env.get(&OsString::from("CLAUDE_CODE_ATTRIBUTION_HEADER")),
+        Some(&OsString::from("0"))
+    );
+}
+
+#[test]
 fn no_proxy_keeps_client_environment_and_argv_fully_native() {
     let homes = LauncherHomes {
         llmup_home: PathBuf::from("/tmp/llmup"),
@@ -647,6 +845,14 @@ fn no_proxy_keeps_client_environment_and_argv_fully_native() {
         (
             OsString::from("ANTHROPIC_BEDROCK_TOKEN"),
             OsString::from("parent-bedrock-token"),
+        ),
+        (
+            OsString::from("CLAUDE_CODE_SUBAGENT_MODEL"),
+            OsString::from("parent-subagent-model"),
+        ),
+        (
+            OsString::from("CLAUDE_CODE_ATTRIBUTION_HEADER"),
+            OsString::from("1"),
         ),
     ]);
 
@@ -704,6 +910,14 @@ fn no_proxy_keeps_client_environment_and_argv_fully_native() {
     );
     assert!(!claude_env.contains_key(&OsString::from("ANTHROPIC_BASE_URL")));
     assert!(!claude_env.contains_key(&OsString::from("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB")));
+    assert_eq!(
+        claude_env.get(&OsString::from("CLAUDE_CODE_SUBAGENT_MODEL")),
+        Some(&OsString::from("parent-subagent-model"))
+    );
+    assert_eq!(
+        claude_env.get(&OsString::from("CLAUDE_CODE_ATTRIBUTION_HEADER")),
+        Some(&OsString::from("1"))
+    );
     assert_eq!(
         claude_env.get(&OsString::from("HOME")),
         Some(&OsString::from("/real-home"))
@@ -940,6 +1154,173 @@ model_aliases:
 }
 
 #[test]
+fn launcher_default_main_fails_fast_when_only_legacy_default_alias_exists() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let temp = TempDir::new("legacy-default-fail-fast");
+    let config_path = temp.path().join("config.yaml");
+    let artifact_dir = temp.path().join("artifacts");
+    fs::write(
+        &config_path,
+        r#"
+listen: 127.0.0.1:8080
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-responses
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:legacy-upstream-model
+"#,
+    )
+    .expect("write config");
+
+    let _guards = [
+        EnvGuard::set("HOME", temp.path().as_os_str()),
+        EnvGuard::set("LLMUP_INTERNAL_LAUNCH_PLAN", "1"),
+    ];
+
+    let mut stdout = Vec::new();
+    let err = run_cli(
+        AgentKind::Codex,
+        vec![
+            OsString::from("--llmup-internal-launch-plan-json"),
+            OsString::from("--llmup-internal-proxy-base"),
+            OsString::from("http://matrix-proxy.local:19090"),
+            OsString::from("--llmup-internal-proxy-key"),
+            OsString::from("matrix-proxy-key"),
+            OsString::from("--llmup-internal-artifact-dir"),
+            artifact_dir.into_os_string(),
+            OsString::from("--llmup-config"),
+            config_path.into_os_string(),
+        ],
+        &mut stdout,
+    )
+    .expect_err("launcher should not fall back from main to legacy default");
+
+    assert!(stdout.is_empty());
+    assert!(err.contains("main"), "unexpected error: {err}");
+    assert!(err.contains("default"), "unexpected error: {err}");
+    assert!(err.contains("llmup-config"), "unexpected error: {err}");
+    assert!(err.contains("list"), "unexpected error: {err}");
+    assert!(err.contains("rename"), "unexpected error: {err}");
+}
+
+#[test]
+fn claude_family_alias_launch_plans_select_alias_and_proxy_config_resolves_upstream_model() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let temp = TempDir::new("claude-family-launch-plan");
+    let config_path = temp.path().join("config.yaml");
+    let env_file_path = temp.path().join("secrets.env");
+    let artifact_dir = temp.path().join("artifacts");
+    let yaml = r#"
+listen: 127.0.0.1:8080
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-responses
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  main: DEFAULT:upstream-main-model
+  haiku: DEFAULT:upstream-haiku-model
+  sonnet: DEFAULT:upstream-sonnet-model
+  opus: DEFAULT:upstream-opus-model
+"#;
+    fs::write(&config_path, yaml).expect("write config");
+    fs::write(
+        &env_file_path,
+        "LLM_UNIVERSAL_PROXY_KEY=env-file-proxy-key\nLLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret-plan\n",
+    )
+    .expect("write env file");
+
+    let config = Config::from_yaml_str(yaml).expect("config should parse");
+    config.validate().expect("config should validate");
+    for (alias, upstream_model) in [
+        ("haiku", "upstream-haiku-model"),
+        ("sonnet", "upstream-sonnet-model"),
+        ("opus", "upstream-opus-model"),
+    ] {
+        assert_eq!(
+            config
+                .resolve_model(alias)
+                .expect("alias should resolve")
+                .upstream_model,
+            upstream_model
+        );
+    }
+
+    let _guards = [
+        EnvGuard::set("HOME", temp.path().as_os_str()),
+        EnvGuard::set("LLMUP_INTERNAL_LAUNCH_PLAN", "1"),
+        EnvGuard::set("LLMUP_CLAUDE_BIN", "/opt/native/claude"),
+    ];
+
+    for alias in ["haiku", "sonnet", "opus"] {
+        let mut stdout = Vec::new();
+        let code = run_cli(
+            AgentKind::Claude,
+            vec![
+                OsString::from("--llmup-internal-launch-plan-json"),
+                OsString::from("--llmup-internal-proxy-base"),
+                OsString::from("http://matrix-proxy.local:19091"),
+                OsString::from("--llmup-internal-proxy-key"),
+                OsString::from("matrix-proxy-key"),
+                OsString::from("--llmup-internal-artifact-dir"),
+                artifact_dir.join(alias).into_os_string(),
+                OsString::from("--llmup-config"),
+                config_path.clone().into_os_string(),
+                OsString::from("--llmup-env-file"),
+                env_file_path.clone().into_os_string(),
+                OsString::from("--llmup-model"),
+                OsString::from(alias),
+            ],
+            &mut stdout,
+        )
+        .expect("launch plan should be generated");
+        assert_eq!(code, 0);
+
+        let text = String::from_utf8(stdout).expect("launch plan should be utf8");
+        let plan: serde_json::Value = serde_json::from_str(&text).expect("plan should be JSON");
+        assert_eq!(plan["projection"]["profile"]["alias"], alias);
+        assert_eq!(plan["env"]["ANTHROPIC_MODEL"], serde_json::json!(alias));
+        assert_eq!(
+            plan["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION"],
+            serde_json::json!(alias)
+        );
+        assert_eq!(
+            plan["env"]["CLAUDE_CODE_SUBAGENT_MODEL"],
+            serde_json::json!(alias)
+        );
+        for family in ["HAIKU", "SONNET", "OPUS"] {
+            let family_alias = family.to_ascii_lowercase();
+            let model_key = format!("ANTHROPIC_DEFAULT_{family}_MODEL");
+            let name_key = format!("ANTHROPIC_DEFAULT_{family}_MODEL_NAME");
+            let description_key = format!("ANTHROPIC_DEFAULT_{family}_MODEL_DESCRIPTION");
+            let capabilities_key =
+                format!("ANTHROPIC_DEFAULT_{family}_MODEL_SUPPORTED_CAPABILITIES");
+            assert_eq!(
+                plan["env"][model_key.as_str()],
+                serde_json::json!(family_alias)
+            );
+            assert_eq!(
+                plan["env"][name_key.as_str()],
+                serde_json::json!(family_alias)
+            );
+            assert_eq!(
+                plan["env"][description_key.as_str()],
+                serde_json::json!(format!("llmup proxy model {family_alias}"))
+            );
+            assert!(plan["env"].get(capabilities_key.as_str()).is_none());
+        }
+        assert!(plan["env"]
+            .get("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY")
+            .is_none());
+        assert!(plan["artifacts"]["codex_model_catalog"].is_null());
+    }
+}
+
+#[test]
 fn internal_launch_plan_requires_env_gate_and_emits_sanitized_codex_projection_json() {
     let _lock = ENV_LOCK.lock().expect("env lock");
     let temp = TempDir::new("launch-plan-codex");
@@ -966,7 +1347,8 @@ upstreams:
       tools:
         supports_search: false
 model_aliases:
-  default: DEFAULT:test-model
+  main: DEFAULT:test-model
+  vision: DEFAULT:vision-model
 "#,
     )
     .expect("write config");
@@ -1025,7 +1407,7 @@ model_aliases:
     assert_eq!(plan["agent"], "codex");
     assert_eq!(plan["program"], "/opt/native/codex");
     assert_eq!(plan["projection"]["enabled"], true);
-    assert_eq!(plan["projection"]["profile"]["alias"], "default");
+    assert_eq!(plan["projection"]["profile"]["alias"], "main");
     assert_eq!(
         plan["env"]["OPENAI_API_KEY"],
         serde_json::json!("matrix-proxy-key")
@@ -1044,7 +1426,7 @@ model_aliases:
     let argv = plan["argv"].as_array().expect("argv should be an array");
     assert!(argv
         .windows(2)
-        .any(|pair| pair[0] == "-m" && pair[1] == "default"));
+        .any(|pair| pair[0] == "-m" && pair[1] == "main"));
     assert!(argv.iter().any(|arg| {
         arg.as_str()
             .is_some_and(|value| value == "model_provider=\"proxy\"")
@@ -1053,6 +1435,10 @@ model_aliases:
         arg.as_str().is_some_and(|value| {
             value == "model_providers.proxy.base_url=\"http://matrix-proxy.local:19090/openai/v1\""
         })
+    }));
+    assert!(argv.windows(2).any(|pair| {
+        pair[0] == "-c"
+            && pair[1] == "openai_base_url=\"http://matrix-proxy.local:19090/openai/v1\""
     }));
     assert!(argv.iter().any(|arg| {
         arg.as_str()
@@ -1065,6 +1451,18 @@ model_aliases:
         .expect("codex artifact path should be present");
     assert!(catalog_path.starts_with(&artifact_dir.display().to_string()));
     assert!(Path::new(catalog_path).exists());
+    let catalog: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(catalog_path).expect("read catalog"))
+            .expect("catalog should parse");
+    assert_eq!(
+        catalog["models"]
+            .as_array()
+            .expect("models should be array")
+            .iter()
+            .map(|entry| entry["slug"].as_str().expect("slug should be string"))
+            .collect::<Vec<_>>(),
+        vec!["main", "vision"]
+    );
 }
 
 #[test]
@@ -1088,7 +1486,7 @@ upstreams:
       context_window: 200000
       max_output_tokens: 128000
 model_aliases:
-  default: DEFAULT:test-model
+  main: DEFAULT:test-model
 "#,
     )
     .expect("write config");
@@ -1139,7 +1537,7 @@ model_aliases:
     assert_eq!(plan["program"], "/opt/native/claude");
     assert_eq!(plan["argv"], serde_json::json!(["--resume", "session"]));
     assert_eq!(plan["projection"]["enabled"], true);
-    assert_eq!(plan["projection"]["profile"]["alias"], "default");
+    assert_eq!(plan["projection"]["profile"]["alias"], "main");
     assert_eq!(
         plan["env"]["ANTHROPIC_API_KEY"],
         serde_json::json!("matrix-proxy-key")
@@ -1151,6 +1549,15 @@ model_aliases:
     assert_eq!(
         plan["env"]["CLAUDE_CONFIG_DIR"],
         serde_json::json!(temp.path().join(".llmup-claude").display().to_string())
+    );
+    assert_eq!(plan["env"]["ANTHROPIC_MODEL"], serde_json::json!("main"));
+    assert_eq!(
+        plan["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION"],
+        serde_json::json!("main")
+    );
+    assert_eq!(
+        plan["env"]["CLAUDE_CODE_SUBAGENT_MODEL"],
+        serde_json::json!("main")
     );
     assert!(plan["artifacts"]["codex_model_catalog"].is_null());
     assert!(!artifact_dir.join("codex").exists());

@@ -17,7 +17,7 @@
 
 - 本地版本：`codex-cli 0.131.0`。
 - `codex debug models -c model_catalog_json="..."` 在不加 `--bundled` 时能读取自定义 catalog。
-- 完整 shape 的 `default` catalog 可返回：`context_window=200000`、`auto_compact_token_limit=61200`、`input_modalities=["text"]`、`supports_search_tool=false`、`apply_patch_tool_type="freeform"`、`supports_parallel_tool_calls=false`。
+- 完整 shape 的 `main` catalog 可返回：`context_window=200000`、`auto_compact_token_limit=61200`、`input_modalities=["text"]`、`supports_search_tool=false`、`apply_patch_tool_type="freeform"`、`supports_parallel_tool_calls=false`。
 - 最小 catalog 如果缺 `supported_reasoning_levels` 等完整字段会被 parser 拒绝；因此正式 catalog 不能只写几个字段。
 - `codex exec --strict-config -c 'tools.view_image=false'` 在本地 0.131.0 报 unknown configuration field，虽然官方 docs 已列出 `tools.view_image`。默认不注入；只有已确认版本支持时才注入。
 - `tools.web_search=false` 和旧写法 `web_search="disabled"` 本地都被接受。正式实现使用官方结构化 `tools.web_search=false`，迁移掉旧写法。
@@ -40,7 +40,7 @@
 
 - 本地版本：Claude Code `2.1.144`。
 - 本机 2.1.144 观测样例中，`--model default` 发出的真实请求 model 是 `claude-opus-4-7`，不是 llmup alias `default`。这证明自动追加 `--model default` 的旧实现有风险；不要把该具体模型名写成跨版本事实。
-- 设置 `ANTHROPIC_CUSTOM_MODEL_OPTION=default` 且 `ANTHROPIC_MODEL=default`，能让请求发送 `model: default`。
+- 设置 `ANTHROPIC_CUSTOM_MODEL_OPTION=main` 且 `ANTHROPIC_MODEL=main`，能让请求发送 `model: main`。
 - `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 会进入请求 `max_tokens`。
 - `CLAUDE_CODE_EFFORT_LEVEL=xhigh` 会进入请求 `output_config.effort`；`_SUPPORTED_CAPABILITIES` 会影响 effort/thinking。它们本计划只作为原生透传事实，不新增 llmup reasoning/capabilities 产品面。
 - `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 需要 `DISABLE_COMPACT=1` 才影响 context window；默认不要依赖它。
@@ -67,7 +67,7 @@
 
 ### 3.2 模型选择规则
 
-提供 `--llmup-model <alias>`，作为 llmup-managed alias 的唯一入口；默认值为 `default`。
+提供 `--llmup-model <alias>`，作为 llmup-managed alias 的唯一入口；默认值为 `main`。
 
 托管模式分两种，不能同时生效：
 
@@ -78,7 +78,7 @@
 
 - `--llmup-model` 与 `--llmup-no-profile-projection` 同时出现：报错。
 - managed projection 开启时，如果 native argv 里检测到 Claude `--model` / `--model=...`：报错，提示改用 `--llmup-model <alias>`，或显式加 `--llmup-no-profile-projection` 后自行管理 native model。
-- managed projection 开启时，Codex native argv 中所有会覆盖 llmup model/provider/catalog 的参数都必须 fail fast：`-m` / `--model` / `--model=...`、`--oss`、`--local-provider`、`--profile` / `--profile=...`，以及 `-c` / `--config` 写入的 `model`、`model_provider`、`model_catalog_json`、`model_providers.*`。
+- managed projection 开启时，Codex native argv 中所有会覆盖 llmup model/provider/catalog 的参数都必须 fail fast：`-m` / `--model` / `--model=...`、`--oss`、`--local-provider`、`--profile` / `--profile=...`，以及 `-c` / `--config` 写入的 `model`、`model_provider`、`openai_base_url`、`model_catalog_json`、`model_providers.*`。
 - 不允许 llmup alias projection 与 native model/provider/catalog override 两套同时生效。
 
 ### 3.3 唯一模型画像
@@ -112,7 +112,7 @@
 - 在 llmup 管理的 run/artifact dir 写完整 JSON catalog，并通过 `-c model_catalog_json="<path>"` 注入；managed launcher 使用本次 session run dir，hidden launch-plan 使用传入的 artifact dir，不覆盖用户 `~/.codex`。
 - catalog/profile preflight 和 JSON 写入必须在启动 proxy 前完成；任何 catalog 生成、写入或 profile 校验失败都不能先启动 proxy。
 - catalog entry 的 `slug` / `display_name` 使用 llmup alias。
-- catalog 必须包含 Codex 0.131.0 parser 需要的完整 shape，包括 `supported_reasoning_levels`、`shell_type`、`visibility`、`supported_in_api`、`base_instructions`、`supports_reasoning_summaries`、`apply_patch_tool_type`、`supports_parallel_tool_calls`、`experimental_supported_tools`。
+- catalog 必须包含 Codex 0.131.0 parser 需要的完整 shape，包括顶层 `description`、`supported_reasoning_levels`、`shell_type`、`visibility`、`supported_in_api`、`base_instructions`、`supports_reasoning_summaries`、`apply_patch_tool_type`、`supports_parallel_tool_calls`、`experimental_supported_tools`。
 - 从 canonical profile 填充 `context_window`、`auto_compact_token_limit`、`input_modalities`、`supports_search_tool`、`apply_patch_tool_type`、`supports_parallel_tool_calls`。
 - `surface.tools.supports_search == false` 时注入 `-c tools.web_search=false`，不再生成旧写法 `web_search="disabled"`。
 - `surface.tools.supports_view_image == false` 且 profile 未声明 modalities 时，catalog 默认 `input_modalities=["text"]`；仍不注入 `tools.view_image=false`。该 config 只有已确认版本支持时才注入。
@@ -131,7 +131,7 @@
 - 按 limits 注入 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 和 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`。
 - 不自动注入 `ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES`。`--effort`、`CLAUDE_CODE_EFFORT_LEVEL`、Claude Code capabilities、Codex `model_reasoning_*` 都只作为原生透传。未来若要成为 llmup 产品面，必须先扩 canonical schema 并补测试。
 - 不默认启用 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`。
-- 不做 family alias fallback。若 custom model option 的本地 smoke 不通过，fail fast 并提示升级/更换 Claude Code；不要自动 pin `ANTHROPIC_DEFAULT_OPUS_MODEL` / `SONNET` / `HAIKU`。
+- 不从 provider 模型名猜测 family alias，也不做 family alias fallback。若配置中显式存在 `haiku`、`sonnet`、`opus` alias，可按官方 env 投射 `ANTHROPIC_DEFAULT_HAIKU_MODEL`、`ANTHROPIC_DEFAULT_SONNET_MODEL`、`ANTHROPIC_DEFAULT_OPUS_MODEL`；若 custom model option 的本地 smoke 不通过，fail fast 并提示升级/更换 Claude Code。
 
 ### 3.6 Probe / doctor / preflight
 
@@ -169,13 +169,13 @@ Probe 是实现细节，不在普通 launcher 启动路径运行真实 agent pro
 
 测试覆盖要求：
 
-- Model selection：`--llmup-model` 默认 `default`；native model flag 与 managed projection 冲突 fail fast；`--llmup-no-profile-projection` 禁用所有 profile projection；两者同时出现报错。
-- Codex conflict detection：managed projection 拒绝 `-m` / `--model` / `--model=...`、`--oss`、`--local-provider`、`--profile` / `--profile=...`，以及 `-c` / `--config` 写入的 `model`、`model_provider`、`model_catalog_json`、`model_providers.*`。
+- Model selection：`--llmup-model` 默认 `main`；native model flag 与 managed projection 冲突 fail fast；`--llmup-no-profile-projection` 禁用所有 profile projection；两者同时出现报错。
+- Codex conflict detection：managed projection 拒绝 `-m` / `--model` / `--model=...`、`--oss`、`--local-provider`、`--profile` / `--profile=...`，以及 `-c` / `--config` 写入的 `model`、`model_provider`、`openai_base_url`、`model_catalog_json`、`model_providers.*`。
 - Profile merge：upstream limits/surface 与 alias override 合并正确。
 - Limits：全局 config 只校验非零；通用 profile 构造不因 Codex 输入预算失败；Codex catalog/projection preflight 对 `max_output_tokens >= context_window` fail；`set-limits` 写入时 fail。
 - Codex catalog：生成完整 shape；包含 parser 必需字段；`context_window=200000`、`max_output_tokens=128000` 时 auto compact 为 `61200`；catalog/projection preflight 和写入失败发生在 proxy 启动前。
 - Codex tools：search false 生成 `tools.web_search=false`；不再生成 `web_search="disabled"`；view image false 在未确认支持时不生成 `tools.view_image=false`；当 view image false 且未声明 modalities 时默认 `input_modalities=["text"]`。
-- Claude launch plan：默认 alias `default` 时 env 有 `ANTHROPIC_CUSTOM_MODEL_OPTION=default` 和 `ANTHROPIC_MODEL=default`，argv 不包含自动 `--model default`。
+- Claude launch plan：默认 alias `main` 时 env 有 `ANTHROPIC_CUSTOM_MODEL_OPTION=main` 和 `ANTHROPIC_MODEL=main`，argv 不包含自动 `--model default`。
 - Claude env scrub：managed profile 清理 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` 及其 `_NAME` / `_DESCRIPTION` / `_SUPPORTED_CAPABILITIES` 等后缀变量，并清理 `ANTHROPIC_SMALL_FAST_MODEL` 系列变量。
 - Claude reasoning/capabilities：不自动生成 `_SUPPORTED_CAPABILITIES`；`--effort` / `CLAUDE_CODE_EFFORT_LEVEL` 只作为 native passthrough 验证。
 - Claude limits：`max_output_tokens` 投影到 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；`context_window` 投影到 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`；默认不生成 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`。
@@ -189,7 +189,7 @@ Probe 是实现细节，不在普通 launcher 启动路径运行真实 agent pro
 - `tools.view_image=false` 只作为 CI/doctor probe；0.131.0 预期 reject。
 - `tools.web_search=false` 作为 CI/doctor 兼容检查。
 - `claude --version`。
-- 用 Anthropic stub 抓包验证 custom model option 下 alias `default` 发送 `model: default`。
+- 用 Anthropic stub 抓包验证 custom model option 下 alias `main` 发送 `model: main`。
 - 抓包验证 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 进入 `max_tokens`。`CLAUDE_CODE_EFFORT_LEVEL=xhigh` 只在 native passthrough smoke 中验证。
 
 矩阵迁移：
@@ -201,15 +201,15 @@ Probe 是实现细节，不在普通 launcher 启动路径运行真实 agent pro
 
 ## 5. 验收标准
 
-- `llmup-codex --llmup-model default` 在 limits/surface 已知时生成并注入完整 Codex catalog；`codex debug models` 能看到期望的 context、auto compact、modalities 和 tool surface。
+- `llmup-codex --llmup-model main` 在 limits/surface 已知时生成并注入完整 Codex catalog；`codex debug models` 能看到期望的 context、auto compact、modalities 和 tool surface。
 - managed projection 开启时，native model flag 和会覆盖 Codex llmup model/provider/catalog 的 native config 冲突 fail fast；escape hatch 模式不生成 profile projection。
 - `llmup-codex` 在 proxy 启动前完成 catalog/profile preflight 和 catalog 写入；失败时不启动 proxy。
 - `llmup-codex` 使用 `tools.web_search=false`；不默认注入 `tools.view_image=false`。
 - `llmup-codex` 在 `supports_view_image=false` 且未声明 modalities 时生成 `input_modalities=["text"]`，但不注入 `tools.view_image=false`。
 - `llmup-claude` 不再自动追加 `--model default`。
-- `llmup-claude --llmup-model default` 通过 custom model option 让 Claude Code 发往 proxy 的请求 model 为 `default`。
+- `llmup-claude --llmup-model main` 通过 custom model option 让 Claude Code 发往 proxy 的请求 model 为 `main`。
 - `llmup-claude` managed profile 清理会覆盖 llmup 选模的 Claude 原生默认模型环境变量，包括 default model family 和 small-fast model 系列。
-- `llmup-claude` 不自动注入 `_SUPPORTED_CAPABILITIES`，不做 family alias fallback。
+- `llmup-claude` 不自动注入 `_SUPPORTED_CAPABILITIES`，只在配置中存在 `haiku` / `sonnet` / `opus` alias 时投射官方 family alias env。
 - `CLAUDE_CODE_MAX_OUTPUT_TOKENS`、`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 按 configured limits 注入；默认不依赖 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`。
 - Anthropic `/models` 本轮只补齐 `max_input_tokens=context_window` / `max_tokens=max_output_tokens`，并保留 `llmup.limits` / `llmup.surface`；不输出 `capabilities`。
 - `llmup-config set-limits --alias ...` / `--upstream ...` 可用，只写 `config.yaml`，并覆盖冲突、未知目标、幂等、字符串 alias 升级、原子写权限和 list-form upstreams 明确失败测试。

@@ -166,13 +166,13 @@ llmup-config
 3. 模型名，例如 `provider-model-id`。
 4. API Key，以隐藏输入方式读取。
 
-默认按 OpenAI Chat Completions (`/v1/chat/completions`) 服务生成配置，本地模型名固定为 `default`，不要在第一版向导里询问。协议格式用一个带默认值的可选问题处理：用户直接回车就是 `openai-chat-completions`；只有服务商明确要求 OpenAI Responses 或 Anthropic Messages 时，才输入对应值。
+默认按 OpenAI Chat Completions (`/v1/chat/completions`) 服务生成配置，本地模型名固定为 `main`，不要在第一版向导里询问。协议格式用一个带默认值的可选问题处理：用户直接回车就是 `openai-chat-completions`；只有服务商明确要求 OpenAI Responses 或 Anthropic Messages 时，才输入对应值。
 
 - OpenAI Chat Completions 接口，默认推荐。不确定就直接回车。
 - OpenAI Responses 接口。仅当服务商明确要求 `/v1/responses` 时选择。
 - Anthropic Messages 接口。仅当服务商明确要求 `/v1/messages` 时选择。
 
-工程实现按用户选择生成清晰配置值；底层解析仍接受少量历史短名作为别名，但新配置不再生成这些容易误读的短名：
+工程实现按用户选择生成清晰配置值；配置工具只接受完整协议名，不再接受容易误读的历史短名：
 
 | 用户看到的选择 | 生成的配置值 |
 | --- | --- |
@@ -190,7 +190,7 @@ llmup-config
 
 ```bash
 LLM_UNIVERSAL_PROXY_KEY=<random-local-proxy-key>
-LLMUP_PROVIDER_DEFAULT_API_KEY=<user-provider-api-key>
+LLMUP_PROVIDER_MAIN_API_KEY=<user-provider-api-key>
 ```
 
 `config.yaml` 只引用环境变量，不写明文 API Key。第一版生成完整可运行模板，不能只写局部片段：
@@ -205,11 +205,11 @@ data_auth:
     env: LLM_UNIVERSAL_PROXY_KEY
 
 upstreams:
-  DEFAULT:
+  main:
     api_root: <model-service-url>
     format: <mapped-format>
     provider_key:
-      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+      env: LLMUP_PROVIDER_MAIN_API_KEY
     surface_defaults:
       modalities:
         input: ["text"]
@@ -221,7 +221,7 @@ upstreams:
         supports_parallel_calls: false
 
 model_aliases:
-  default: "DEFAULT:<model-name>"
+  main: "main:<model-name>"
 ```
 
 第一版不在向导里暴露 `limits`、tooling surface、搜索、图片或并行工具等能力开关。后续如果要开放，也必须从真实 provider 能力发现或明确高级配置开始，不进入普通用户首次路径。
@@ -248,10 +248,10 @@ model_aliases:
 ```bash
 printf '%s\n' "$PROVIDER_API_KEY" | llmup-config init \
   --non-interactive \
-  --interface openai \
+  --interface openai-chat-completions \
   --model-service-url https://api.example.com/v1 \
   --model-name provider-model-id \
-  --model-alias default \
+  --model-alias main \
   --api-key-stdin
 ```
 
@@ -440,7 +440,7 @@ CODEX_HOME="$LLMUP_CODEX_HOME"
 
 这是 managed profile projection：`llmup-codex` 把 Codex 指到本地 proxy，并把所选 llmup alias 投射为 Codex 可见的模型画像。launcher 会根据配置里的 limits / `llmup.surface` 生成 Codex model catalog 和 supported tool hints；profile 声明不支持 web search 时注入 `-c tools.web_search=false`。协议转换和请求执行仍由 proxy 配置和服务端转换承担。
 
-`-m <alias>` 由 managed projection 注入选中的 llmup alias，默认 alias 是 `default`。managed projection 开启时，如果 `NativeArgv` 包含会覆盖 llmup model/provider/catalog 的原生参数，例如 `-m`、`--model`、`--oss`、`--local-provider`、`--profile` / `--profile=...`、`-c model=...`、`-c model_provider=...`、`-c model_catalog_json=...` 或 `-c model_providers.*=...`，launcher 必须在启动前 fail fast，提示用户改用 `--llmup-model <alias>` 或显式加 `--llmup-no-profile-projection` 后自行管理 native 参数。需要完全不经过 llmup 时使用 `--llmup-no-proxy`。
+`-m <alias>` 由 managed projection 注入选中的 llmup alias，默认 alias 是 `main`。managed projection 开启时，如果 `NativeArgv` 包含会覆盖 llmup model/provider/catalog 的原生参数，例如 `-m`、`--model`、`--oss`、`--local-provider`、`--profile` / `--profile=...`、`-c model=...`、`-c model_provider=...`、`-c model_catalog_json=...` 或 `-c model_providers.*=...`，launcher 必须在启动前 fail fast，提示用户改用 `--llmup-model <alias>` 或显式加 `--llmup-no-profile-projection` 后自行管理 native 参数。需要完全不经过 llmup 时使用 `--llmup-no-proxy`。
 
 由于 Codex 对 option/subcommand 位置有自己的解析规则，真实 CLI smoke 必须覆盖最常见的 managed 命令形态，例如 `llmup-codex`、`llmup-codex resume --last`、`llmup-codex exec ...`。如果某个 Codex 版本不接受 managed projection 注入，不能引入子命令表作为 workaround，应优先改用位置无关的配置注入方式，例如 llmup 专用 `CODEX_HOME` 下的配置文件，或把该行为记录为当前版本限制。
 
@@ -633,8 +633,8 @@ Launcher 测试：
 
 - 全新 macOS/Linux/WSL 环境里，用户可以通过在线脚本安装主二进制和三个友好命令。
 - 用户运行 `llmup-config` 后，可以不手写 YAML、不 export 环境变量完成 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages 服务配置；MiniMax 只能作为可替换示例出现。
-- 用户运行 `llmup-codex` 后，Codex CLI 请求经本地 llmup 到达 mock upstream，认证头是 provider key，模型名由 `default` alias 解析为真实模型，客户端只持有本地 proxy key，退出码透传。
-- 用户运行 `llmup-claude` 后，Claude Code 请求经本地 llmup 到达 mock upstream，认证头是 provider key，模型名由 `default` alias 解析为真实模型，客户端只持有本地 proxy key，退出码透传。
+- 用户运行 `llmup-codex` 后，Codex CLI 请求经本地 llmup 到达 mock upstream，认证头是 provider key，模型名由 `main` alias 解析为真实模型，客户端只持有本地 proxy key，退出码透传。
+- 用户运行 `llmup-claude` 后，Claude Code 请求经本地 llmup 到达 mock upstream，认证头是 provider key，模型名由 `main` alias 解析为真实模型，客户端只持有本地 proxy key，退出码透传。
 - `llmup-codex resume --last`、`llmup-codex --yolo`、`llmup-claude --resume`、`llmup-claude --dangerously-skip-permissions` 不被 llmup 拒绝或吞参。
 - 除第一个 `--` 之前的 `--llmup-*` 和可选 routing delimiter `--` 外，用户可以继续使用 Codex/Claude 官方文档里的原生命令、子命令和参数；llmup 不要求用户学习另一套 agent 参数。
 - 用户需要执行 no-proxy 命令时，例如登录、更新、MCP 管理、查看原生帮助，可以使用 `--llmup-no-proxy`。

@@ -95,11 +95,21 @@ impl Drop for EnvGuard {
 }
 
 fn seed_local_config(llmup_home: &Path, yaml: &str) -> (PathBuf, PathBuf, String) {
+    seed_local_config_with_secrets(
+        llmup_home,
+        yaml,
+        "LLM_UNIVERSAL_PROXY_KEY=local-proxy-key\nLLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret\n",
+    )
+}
+
+fn seed_local_config_with_secrets(
+    llmup_home: &Path,
+    yaml: &str,
+    secrets: &str,
+) -> (PathBuf, PathBuf, String) {
     fs::create_dir_all(llmup_home).expect("create llmup home");
     let config_path = llmup_home.join("config.yaml");
     let secrets_path = llmup_home.join("secrets.env");
-    let secrets =
-        "LLM_UNIVERSAL_PROXY_KEY=local-proxy-key\nLLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret\n";
     fs::write(&config_path, yaml).expect("write config");
     fs::write(&secrets_path, secrets).expect("write secrets");
     (config_path, secrets_path, secrets.to_string())
@@ -145,7 +155,7 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
         interface: ProviderInterface::OpenAiChatCompletions,
         model_service_url: "https://api.minimaxi.com/v1".to_string(),
         model_name: "MiniMax-M2.7-highspeed".to_string(),
-        model_alias: "default".to_string(),
+        model_alias: "main".to_string(),
         force: false,
     };
 
@@ -155,21 +165,24 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
     let config_yaml = fs::read_to_string(&result.config_path).expect("read generated config");
     assert!(!config_yaml.contains("provider-secret-from-stdin"));
     assert!(config_yaml.contains("model_aliases"));
-    assert!(config_yaml.contains("default: DEFAULT:MiniMax-M2.7-highspeed"));
+    assert!(config_yaml.contains("main: main:MiniMax-M2.7-highspeed"));
+    assert!(!config_yaml.contains("DEFAULT"));
+    assert!(!config_yaml.contains("default:"));
     assert!(config_yaml.contains("data_auth"));
     assert!(config_yaml.contains("LLM_UNIVERSAL_PROXY_KEY"));
 
     let config = Config::from_yaml_str(&config_yaml).expect("generated YAML should parse");
     config.validate().expect("generated YAML should validate");
     let resolved = config
-        .resolve_model("default")
-        .expect("default alias should resolve");
-    assert_eq!(resolved.upstream_name, "DEFAULT");
+        .resolve_model("main")
+        .expect("main alias should resolve");
+    assert_eq!(resolved.upstream_name, "main");
     assert_eq!(resolved.upstream_model, "MiniMax-M2.7-highspeed");
 
     let secrets = fs::read_to_string(&result.secrets_path).expect("read generated secrets");
     assert!(secrets.contains("LLM_UNIVERSAL_PROXY_KEY="));
-    assert!(secrets.contains("LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret-from-stdin"));
+    assert!(secrets.contains("LLMUP_PROVIDER_MAIN_API_KEY=provider-secret-from-stdin"));
+    assert!(!secrets.contains("LLMUP_PROVIDER_DEFAULT_API_KEY"));
     parse_env_file_str(&secrets).expect("generated secrets.env should use the safe subset");
 
     #[cfg(unix)]
@@ -195,7 +208,7 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
             interface: ProviderInterface::OpenAiChatCompletions,
             model_service_url: "https://api.example.com/v1".to_string(),
             model_name: "other".to_string(),
-            model_alias: "default".to_string(),
+            model_alias: "main".to_string(),
             force: false,
         },
         "new-secret",
@@ -802,11 +815,14 @@ fn interactive_config_wizard_creates_config_instead_of_printing_usage_only() {
         fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
     assert!(config_yaml.contains("api_root: https://api.minimaxi.com/v1"));
     assert!(config_yaml.contains("format: openai-chat-completions"));
-    assert!(config_yaml.contains("default: DEFAULT:MiniMax-M2.7-highspeed"));
+    assert!(config_yaml.contains("main: main:MiniMax-M2.7-highspeed"));
+    assert!(!config_yaml.contains("DEFAULT"));
+    assert!(!config_yaml.contains("default:"));
     assert!(!config_yaml.contains("provider-secret-from-prompt"));
 
     let secrets = fs::read_to_string(llmup_home.join("secrets.env")).expect("read secrets");
-    assert!(secrets.contains("LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret-from-prompt"));
+    assert!(secrets.contains("LLMUP_PROVIDER_MAIN_API_KEY=provider-secret-from-prompt"));
+    assert!(!secrets.contains("LLMUP_PROVIDER_DEFAULT_API_KEY"));
 }
 
 #[test]
@@ -821,7 +837,7 @@ fn interactive_config_wizard_allows_protocol_format_selection() {
     let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
 
     let mut stdin = Cursor::new(
-        b"anthropic\nhttps://api.anthropic.example/v1\nclaude-compatible-model\nprovider-secret-from-prompt\n"
+        b"anthropic-messages\nhttps://api.anthropic.example/v1\nclaude-compatible-model\nprovider-secret-from-prompt\n"
             .to_vec(),
     );
     let mut stdout = Vec::new();
@@ -831,15 +847,43 @@ fn interactive_config_wizard_allows_protocol_format_selection() {
     assert_eq!(code, 0);
 
     let output = String::from_utf8(stdout).expect("stdout should be utf-8");
-    assert!(output.contains("Model service API format"));
+    assert!(output.contains("Model service type"));
     assert!(!output.contains("provider-secret-from-prompt"));
 
     let config_yaml =
         fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
     assert!(config_yaml.contains("api_root: https://api.anthropic.example/v1"));
     assert!(config_yaml.contains("format: anthropic-messages"));
-    assert!(config_yaml.contains("default: DEFAULT:claude-compatible-model"));
+    assert!(config_yaml.contains("main: main:claude-compatible-model"));
+    assert!(!config_yaml.contains("DEFAULT"));
     assert!(!config_yaml.contains("provider-secret-from-prompt"));
+}
+
+#[test]
+fn config_wizard_rejects_ambiguous_protocol_short_names() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("interactive-rejects-short-interface");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+
+    let mut stdin = Cursor::new(
+        b"anthropic\nhttps://api.anthropic.example/v1\nclaude-compatible-model\nprovider-secret-from-prompt\n"
+            .to_vec(),
+    );
+    let mut stdout = Vec::new();
+    let err = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect_err("ambiguous short protocol name should fail");
+
+    assert!(err.contains("unsupported model service type `anthropic`"));
+    assert!(err.contains("openai-chat-completions"));
+    assert!(err.contains("openai-responses"));
+    assert!(err.contains("anthropic-messages"));
+    assert!(!llmup_home.join("config.yaml").exists());
+    assert!(!llmup_home.join("secrets.env").exists());
 }
 
 #[test]
@@ -873,7 +917,8 @@ fn interactive_config_wizard_allows_openai_responses_format_selection() {
         fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
     assert!(config_yaml.contains("api_root: https://api.responses.example/v1"));
     assert!(config_yaml.contains("format: openai-responses"));
-    assert!(config_yaml.contains("default: DEFAULT:responses-model"));
+    assert!(config_yaml.contains("main: main:responses-model"));
+    assert!(!config_yaml.contains("DEFAULT"));
     assert!(!config_yaml.contains("provider-secret-from-prompt"));
 }
 
@@ -896,7 +941,7 @@ fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
             interface: ProviderInterface::OpenAiChatCompletions,
             model_service_url: "https://api.minimaxi.com/v1".to_string(),
             model_name: "MiniMax-M2.7-highspeed".to_string(),
-            model_alias: "default".to_string(),
+            model_alias: "main".to_string(),
             force: false,
         },
         "provider-secret-existing",
@@ -910,7 +955,7 @@ fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
     assert_eq!(code, 0);
 
     let output = String::from_utf8(stdout).expect("stdout should be utf-8");
-    assert!(output.contains("Existing llmup config found"));
+    assert!(output.contains("Current llmup config"));
     assert!(output.contains(&format!(
         "config: {}",
         llmup_home.join("config.yaml").display()
@@ -919,13 +964,918 @@ fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
         "secrets: {}",
         llmup_home.join("secrets.env").display()
     )));
-    assert!(output.contains("Alias: default -> DEFAULT:MiniMax-M2.7-highspeed"));
-    assert!(output.contains("Format: openai-chat-completions"));
-    assert!(output.contains("Service URL: https://api.minimaxi.com/v1"));
-    assert!(output.contains("Provider API key configured: yes"));
-    assert!(output.contains("Press Enter to keep it, type reconfigure, or type doctor"));
+    assert!(output.contains("Local models:"));
+    assert!(output.contains("main -> main:MiniMax-M2.7-highspeed"));
+    assert!(output.contains("Model services:"));
+    assert!(output.contains("main"));
+    assert!(output.contains("openai-chat-completions"));
+    assert!(output.contains("https://api.minimaxi.com/v1"));
+    assert!(output.contains("Provider API keys: all configured"));
+    assert!(output.contains("Press Enter to finish"));
+    assert!(output.contains("add-model"));
+    assert!(!output.contains("type add-service, add-alias"));
     assert!(output.contains("Keeping existing config."));
     assert!(!output.contains("provider-secret-existing"));
+}
+
+#[test]
+fn existing_config_add_model_enters_second_level_model_menu_for_existing_service() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("existing-config-add-model");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+model_aliases:
+  main: main:provider-main
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret\n",
+    );
+
+    let mut stdin =
+        Cursor::new(b"add-model\nexisting-service\nmain\nprovider-fast\nfast\n".to_vec());
+    let mut stdout = Vec::new();
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("interactive add-model existing service should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Press Enter to finish"));
+    assert!(output.contains("add-model"));
+    assert!(!output.contains("type add-service, add-alias"));
+    assert!(output.contains("type new-service or existing-service"));
+    assert!(output.contains("Added local model fast -> main:provider-fast"));
+
+    let rendered = fs::read_to_string(config_path).expect("read updated config");
+    assert!(rendered.contains("fast: main:provider-fast"));
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after interactive alias add"),
+        original_secrets
+    );
+}
+
+#[test]
+fn existing_config_rejects_hidden_legacy_add_model_shortcuts() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("existing-config-rejects-legacy-shortcuts");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+model_aliases:
+  main: main:provider-main
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret\n",
+    );
+    let original_config = fs::read_to_string(&config_path).expect("read original config");
+
+    let mut stdin = Cursor::new(
+        b"add-service\nbackup\nanthropic-messages\nhttps://backup.example.com/v1\nprovider-sonnet\nsonnet\nsecret\n"
+            .to_vec(),
+    );
+    let mut stdout = Vec::new();
+    let err = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect_err("top-level add-service should not be accepted");
+    assert!(err.contains("unknown choice `add-service`"));
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("read config after rejected add-service"),
+        original_config
+    );
+    assert_eq!(
+        fs::read_to_string(&secrets_path).expect("read secrets after rejected add-service"),
+        original_secrets
+    );
+
+    let mut stdin = Cursor::new(b"add-model\nadd-alias\nmain\nprovider-fast\nfast\n".to_vec());
+    let mut stdout = Vec::new();
+    let err = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect_err("second-level add-alias should not be accepted");
+    assert!(err.contains("unknown add-model choice `add-alias`"));
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("read config after rejected add-alias"),
+        original_config
+    );
+    assert_eq!(
+        fs::read_to_string(&secrets_path).expect("read secrets after rejected add-alias"),
+        original_secrets
+    );
+}
+
+#[test]
+fn existing_config_add_model_new_service_writes_second_service_alias_and_secret() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("existing-config-add-new-service");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, _original_secrets) = seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+model_aliases:
+  main: main:provider-main
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret\n",
+    );
+
+    let mut stdin = Cursor::new(
+        b"add-model\nnew-service\nbackup\nanthropic-messages\nhttps://backup.example.com/v1\nprovider-sonnet\nsonnet\nbackup-provider-secret\n"
+            .to_vec(),
+    );
+    let mut stdout = Vec::new();
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("interactive add-model new service should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("type new-service or existing-service"));
+    assert!(output.contains("Added model service backup"));
+    assert!(output.contains("sonnet -> backup:provider-sonnet"));
+    assert!(!output.contains("backup-provider-secret"));
+
+    let rendered = fs::read_to_string(&config_path).expect("read updated config");
+    assert!(rendered.contains("backup:"));
+    assert!(rendered.contains("env: LLMUP_PROVIDER_BACKUP_API_KEY"));
+    assert!(rendered.contains("sonnet: backup:provider-sonnet"));
+    assert!(rendered.contains("main: main:provider-main"));
+    assert!(!rendered.contains("backup-provider-secret"));
+    let parsed = Config::from_yaml_str(&rendered).expect("updated YAML should parse");
+    parsed.validate().expect("updated YAML should validate");
+
+    let secrets = fs::read_to_string(secrets_path).expect("read updated secrets");
+    assert!(secrets.contains("LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key"));
+    assert!(secrets.contains("LLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret"));
+    assert!(secrets.contains("LLMUP_PROVIDER_BACKUP_API_KEY=backup-provider-secret"));
+}
+
+#[test]
+fn config_list_outputs_redacted_multi_model_summary_without_secret_values() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("config-list");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1?token=secret#fragment
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+  backup:
+    api_root: https://backup.example.com/v1
+    format: anthropic-messages
+    provider_key:
+      env: LLMUP_PROVIDER_BACKUP_API_KEY
+model_aliases:
+  main: main:provider-main
+  sonnet: backup:provider-sonnet
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=main-provider-secret\nLLMUP_PROVIDER_BACKUP_API_KEY=backup-provider-secret\n",
+    );
+
+    let parsed = parse_config_args(vec![OsString::from("list")]).expect("list parses");
+    assert_eq!(parsed, ConfigCommand::List);
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(vec![OsString::from("list")], &mut stdin, &mut stdout)
+        .expect("list should summarize local files");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Current llmup config"));
+    assert!(output.contains("Model services:"));
+    assert!(output.contains("main"));
+    assert!(output.contains("backup"));
+    assert!(output.contains("openai-chat-completions"));
+    assert!(output.contains("anthropic-messages"));
+    assert!(output.contains("Local models:"));
+    assert!(output.contains("main -> main:provider-main"));
+    assert!(output.contains("sonnet -> backup:provider-sonnet"));
+    assert!(output.contains("Provider API keys: all configured"));
+    assert!(output.contains("https://api.example.com/v1?redacted=true#redacted"));
+    assert!(!output.contains("token=secret"));
+    assert!(!output.contains("main-provider-secret"));
+    assert!(!output.contains("backup-provider-secret"));
+}
+
+#[test]
+fn add_model_new_service_creates_upstream_alias_and_secret_without_overwriting_existing_secrets() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("add-model-new-service");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, _original_secrets) = seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+model_aliases:
+  main: main:provider-main
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret\n",
+    );
+
+    let mut stdin = Cursor::new(b"backup-provider-secret\n".to_vec());
+    let mut stdout = Vec::new();
+    let code = run_cli(
+        vec![
+            OsString::from("add-model"),
+            OsString::from("--new-service"),
+            OsString::from("--service-name"),
+            OsString::from("backup"),
+            OsString::from("--interface"),
+            OsString::from("anthropic-messages"),
+            OsString::from("--url"),
+            OsString::from("https://backup.example.com/v1"),
+            OsString::from("--model"),
+            OsString::from("provider-sonnet"),
+            OsString::from("--alias"),
+            OsString::from("sonnet"),
+            OsString::from("--api-key-stdin"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    )
+    .expect("add-model --new-service should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Added model service backup"));
+    assert!(output.contains("sonnet -> backup:provider-sonnet"));
+    assert!(!output.contains("backup-provider-secret"));
+
+    let rendered = fs::read_to_string(&config_path).expect("read updated config");
+    assert!(rendered.contains("backup:"));
+    assert!(rendered.contains("format: anthropic-messages"));
+    assert!(rendered.contains("env: LLMUP_PROVIDER_BACKUP_API_KEY"));
+    assert!(rendered.contains("sonnet: backup:provider-sonnet"));
+    assert!(rendered.contains("main: main:provider-main"));
+    assert!(!rendered.contains("backup-provider-secret"));
+    let parsed = Config::from_yaml_str(&rendered).expect("updated YAML should parse");
+    parsed.validate().expect("updated YAML should validate");
+    let resolved = parsed.resolve_model("sonnet").expect("new alias resolves");
+    assert_eq!(resolved.upstream_name, "backup");
+    assert_eq!(resolved.upstream_model, "provider-sonnet");
+
+    let secrets = fs::read_to_string(secrets_path).expect("read updated secrets");
+    assert!(secrets.contains("LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key"));
+    assert!(secrets.contains("LLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret"));
+    assert!(secrets.contains("LLMUP_PROVIDER_BACKUP_API_KEY=backup-provider-secret"));
+}
+
+#[test]
+fn add_model_existing_service_only_adds_alias_without_touching_secrets() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("add-model-existing-service");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+model_aliases:
+  main: main:provider-main
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret\n",
+    );
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(
+        vec![
+            OsString::from("add-model"),
+            OsString::from("--service"),
+            OsString::from("main"),
+            OsString::from("--model"),
+            OsString::from("provider-fast"),
+            OsString::from("--alias"),
+            OsString::from("fast"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    )
+    .expect("add-model --service should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Added local model fast -> main:provider-fast"));
+    let rendered = fs::read_to_string(&config_path).expect("read updated config");
+    assert!(rendered.contains("fast: main:provider-fast"));
+    let parsed = Config::from_yaml_str(&rendered).expect("updated YAML should parse");
+    parsed.validate().expect("updated YAML should validate");
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after alias add"),
+        original_secrets
+    );
+}
+
+#[test]
+fn add_model_existing_service_allows_legacy_and_handwritten_upstream_names() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("add-model-existing-legacy-service");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  DEFAULT:
+    api_root: https://default.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+  openai_chat:
+    api_root: https://chat.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_OPENAI_CHAT_API_KEY
+  foo.bar:
+    api_root: https://dot.example.com/v1
+    format: anthropic-messages
+    provider_key:
+      env: LLMUP_PROVIDER_FOO_BAR_API_KEY
+model_aliases:
+  legacy-main: DEFAULT:provider-main
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key\nLLMUP_PROVIDER_DEFAULT_API_KEY=keep-default-provider-secret\nLLMUP_PROVIDER_OPENAI_CHAT_API_KEY=keep-chat-provider-secret\nLLMUP_PROVIDER_FOO_BAR_API_KEY=keep-dot-provider-secret\n",
+    );
+
+    for (service, model, alias) in [
+        ("DEFAULT", "provider-fast", "legacy-default"),
+        ("openai_chat", "provider-chat", "legacy-chat"),
+        ("foo.bar", "provider-dot", "legacy-dot"),
+    ] {
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let code = run_cli(
+            vec![
+                OsString::from("add-model"),
+                OsString::from("--service"),
+                OsString::from(service),
+                OsString::from("--model"),
+                OsString::from(model),
+                OsString::from("--alias"),
+                OsString::from(alias),
+            ],
+            &mut stdin,
+            &mut stdout,
+        )
+        .expect("existing handwritten service names should be accepted");
+        assert_eq!(code, 0);
+    }
+
+    let rendered = fs::read_to_string(&config_path).expect("read updated config");
+    assert!(rendered.contains("legacy-default: DEFAULT:provider-fast"));
+    assert!(rendered.contains("legacy-chat: openai_chat:provider-chat"));
+    assert!(rendered.contains("legacy-dot: foo.bar:provider-dot"));
+    let parsed = Config::from_yaml_str(&rendered).expect("updated YAML should parse");
+    parsed.validate().expect("updated YAML should validate");
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after legacy service alias adds"),
+        original_secrets
+    );
+}
+
+#[test]
+fn add_model_rejects_reserved_empty_or_ambiguous_names_without_writing() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("add-model-invalid-names");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+model_aliases:
+  main: main:provider-main
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret\n",
+    );
+    let original_config = fs::read_to_string(&config_path).expect("read original config");
+
+    let invalid_new_services = [
+        ("", "empty service name"),
+        ("DEFAULT", "reserved service name"),
+        ("Foo", "case-variant service name"),
+        ("foo bar", "space in service name"),
+        ("foo:bar", "colon in service name"),
+        ("foo_bar", "underscore in service name"),
+        ("openai_chat", "underscore in service name"),
+        ("foo.bar", "dot in service name"),
+    ];
+    for (service_name, label) in invalid_new_services {
+        let mut stdin = Cursor::new(b"new-secret\n".to_vec());
+        let mut stdout = Vec::new();
+        let err = run_cli(
+            vec![
+                OsString::from("add-model"),
+                OsString::from("--new-service"),
+                OsString::from("--service-name"),
+                OsString::from(service_name),
+                OsString::from("--interface"),
+                OsString::from("openai-chat-completions"),
+                OsString::from("--url"),
+                OsString::from("https://new.example.com/v1"),
+                OsString::from("--model"),
+                OsString::from("provider-new"),
+                OsString::from("--alias"),
+                OsString::from("new-alias"),
+                OsString::from("--api-key-stdin"),
+            ],
+            &mut stdin,
+            &mut stdout,
+        )
+        .expect_err(label);
+        assert!(
+            err.contains("service-name") || err.contains("service"),
+            "unexpected error for {label}: {err}"
+        );
+    }
+
+    let invalid_aliases = [
+        ("", "empty alias"),
+        ("default", "reserved alias"),
+        ("Foo", "case-variant alias"),
+        ("foo bar", "space in alias"),
+        ("foo:bar", "colon in alias"),
+        ("foo_bar", "underscore in alias"),
+        ("foo.bar", "dot in alias"),
+    ];
+    for (alias, label) in invalid_aliases {
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let err = run_cli(
+            vec![
+                OsString::from("add-model"),
+                OsString::from("--service"),
+                OsString::from("main"),
+                OsString::from("--model"),
+                OsString::from("provider-new"),
+                OsString::from("--alias"),
+                OsString::from(alias),
+            ],
+            &mut stdin,
+            &mut stdout,
+        )
+        .expect_err(label);
+        assert!(
+            err.contains("alias") || err.contains("model name"),
+            "unexpected error for {label}: {err}"
+        );
+    }
+
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("read config after rejected add-model"),
+        original_config
+    );
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after rejected add-model"),
+        original_secrets
+    );
+}
+
+#[test]
+fn add_model_rejects_case_and_normalization_collisions_with_legacy_names() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("add-model-collisions");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+  FOO:
+    api_root: https://foo.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_FOO_API_KEY
+  foo.bar:
+    api_root: https://foobar.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_FOOBAR_API_KEY
+model_aliases:
+  main: main:provider-main
+  CaseAlias: main:provider-case
+  foo_bar: main:provider-foo
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=keep-local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=keep-main-provider-secret\nLLMUP_PROVIDER_FOO_API_KEY=foo-secret\nLLMUP_PROVIDER_FOOBAR_API_KEY=foobar-secret\n",
+    );
+    let original_config = fs::read_to_string(&config_path).expect("read original config");
+
+    for alias in ["casealias", "foo-bar"] {
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let err = run_cli(
+            vec![
+                OsString::from("add-model"),
+                OsString::from("--service"),
+                OsString::from("main"),
+                OsString::from("--model"),
+                OsString::from("provider-new"),
+                OsString::from("--alias"),
+                OsString::from(alias),
+            ],
+            &mut stdin,
+            &mut stdout,
+        )
+        .expect_err("alias normalization collision should fail");
+        assert!(err.contains("collides"), "unexpected error: {err}");
+    }
+
+    for service_name in ["foo", "foo-bar"] {
+        let mut stdin = Cursor::new(b"new-secret\n".to_vec());
+        let mut stdout = Vec::new();
+        let err = run_cli(
+            vec![
+                OsString::from("add-model"),
+                OsString::from("--new-service"),
+                OsString::from("--service-name"),
+                OsString::from(service_name),
+                OsString::from("--interface"),
+                OsString::from("openai-chat-completions"),
+                OsString::from("--url"),
+                OsString::from("https://new.example.com/v1"),
+                OsString::from("--model"),
+                OsString::from("provider-new"),
+                OsString::from("--alias"),
+                OsString::from("new-alias"),
+                OsString::from("--api-key-stdin"),
+            ],
+            &mut stdin,
+            &mut stdout,
+        )
+        .expect_err("service normalization collision should fail");
+        assert!(err.contains("collides"), "unexpected error: {err}");
+    }
+
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("read config after rejected collisions"),
+        original_config
+    );
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after rejected collisions"),
+        original_secrets
+    );
+}
+
+#[test]
+fn legacy_default_alias_gets_rename_hint_without_automatic_migration() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("legacy-default-hint");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, _original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:test-model
+"#,
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&secrets_path, fs::Permissions::from_mode(0o600))
+            .expect("secure legacy secrets");
+    }
+    let original_config = fs::read_to_string(&config_path).expect("read original config");
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(vec![OsString::from("list")], &mut stdin, &mut stdout)
+        .expect("legacy config should still list");
+    assert_eq!(code, 0);
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("default -> DEFAULT:test-model"));
+    assert!(output.contains("rename"));
+    assert!(output.contains("main"));
+    assert!(output.contains("Claude Code"));
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(vec![OsString::from("doctor")], &mut stdin, &mut stdout)
+        .expect("legacy config should still doctor");
+    assert_eq!(code, 0);
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("rename"));
+    assert!(output.contains("main"));
+    assert_eq!(
+        fs::read_to_string(config_path).expect("read config after hint"),
+        original_config
+    );
+}
+
+#[test]
+fn legacy_default_alias_can_be_explicitly_renamed_to_main_without_touching_secrets() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("legacy-default-rename-string");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:test-model
+"#,
+    );
+
+    let mut stdin = Cursor::new(b"rename-main\n".to_vec());
+    let mut stdout = Vec::new();
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("explicit legacy rename should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("rename-main"));
+    assert!(output.contains("Renamed local model default -> main"));
+
+    let rendered = fs::read_to_string(&config_path).expect("read renamed config");
+    assert!(rendered.contains("main: DEFAULT:test-model"));
+    assert!(!rendered.contains("default: DEFAULT:test-model"));
+    let parsed = Config::from_yaml_str(&rendered).expect("renamed YAML should parse");
+    parsed.validate().expect("renamed YAML should validate");
+    assert!(parsed.model_aliases.contains_key("main"));
+    assert!(!parsed.model_aliases.contains_key("default"));
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after rename"),
+        original_secrets
+    );
+}
+
+#[test]
+fn legacy_structured_default_alias_rename_preserves_alias_object() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("legacy-default-rename-structured");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default:
+    target: DEFAULT:test-model
+    limits:
+      context_window: 200000
+      max_output_tokens: 64000
+    surface:
+      modalities:
+        input: ["text", "image"]
+        output: ["text"]
+"#,
+    );
+
+    let mut stdin = Cursor::new(b"rename-main\n".to_vec());
+    let mut stdout = Vec::new();
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("explicit structured legacy rename should succeed");
+    assert_eq!(code, 0);
+
+    let rendered = fs::read_to_string(&config_path).expect("read renamed config");
+    let value: Value = serde_yaml::from_str(&rendered).expect("renamed config should be YAML");
+    let aliases = yaml_get(&value, "model_aliases");
+    assert!(aliases
+        .as_mapping()
+        .expect("aliases should be mapping")
+        .get(Value::String("default".to_string()))
+        .is_none());
+    let main = yaml_get(aliases, "main");
+    assert_eq!(
+        yaml_get(main, "target").as_str(),
+        Some("DEFAULT:test-model")
+    );
+    assert_eq!(
+        yaml_get(yaml_get(main, "limits"), "context_window").as_u64(),
+        Some(200_000)
+    );
+    assert_eq!(
+        yaml_get(yaml_get(main, "limits"), "max_output_tokens").as_u64(),
+        Some(64_000)
+    );
+    assert_eq!(
+        yaml_get(yaml_get(yaml_get(main, "surface"), "modalities"), "input")
+            .as_sequence()
+            .map(Vec::len),
+        Some(2)
+    );
+    let parsed = Config::from_yaml_str(&rendered).expect("renamed YAML should parse");
+    parsed.validate().expect("renamed YAML should validate");
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after structured rename"),
+        original_secrets
+    );
+}
+
+#[test]
+fn legacy_default_alias_rename_fails_fast_when_main_exists() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("legacy-default-rename-main-exists");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:test-model
+  main: DEFAULT:main-model
+"#,
+    );
+    let original_config = fs::read_to_string(&config_path).expect("read original config");
+
+    let mut stdin = Cursor::new(b"rename-main\n".to_vec());
+    let mut stdout = Vec::new();
+    let err = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect_err("rename-main must not overwrite an existing main alias");
+    assert!(err.contains("main"));
+    assert!(err.contains("already exists"));
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("read config after failed rename"),
+        original_config
+    );
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after failed rename"),
+        original_secrets
+    );
 }
 
 #[test]
@@ -950,7 +1900,7 @@ fn config_doctor_warns_missing_clients_but_validates_files() {
             interface: ProviderInterface::OpenAiChatCompletions,
             model_service_url: "https://api.example.com/v1".to_string(),
             model_name: "test-model".to_string(),
-            model_alias: "default".to_string(),
+            model_alias: "main".to_string(),
             force: false,
         },
         "provider-secret-for-doctor",
@@ -959,6 +1909,8 @@ fn config_doctor_warns_missing_clients_but_validates_files() {
 
     let parsed = parse_config_args(vec![OsString::from("doctor")]).expect("doctor parses");
     assert_eq!(parsed, ConfigCommand::Doctor);
+    assert!(parse_config_args(vec![OsString::from("check")]).is_err());
+    assert!(parse_config_args(vec![OsString::from("summary")]).is_err());
 
     let mut stdin = Cursor::new(Vec::new());
     let mut stdout = Vec::new();
@@ -979,6 +1931,57 @@ fn config_doctor_warns_missing_clients_but_validates_files() {
 }
 
 #[test]
+fn config_doctor_checks_all_provider_key_envs_for_multiple_upstreams() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("config-doctor-multi-upstream");
+    let llmup_home = temp.path().join(".llmup");
+    let empty_path = temp.path().join("empty-bin");
+    fs::create_dir_all(&empty_path).expect("create empty PATH dir");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let _path = EnvGuard::set("PATH", &empty_path);
+    seed_local_config_with_secrets(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  main:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_MAIN_API_KEY
+  backup:
+    api_root: https://backup.example.com/v1
+    format: anthropic-messages
+    provider_key:
+      env: LLMUP_PROVIDER_BACKUP_API_KEY
+model_aliases:
+  main: main:provider-main
+  sonnet: backup:provider-sonnet
+"#,
+        "LLM_UNIVERSAL_PROXY_KEY=local-proxy-key\nLLMUP_PROVIDER_MAIN_API_KEY=main-provider-secret\n",
+    );
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(vec![OsString::from("doctor")], &mut stdin, &mut stdout)
+        .expect("doctor should report missing provider envs without throwing");
+    assert_eq!(code, 1);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("ERROR required secrets missing or empty"));
+    assert!(output.contains("LLMUP_PROVIDER_BACKUP_API_KEY"));
+    assert!(!output.contains("main-provider-secret"));
+}
+
+#[test]
 fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
     let help = parse_config_args(vec![OsString::from("--help")]).expect("help parses");
     assert_eq!(help, ConfigCommand::Help);
@@ -993,7 +1996,7 @@ fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
         OsString::from("--model-name"),
         OsString::from("claude-test"),
         OsString::from("--model-alias"),
-        OsString::from("default"),
+        OsString::from("main"),
         OsString::from("--api-key-env"),
         OsString::from("TEST_PROVIDER_KEY"),
     ])
@@ -1003,7 +2006,7 @@ fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
         panic!("expected hidden init command");
     };
     assert_eq!(init.interface, ProviderInterface::AnthropicMessages);
-    assert_eq!(init.model_alias, "default");
+    assert_eq!(init.model_alias, "main");
     assert_eq!(
         init.api_key_source,
         ApiKeySource::Env("TEST_PROVIDER_KEY".to_string())

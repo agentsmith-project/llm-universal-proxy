@@ -12,7 +12,9 @@ use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use serde_yaml::Value as YamlValue;
 use uuid::Uuid;
 
-use super::agent_model_profile::{write_codex_model_catalog, AgentModelProfile};
+use super::agent_model_profile::{
+    write_codex_model_catalog_for_profiles, AgentModelCatalog, DEFAULT_AGENT_MODEL_ALIAS,
+};
 use super::env_file::{read_env_file, EnvFile};
 use super::{env_path_or_default, home_dir_from_env};
 use crate::Config;
@@ -72,7 +74,7 @@ pub enum ProxyMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileProjection {
     Enabled {
-        profile: AgentModelProfile,
+        model_catalog: AgentModelCatalog,
         codex_catalog_path: Option<PathBuf>,
     },
     Disabled,
@@ -248,33 +250,36 @@ pub fn build_client_argv(
     native_argv: &[OsString],
 ) -> Vec<OsString> {
     let mut argv = match kind {
-        AgentKind::Codex if mode.is_managed() => vec![
-            "-c".into(),
-            "model_provider=\"proxy\"".into(),
-            "-c".into(),
-            "model_providers.proxy.name=\"llmup\"".into(),
-            "-c".into(),
-            format!(
-                "model_providers.proxy.base_url=\"{}\"",
-                openai_proxy_base_url(mode).expect("managed proxy mode should have a base URL")
-            )
-            .into(),
-            "-c".into(),
-            "model_providers.proxy.env_key=\"OPENAI_API_KEY\"".into(),
-            "-c".into(),
-            "model_providers.proxy.wire_api=\"responses\"".into(),
-            "-c".into(),
-            "model_providers.proxy.supports_websockets=false".into(),
-        ],
+        AgentKind::Codex if mode.is_managed() => {
+            let openai_base_url =
+                openai_proxy_base_url(mode).expect("managed proxy mode should have a base URL");
+            vec![
+                "-c".into(),
+                "model_provider=\"proxy\"".into(),
+                "-c".into(),
+                format!("openai_base_url=\"{openai_base_url}\"").into(),
+                "-c".into(),
+                "model_providers.proxy.name=\"llmup\"".into(),
+                "-c".into(),
+                format!("model_providers.proxy.base_url=\"{openai_base_url}\"").into(),
+                "-c".into(),
+                "model_providers.proxy.env_key=\"OPENAI_API_KEY\"".into(),
+                "-c".into(),
+                "model_providers.proxy.wire_api=\"responses\"".into(),
+                "-c".into(),
+                "model_providers.proxy.supports_websockets=false".into(),
+            ]
+        }
         AgentKind::Claude if mode.is_managed() => Vec::new(),
         _ => Vec::new(),
     };
     if mode.is_managed() {
         if let ProfileProjection::Enabled {
-            profile,
+            model_catalog,
             codex_catalog_path,
         } = projection
         {
+            let selected_profile = &model_catalog.selected;
             match kind {
                 AgentKind::Codex => {
                     if let Some(catalog_path) = codex_catalog_path {
@@ -283,7 +288,7 @@ pub fn build_client_argv(
                             format!("model_catalog_json=\"{}\"", catalog_path.display()).into(),
                         );
                     }
-                    if profile
+                    if selected_profile
                         .surface
                         .tools
                         .as_ref()
@@ -294,7 +299,7 @@ pub fn build_client_argv(
                         argv.push("tools.web_search=false".into());
                     }
                     argv.push("-m".into());
-                    argv.push(profile.alias.clone().into());
+                    argv.push(selected_profile.alias.clone().into());
                 }
                 AgentKind::Claude => {}
             }
@@ -306,15 +311,18 @@ pub fn build_client_argv(
 
 pub fn prepare_profile_projection(
     kind: AgentKind,
-    profile: AgentModelProfile,
+    model_catalog: AgentModelCatalog,
     run_dir: impl AsRef<Path>,
 ) -> Result<ProfileProjection, String> {
     let codex_catalog_path = match kind {
-        AgentKind::Codex => Some(write_codex_model_catalog(&profile, run_dir)?),
+        AgentKind::Codex => Some(write_codex_model_catalog_for_profiles(
+            &model_catalog.profiles,
+            run_dir,
+        )?),
         AgentKind::Claude => None,
     };
     Ok(ProfileProjection::Enabled {
-        profile,
+        model_catalog,
         codex_catalog_path,
     })
 }
@@ -452,7 +460,9 @@ pub fn build_client_environment(
                     ),
                 );
                 env.insert("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB".into(), "1".into());
-                if let ProfileProjection::Enabled { profile, .. } = projection {
+                env.insert("CLAUDE_CODE_ATTRIBUTION_HEADER".into(), "0".into());
+                if let ProfileProjection::Enabled { model_catalog, .. } = projection {
+                    let profile = &model_catalog.selected;
                     env.insert(
                         "ANTHROPIC_CUSTOM_MODEL_OPTION".into(),
                         OsString::from(profile.alias.as_str()),
@@ -469,6 +479,10 @@ pub fn build_client_environment(
                         "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION".into(),
                         OsString::from(format!("llmup proxy model {}", profile.alias)),
                     );
+                    env.insert(
+                        "CLAUDE_CODE_SUBAGENT_MODEL".into(),
+                        OsString::from(profile.alias.as_str()),
+                    );
                     if let Some(max_output_tokens) = profile.claude_max_output_tokens() {
                         env.insert(
                             "CLAUDE_CODE_MAX_OUTPUT_TOKENS".into(),
@@ -481,12 +495,37 @@ pub fn build_client_environment(
                             OsString::from(auto_compact_window.to_string()),
                         );
                     }
+                    inject_claude_family_model_env(&mut env, model_catalog);
                 }
             }
         }
     }
 
     Ok(env)
+}
+
+fn inject_claude_family_model_env(
+    env: &mut BTreeMap<OsString, OsString>,
+    model_catalog: &AgentModelCatalog,
+) {
+    for (alias, env_prefix) in [
+        ("haiku", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+        ("sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
+        ("opus", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
+    ] {
+        if !model_catalog.has_alias(alias) {
+            continue;
+        }
+        env.insert(OsString::from(env_prefix), OsString::from(alias));
+        env.insert(
+            OsString::from(format!("{env_prefix}_NAME")),
+            OsString::from(alias),
+        );
+        env.insert(
+            OsString::from(format!("{env_prefix}_DESCRIPTION")),
+            OsString::from(format!("llmup proxy model {alias}")),
+        );
+    }
 }
 
 pub fn write_runtime_config_for_port(
@@ -609,8 +648,8 @@ pub fn run_cli(
         )
     })?;
     let projection = match &base_projection {
-        ProfileProjection::Enabled { profile, .. } => {
-            prepare_profile_projection(kind, profile.clone(), &session_dir)?
+        ProfileProjection::Enabled { model_catalog, .. } => {
+            prepare_profile_projection(kind, model_catalog.clone(), &session_dir)?
         }
         ProfileProjection::Disabled => ProfileProjection::Disabled,
     };
@@ -699,10 +738,13 @@ fn build_base_projection(
     if control.no_profile_projection {
         return Ok(ProfileProjection::Disabled);
     }
-    let alias = control.model_alias.as_deref().unwrap_or("default");
-    let profile = AgentModelProfile::from_config(user_config, alias)?;
+    let alias = control
+        .model_alias
+        .as_deref()
+        .unwrap_or(DEFAULT_AGENT_MODEL_ALIAS);
+    let model_catalog = AgentModelCatalog::from_config(user_config, alias)?;
     Ok(ProfileProjection::Enabled {
-        profile,
+        model_catalog,
         codex_catalog_path: None,
     })
 }
@@ -752,8 +794,8 @@ fn write_internal_launch_plan(
         .unwrap_or_else(|| homes.llmup_home.join("secrets.env"));
     let secrets = read_env_file(&env_file_path)?;
     let projection = match &base_projection {
-        ProfileProjection::Enabled { profile, .. } => {
-            prepare_profile_projection(kind, profile.clone(), &artifact_dir)?
+        ProfileProjection::Enabled { model_catalog, .. } => {
+            prepare_profile_projection(kind, model_catalog.clone(), &artifact_dir)?
         }
         ProfileProjection::Disabled => ProfileProjection::Disabled,
     };
@@ -794,9 +836,10 @@ fn launch_plan_json(
     }
     let (projection_json, codex_model_catalog) = match projection {
         ProfileProjection::Enabled {
-            profile,
+            model_catalog,
             codex_catalog_path,
         } => {
+            let selected_profile = &model_catalog.selected;
             let catalog = codex_catalog_path
                 .as_ref()
                 .map(|path| path.display().to_string());
@@ -804,7 +847,7 @@ fn launch_plan_json(
                 json!({
                     "enabled": true,
                     "profile": {
-                        "alias": profile.alias.as_str(),
+                        "alias": selected_profile.alias.as_str(),
                     },
                     "codex_catalog_path": catalog.as_deref(),
                 }),
@@ -948,6 +991,7 @@ fn should_scrub_claude_env(key: &OsStr) -> bool {
         "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
         "CLAUDE_CODE_SKIP_MANTLE_AUTH",
         "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER",
     ];
     const PREFIXES: &[&str] = &[
         "ANTHROPIC_BEDROCK_",
@@ -974,6 +1018,7 @@ fn should_scrub_claude_profile_env(key: &OsStr) -> bool {
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
     ];
     const MODEL_PREFIXES: &[&str] = &[
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -1047,8 +1092,10 @@ fn codex_projection_config_override(value: &str) -> bool {
         .map(|(key, _)| key)
         .unwrap_or(value)
         .trim();
-    matches!(key, "model" | "model_provider" | "model_catalog_json")
-        || key.starts_with("model_providers.")
+    matches!(
+        key,
+        "model" | "model_provider" | "model_catalog_json" | "openai_base_url"
+    ) || key.starts_with("model_providers.")
 }
 
 fn native_model_flag_error(kind: AgentKind, flag: &str) -> String {

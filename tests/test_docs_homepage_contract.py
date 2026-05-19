@@ -22,6 +22,9 @@ CONFIG_DOC = "docs/configuration.md"
 USER_TOOLING_PLAN_DOC = (
     "docs/engineering/pre-ga-user-tooling-install-config-agent-launch-plan.md"
 )
+AGENT_MODEL_METADATA_PLAN_DOC = (
+    "docs/engineering/pre-ga-agent-launcher-model-capability-metadata-plan.md"
+)
 ADVANCED_LINKS = (
     "docs/advanced-usage.md",
     "docs/clients.md",
@@ -151,6 +154,46 @@ class DocsHomepageContractTests(unittest.TestCase):
             ),
         )
 
+    def test_readme_new_user_model_name_is_main_not_default(self):
+        text = self.read_text("README.md")
+
+        for snippet in (
+            "The default local model name is `main`.",
+            "`llmup-codex` and `llmup-claude` use `main` unless you choose another llmup alias.",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, text)
+
+        for forbidden in (
+            "`default` as the model",
+            "`default` model",
+            "`default` alias",
+            "--alias default",
+            "--llmup-model default",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
+
+    def test_readme_and_clients_use_explicit_protocol_names(self):
+        for relative_path in ("README.md", "docs/clients.md"):
+            text = self.read_text(relative_path)
+            for snippet in (
+                "`openai-chat-completions`",
+                "`openai-responses`",
+                "`anthropic-messages`",
+            ):
+                with self.subTest(path=relative_path, snippet=snippet):
+                    self.assertIn(snippet, text)
+
+            for forbidden in (
+                "OpenAI-compatible",
+                "OpenAI compatible",
+                "OpenAI Chat Completions-compatible",
+                "Anthropic Messages-compatible",
+            ):
+                with self.subTest(path=relative_path, forbidden=forbidden):
+                    self.assertNotIn(forbidden, text)
+
     def test_user_entry_docs_explain_native_clients_are_external(self):
         self.assert_doc_mentions(
             "README.md",
@@ -235,11 +278,20 @@ class DocsHomepageContractTests(unittest.TestCase):
         for snippet in (
             "managed profile projection",
             "`--llmup-model <alias>` selects the llmup alias",
+            "The default alias is `main`.",
             "generates a Codex model catalog and supported tool hints",
+            "The Codex catalog contains every configured llmup alias.",
+            "Codex UI may or may not display every catalog alias",
+            "The hard contract is that the selected alias can start the Codex session.",
             "`llmup.surface` metadata",
             "does not append an automatic native `--model default` argument",
+            "`main` is the normal selected alias for Claude Code.",
             "`ANTHROPIC_CUSTOM_MODEL_OPTION`",
             "`ANTHROPIC_MODEL`",
+            "`ANTHROPIC_DEFAULT_HAIKU_MODEL=haiku`",
+            "`ANTHROPIC_DEFAULT_SONNET_MODEL=sonnet`",
+            "`ANTHROPIC_DEFAULT_OPUS_MODEL=opus`",
+            "`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` is not enabled by default.",
             "`--llmup-no-profile-projection`",
             "Protocol shaping and request enforcement stay in the proxy configuration and server-side conversion path.",
         ):
@@ -254,6 +306,22 @@ class DocsHomepageContractTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
+
+    def test_clients_guide_documents_launcher_inheritance_boundary(self):
+        self.assert_doc_mentions(
+            "docs/clients.md",
+            (
+                "## Inheritance Boundary",
+                "The V1 launcher contract is narrow",
+                "main Codex or Claude Code session goes through the local proxy",
+                "native Codex subagents or Claude Code Task/subagent calls",
+                "same client runtime inherit that proxy wiring",
+                "does not guarantee proxy inheritance for Claude agent teams",
+                "bare `codex` or `claude` commands started from a shell",
+                "arbitrary shell child processes such as MCP servers, hooks, or scripts",
+                "background tasks that continue after the launcher-managed parent exits",
+            ),
+        )
 
     def test_clients_guide_documents_explicit_no_proxy_escape_hatch(self):
         text = self.read_text("docs/clients.md")
@@ -319,8 +387,12 @@ class DocsHomepageContractTests(unittest.TestCase):
             "Manual Proxy Startup",
             "Multi-Endpoint YAML",
             "Advanced Model Limits",
-            "llmup-config set-limits --alias default --context-window 200000 --max-output-tokens 128000",
+            "llmup-config set-limits --alias main --context-window 200000 --max-output-tokens 128000",
             "The command only updates `~/.llmup/config.yaml`",
+            'main: "openai_chat:provider-model"',
+            'fast: "openai_chat:provider-fast-model"',
+            'sonnet: "anthropic_messages:claude-sonnet-like"',
+            'opus: "anthropic_messages:claude-opus-like"',
             "Manual Codex Wiring",
             "Manual Claude Wiring",
             "The provider key belongs to the proxy, not to the client.",
@@ -338,9 +410,33 @@ class DocsHomepageContractTests(unittest.TestCase):
             "GET /admin/state",
             "POST /admin/namespaces/:namespace/config",
             "PUT /admin/data-auth",
+            'default: "',
+            "--alias default",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
+
+    def test_old_engineering_plans_no_longer_deliver_default_alias_as_the_default(self):
+        for relative_path in (USER_TOOLING_PLAN_DOC, AGENT_MODEL_METADATA_PLAN_DOC):
+            text = self.read_text(relative_path)
+            for forbidden in (
+                "本地模型名固定为 `default`",
+                "默认 alias 是 `default`",
+                "默认值为 `default`",
+                "默认 alias `default`",
+                "--model-alias default",
+                "LLMUP_PROVIDER_DEFAULT_API_KEY",
+                'default: "DEFAULT:<model-name>"',
+                "`--llmup-model default`",
+            ):
+                with self.subTest(path=relative_path, forbidden=forbidden):
+                    self.assertNotIn(forbidden, text)
+
+        self.assertIn("本地模型名固定为 `main`", self.read_text(USER_TOOLING_PLAN_DOC))
+        self.assertIn(
+            "提供 `--llmup-model <alias>`，作为 llmup-managed alias 的唯一入口；默认值为 `main`。",
+            self.read_text(AGENT_MODEL_METADATA_PLAN_DOC),
+        )
 
     def test_user_entry_docs_retain_bounded_compatibility_language(self):
         self.assert_doc_mentions(

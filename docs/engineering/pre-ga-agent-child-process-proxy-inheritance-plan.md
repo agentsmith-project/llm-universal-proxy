@@ -57,19 +57,20 @@
 当前实现已经做了主要事情：
 
 - 通过 argv 注入 `model_provider="proxy"`。
+- 注入 top-level `openai_base_url="<llmup>/openai/v1"` 作为 Codex 官方配置 fallback，避免内部路径落回内置 `openai` provider 时打到官方 endpoint。
 - 注入 `model_providers.proxy.base_url="<llmup>/openai/v1"`。
 - 注入 `model_providers.proxy.env_key="OPENAI_API_KEY"`。
 - 注入 `model_providers.proxy.wire_api="responses"`。
 - 注入 `model_catalog_json`。
 - 注入 `-m <llmup alias>`。
-- 通过 env 设置 `CODEX_HOME`、`OPENAI_API_KEY=<local proxy key>`；当前实现也设置 `OPENAI_BASE_URL=<llmup>/openai/v1` 作为兼容辅助，但 V1 的官方兼容依据是 Codex `model_providers.proxy.base_url` / `env_key` / `wire_api` 配置，而不是 `OPENAI_BASE_URL`。
+- 通过 env 设置 `CODEX_HOME`、`OPENAI_API_KEY=<local proxy key>`；当前实现也设置 `OPENAI_BASE_URL=<llmup>/openai/v1` 作为兼容辅助，但 V1 的官方兼容依据是 Codex argv 配置中的 `openai_base_url` fallback 和 `model_providers.proxy.base_url` / `env_key` / `wire_api`，而不是 `OPENAI_BASE_URL`。
 
 V1 不做 Codex session overlay，也不把动态端口写入共享 `~/.llmup-codex/config.toml`。
 
 V1 要补的不是大架构，而是验证和小修：
 
 - 用 contract test 固定当前 argv/env 注入。
-- 用 fake Codex 子请求模拟确认 parent runtime override 会被带到子请求。
+- 用 fake Codex 子请求模拟确认 custom provider override 会被带到子请求；同时覆盖“落回内置 `openai` provider 时读取 top-level `openai_base_url`”的路径。
 - 用 mock server 捕获请求，确认子请求打到 llmup proxy，而不是官方 endpoint。
 - 对 Codex custom agent 只显式 `model` 的场景做负向测试：请求仍必须走 proxy；如果模型名无法路由，llmup 返回清晰错误。
 - 对 Codex custom agent 显式覆盖 provider/base URL/auth 的场景，只做边界文档和可观测错误，不把它纳入 V1 保证。
@@ -126,7 +127,7 @@ V1 不实现 teammate global config 写入，也不把 agent teams 作为硬保�
 ### Mock e2e
 
 - fake Codex 主会话请求命中 llmup mock server。
-- fake Codex 子请求模拟命中 llmup mock server。它只证明 launcher 注入被模拟子请求继承，不等同于证明官方 Codex runtime 行为。
+- fake Codex 子请求模拟命中 llmup mock server，其中包含读取 top-level `openai_base_url` 的内置 `openai` provider fallback 路径。它只证明 launcher 注入被模拟子请求继承，不等同于证明官方 Codex runtime 行为。
 - fake Codex custom agent 只显式 model 时，请求仍命中 llmup mock server；未知 model 返回明确错误。
 - fake Claude 主会话请求命中 llmup mock server。
 - fake Claude Task 子请求模拟命中 llmup mock server，并使用 llmup alias。它只证明 launcher env 设计，不等同于证明官方 Claude runtime 行为。

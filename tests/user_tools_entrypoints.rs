@@ -80,7 +80,7 @@ fn init_llmup_config(
             "--model-name",
             model_name,
             "--model-alias",
-            "default",
+            "main",
             "--api-key-stdin",
         ])
         .env("LLMUP_HOME", llmup_home)
@@ -168,14 +168,29 @@ with open(log_path, "w", encoding="utf-8") as log:
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
         "ANTHROPIC_CUSTOM_MODEL_OPTION",
         "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
         "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
         "ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES",
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
         "CLAUDE_CONFIG_DIR",
         "LLMUP_PROVIDER_DEFAULT_API_KEY",
+        "LLMUP_PROVIDER_MAIN_API_KEY",
         "UNRELATED_SECRET_COPY",
         "HOME",
     ]:
@@ -185,39 +200,47 @@ model = os.environ.get("ANTHROPIC_MODEL")
 if not model:
     print("missing ANTHROPIC_MODEL from launcher", file=sys.stderr)
     sys.exit(30)
+subagent_model = os.environ.get("CLAUDE_CODE_SUBAGENT_MODEL") or model
+with open(log_path, "a", encoding="utf-8") as log:
+    log.write(f"SUBAGENT_MODEL={subagent_model}\n")
 
 base_url = os.environ["ANTHROPIC_BASE_URL"].rstrip("/")
 api_key = os.environ["ANTHROPIC_API_KEY"]
-body = {
-    "model": model,
-    "max_tokens": 16,
-    "messages": [{"role": "user", "content": "ping"}],
-    "stream": False,
-}
-request = urllib.request.Request(
-    base_url + "/v1/messages",
-    data=json.dumps(body).encode("utf-8"),
-    method="POST",
-    headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-    },
-)
-try:
-    with urllib.request.urlopen(request, timeout=5) as response:
-        payload = response.read().decode("utf-8")
-        status = response.status
-except urllib.error.HTTPError as error:
-    print(error.read().decode("utf-8"), file=sys.stderr)
-    sys.exit(31)
-except Exception as error:
-    print(f"request failed: {error}", file=sys.stderr)
-    sys.exit(32)
 
-if status != 200 or "OK" not in payload:
-    print(f"unexpected response status={status} payload={payload}", file=sys.stderr)
-    sys.exit(33)
+def post_message(request_model, content, error_base):
+    body = {
+        "model": request_model,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": content}],
+        "stream": False,
+    }
+    request = urllib.request.Request(
+        base_url + "/v1/messages",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+            status = response.status
+    except urllib.error.HTTPError as error:
+        print(error.read().decode("utf-8"), file=sys.stderr)
+        sys.exit(error_base)
+    except Exception as error:
+        print(f"request failed: {error}", file=sys.stderr)
+        sys.exit(error_base + 1)
+
+    if status != 200 or "OK" not in payload:
+        print(f"unexpected response status={status} payload={payload}", file=sys.stderr)
+        sys.exit(error_base + 2)
+
+post_message(model, "claude-main", 31)
+post_message(subagent_model, "claude-task-subagent", 34)
 "#,
     )
     .expect("write fake claude full-flow client");
@@ -245,6 +268,7 @@ with open(log_path, "w", encoding="utf-8") as log:
         "OPENAI_API_KEY",
         "CODEX_HOME",
         "LLMUP_PROVIDER_DEFAULT_API_KEY",
+        "LLMUP_PROVIDER_MAIN_API_KEY",
         "UNRELATED_SECRET_COPY",
         "HOME",
     ]:
@@ -252,48 +276,163 @@ with open(log_path, "w", encoding="utf-8") as log:
 
 model = None
 base_url = None
+builtin_openai_base_url = None
 for index, arg in enumerate(args):
     if arg == "-m" and index + 1 < len(args):
         model = args[index + 1]
     prefix = 'model_providers.proxy.base_url="'
     if arg.startswith(prefix) and arg.endswith('"'):
         base_url = arg[len(prefix):-1]
-if model is None or base_url is None:
-    print("missing model or base_url from launcher", file=sys.stderr)
+    prefix = 'openai_base_url="'
+    if arg.startswith(prefix) and arg.endswith('"'):
+        builtin_openai_base_url = arg[len(prefix):-1]
+if model is None or base_url is None or builtin_openai_base_url is None:
+    print("missing model, proxy base_url, or openai_base_url from launcher", file=sys.stderr)
     sys.exit(40)
+with open(log_path, "a", encoding="utf-8") as log:
+    log.write(f"SUBAGENT_MODEL={model}\n")
+    log.write(f"OPENAI_FALLBACK_BASE_URL={builtin_openai_base_url}\n")
 
 api_key = os.environ["OPENAI_API_KEY"]
-body = {
-    "model": model,
-    "input": "ping",
-    "stream": False,
-}
-request = urllib.request.Request(
-    base_url.rstrip("/") + "/responses",
-    data=json.dumps(body).encode("utf-8"),
-    method="POST",
-    headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    },
-)
-try:
-    with urllib.request.urlopen(request, timeout=5) as response:
-        payload = response.read().decode("utf-8")
-        status = response.status
-except urllib.error.HTTPError as error:
-    print(error.read().decode("utf-8"), file=sys.stderr)
-    sys.exit(41)
-except Exception as error:
-    print(f"request failed: {error}", file=sys.stderr)
-    sys.exit(42)
 
-if status != 200 or "OK" not in payload:
-    print(f"unexpected response status={status} payload={payload}", file=sys.stderr)
-    sys.exit(43)
+def post_response(request_base_url, input_text, error_base):
+    body = {
+        "model": model,
+        "input": input_text,
+        "stream": False,
+    }
+    request = urllib.request.Request(
+        request_base_url.rstrip("/") + "/responses",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+            status = response.status
+    except urllib.error.HTTPError as error:
+        print(error.read().decode("utf-8"), file=sys.stderr)
+        sys.exit(error_base)
+    except Exception as error:
+        print(f"request failed: {error}", file=sys.stderr)
+        sys.exit(error_base + 1)
+
+    if status != 200 or "OK" not in payload:
+        print(f"unexpected response status={status} payload={payload}", file=sys.stderr)
+        sys.exit(error_base + 2)
+
+post_response(base_url, "codex-main", 41)
+post_response(builtin_openai_base_url, "codex-subagent-openai-fallback", 44)
 "#,
     )
     .expect("write fake codex full-flow client");
+    make_executable(path);
+}
+
+#[cfg(unix)]
+fn write_fake_codex_custom_agent_gate(path: &Path) {
+    fs::write(
+        path,
+        r#"#!/usr/bin/env python3
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+args = sys.argv[1:]
+log_path = os.environ["LLMUP_FAKE_LOG"]
+with open(log_path, "w", encoding="utf-8") as log:
+    log.write(f"ARGV_COUNT={len(args)}\n")
+    for arg in args:
+        log.write(f"ARG={arg}\n")
+    for name in [
+        "OPENAI_API_KEY",
+        "CODEX_HOME",
+        "LLMUP_PROVIDER_DEFAULT_API_KEY",
+        "LLMUP_PROVIDER_MAIN_API_KEY",
+        "UNRELATED_SECRET_COPY",
+        "HOME",
+    ]:
+        log.write(f"{name}={os.environ.get(name, 'unset')}\n")
+
+launcher_model = None
+base_url = None
+for index, arg in enumerate(args):
+    if arg == "-m" and index + 1 < len(args):
+        launcher_model = args[index + 1]
+    prefix = 'model_providers.proxy.base_url="'
+    if arg.startswith(prefix) and arg.endswith('"'):
+        base_url = arg[len(prefix):-1]
+if launcher_model is None or base_url is None:
+    print("missing model or base_url from launcher", file=sys.stderr)
+    sys.exit(50)
+with open(log_path, "a", encoding="utf-8") as log:
+    log.write(f"LAUNCHER_MODEL={launcher_model}\n")
+    log.write(f"BASE_URL={base_url}\n")
+
+api_key = os.environ["OPENAI_API_KEY"]
+valid_model = os.environ["LLMUP_FAKE_CODEX_CUSTOM_MODEL"]
+unknown_model = os.environ["LLMUP_FAKE_CODEX_UNKNOWN_MODEL"]
+
+def post_response(request_model, input_text):
+    body = {
+        "model": request_model,
+        "input": input_text,
+        "stream": False,
+    }
+    request = urllib.request.Request(
+        base_url.rstrip("/") + "/responses",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return response.status, response.read().decode("utf-8")
+
+try:
+    status, payload = post_response(valid_model, "codex-custom-agent-valid")
+except urllib.error.HTTPError as error:
+    print(error.read().decode("utf-8"), file=sys.stderr)
+    sys.exit(51)
+except Exception as error:
+    print(f"valid custom-agent request failed: {error}", file=sys.stderr)
+    sys.exit(52)
+
+if status != 200 or "OK" not in payload:
+    print(f"unexpected valid response status={status} payload={payload}", file=sys.stderr)
+    sys.exit(53)
+
+try:
+    status, payload = post_response(unknown_model, "codex-custom-agent-unknown")
+except urllib.error.HTTPError as error:
+    status = error.code
+    payload = error.read().decode("utf-8")
+    with open(log_path, "a", encoding="utf-8") as log:
+        log.write(f"UNKNOWN_STATUS={status}\n")
+        log.write(f"UNKNOWN_ERROR={payload.replace(chr(10), ' ')}\n")
+    if status < 400 or status >= 500:
+        print(f"unknown model returned non-4xx status={status} payload={payload}", file=sys.stderr)
+        sys.exit(54)
+    if unknown_model not in payload or "mock_assertion_failed" in payload:
+        print(f"unknown model error did not come clearly from llmup: {payload}", file=sys.stderr)
+        sys.exit(55)
+except Exception as error:
+    print(f"unknown custom-agent request failed without HTTP error: {error}", file=sys.stderr)
+    sys.exit(56)
+else:
+    print(f"unknown model unexpectedly succeeded status={status} payload={payload}", file=sys.stderr)
+    sys.exit(57)
+"#,
+    )
+    .expect("write fake codex custom-agent gate client");
     make_executable(path);
 }
 
@@ -555,6 +694,7 @@ fn codex_managed_launcher_runs_fake_client_with_injection_isolation_and_proxy_li
   printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY"
   printf 'CODEX_HOME=%s\n' "$CODEX_HOME"
   printf 'LLMUP_PROVIDER_DEFAULT_API_KEY=%s\n' "${{LLMUP_PROVIDER_DEFAULT_API_KEY-unset}}"
+  printf 'LLMUP_PROVIDER_MAIN_API_KEY=%s\n' "${{LLMUP_PROVIDER_MAIN_API_KEY-unset}}"
   printf 'HOME=%s\n' "$HOME"
 }} > "{}"
 exit 7
@@ -575,13 +715,13 @@ exit 7
             "init",
             "--non-interactive",
             "--interface",
-            "openai",
+            "openai-chat-completions",
             "--model-service-url",
             "https://api.example.com/v1",
             "--model-name",
             "test-upstream-model",
             "--model-alias",
-            "default",
+            "main",
             "--api-key-stdin",
         ])
         .env("LLMUP_HOME", &llmup_home)
@@ -609,7 +749,7 @@ exit 7
         .env("PATH", &bin_dir)
         .env("LLMUP_HOME", &llmup_home)
         .env("LLMUP_FAKE_LOG", &fake_log)
-        .env("LLMUP_PROVIDER_DEFAULT_API_KEY", "parent-provider-key")
+        .env("LLMUP_PROVIDER_MAIN_API_KEY", "parent-provider-key")
         .env("OPENAI_API_KEY", "parent-openai-key")
         .env("HOME", temp.path())
         .stdout(Stdio::piped())
@@ -628,7 +768,7 @@ exit 7
     assert!(fake.contains("ARG=-c"));
     assert!(fake.contains("ARG=model_provider=\"proxy\""));
     assert!(fake.contains("ARG=-m"));
-    assert!(fake.contains("ARG=default"));
+    assert!(fake.contains("ARG=main"));
     assert!(fake.contains("ARG=--help"));
     assert!(fake.contains(&format!(
         "CODEX_HOME={}",
@@ -638,6 +778,7 @@ exit 7
     assert!(!fake.contains("provider-secret-from-stdin"));
     assert!(!fake.contains("OPENAI_API_KEY=parent-openai-key"));
     assert!(fake.contains("LLMUP_PROVIDER_DEFAULT_API_KEY=unset"));
+    assert!(fake.contains("LLMUP_PROVIDER_MAIN_API_KEY=unset"));
 
     let secrets = fs::read_to_string(llmup_home.join("secrets.env")).expect("read secrets");
     let local_proxy_key = secrets
@@ -701,6 +842,7 @@ fn claude_managed_launcher_runs_fake_client_with_injection_isolation_and_proxy_l
   printf 'CLAUDE_CONFIG_DIR=%s\n' "$CLAUDE_CONFIG_DIR"
   printf 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=%s\n' "${CLAUDE_CODE_SUBPROCESS_ENV_SCRUB-unset}"
   printf 'LLMUP_PROVIDER_DEFAULT_API_KEY=%s\n' "${LLMUP_PROVIDER_DEFAULT_API_KEY-unset}"
+  printf 'LLMUP_PROVIDER_MAIN_API_KEY=%s\n' "${LLMUP_PROVIDER_MAIN_API_KEY-unset}"
   printf 'UNRELATED_SECRET_COPY=%s\n' "${UNRELATED_SECRET_COPY-unset}"
   printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "${ANTHROPIC_AUTH_TOKEN-unset}"
   printf 'ANTHROPIC_BEDROCK_TOKEN=%s\n' "${ANTHROPIC_BEDROCK_TOKEN-unset}"
@@ -718,7 +860,7 @@ exit 9
         &llmup_config,
         &llmup_home,
         temp.path(),
-        "anthropic",
+        "anthropic-messages",
         "https://api.example.com/v1",
         "test-upstream-model",
         "provider-secret-from-stdin",
@@ -735,7 +877,7 @@ exit 9
         .env("PATH", &bin_dir)
         .env("LLMUP_HOME", &llmup_home)
         .env("LLMUP_FAKE_LOG", &fake_log)
-        .env("LLMUP_PROVIDER_DEFAULT_API_KEY", "parent-provider-key")
+        .env("LLMUP_PROVIDER_MAIN_API_KEY", "parent-provider-key")
         .env("UNRELATED_SECRET_COPY", "provider-secret-from-stdin")
         .env("ANTHROPIC_API_KEY", "parent-anthropic-key")
         .env("ANTHROPIC_MODEL", "parent-model")
@@ -763,16 +905,16 @@ exit 9
 
     let fake = fs::read_to_string(&fake_log).expect("read fake client log");
     assert!(!fake.contains("ARG=--model"));
-    assert!(!fake.contains("ARG=default"));
+    assert!(!fake.contains("ARG=main"));
     assert!(fake.contains("ARG=--resume"));
     assert!(fake.contains("ARG=session with spaces"));
     assert!(fake.contains("ARG=--permission-mode"));
     assert!(fake.contains("ARG=bypassPermissions"));
     assert!(fake.contains("ARG=mcp"));
-    assert!(fake.contains("ANTHROPIC_MODEL=default"));
-    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION=default"));
-    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=default"));
-    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION=llmup proxy model default"));
+    assert!(fake.contains("ANTHROPIC_MODEL=main"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION=main"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=main"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION=llmup proxy model main"));
     assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES=unset"));
     assert!(fake.contains("CLAUDE_CODE_MAX_OUTPUT_TOKENS=unset"));
     assert!(fake.contains(&format!(
@@ -789,6 +931,7 @@ exit 9
     assert!(!fake.contains("parent-option"));
     assert!(!fake.contains("parent-capability"));
     assert!(fake.contains("LLMUP_PROVIDER_DEFAULT_API_KEY=unset"));
+    assert!(fake.contains("LLMUP_PROVIDER_MAIN_API_KEY=unset"));
     assert!(fake.contains("UNRELATED_SECRET_COPY=unset"));
     assert!(fake.contains("ANTHROPIC_AUTH_TOKEN=unset"));
     assert!(fake.contains("ANTHROPIC_BEDROCK_TOKEN=unset"));
@@ -865,7 +1008,7 @@ async fn claude_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
         .env("PATH", path_with_bin_dir_first(&bin_dir))
         .env("LLMUP_HOME", &llmup_home)
         .env("LLMUP_FAKE_LOG", &fake_log)
-        .env("LLMUP_PROVIDER_DEFAULT_API_KEY", "parent-provider-key")
+        .env("LLMUP_PROVIDER_MAIN_API_KEY", "parent-provider-key")
         .env("UNRELATED_SECRET_COPY", PROVIDER_KEY)
         .env("ANTHROPIC_API_KEY", "parent-anthropic-key")
         .env("ANTHROPIC_MODEL", "parent-model")
@@ -883,9 +1026,29 @@ async fn claude_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
     );
 
     let requests = captured
-        .wait_for_count(1, std::time::Duration::from_secs(2))
+        .wait_for_count(2, std::time::Duration::from_secs(2))
         .await;
-    assert_eq!(requests.len(), 1, "upstream request should be captured");
+    assert_eq!(
+        requests.len(),
+        2,
+        "main and subagent upstream requests should be captured"
+    );
+    let request_bodies = requests
+        .iter()
+        .map(|request| serde_json::to_string(&request.body).expect("serialize captured body"))
+        .collect::<Vec<_>>();
+    assert!(
+        request_bodies
+            .iter()
+            .any(|body| body.contains("claude-main")),
+        "main request body should reach upstream: {request_bodies:?}"
+    );
+    assert!(
+        request_bodies
+            .iter()
+            .any(|body| body.contains("claude-task-subagent")),
+        "subagent request body should reach upstream: {request_bodies:?}"
+    );
 
     let fake = fs::read_to_string(&fake_log).expect("read fake client log");
     let local_proxy_key = local_proxy_key(&llmup_home);
@@ -895,14 +1058,172 @@ async fn claude_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
     assert!(!fake.contains("parent-model"));
     assert!(!fake.contains("parent-option"));
     assert!(!fake.contains("ARG=--model"));
-    assert!(!fake.contains("ARG=default"));
-    assert!(fake.contains("ANTHROPIC_MODEL=default"));
-    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION=default"));
+    assert!(!fake.contains("ARG=main"));
+    assert!(fake.contains("ANTHROPIC_MODEL=main"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION=main"));
+    assert!(fake.contains("SUBAGENT_MODEL=main"));
     assert!(fake.contains("ARG=--dangerously-skip-permissions"));
 
     let user_config = fs::read_to_string(llmup_home.join("config.yaml")).expect("read user config");
     assert!(user_config.contains("listen: 127.0.0.1:8080"));
     assert_runtime_yaml_preserves_data_auth_and_overrides_listen(&llmup_home);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_family_alias_full_flow_routes_each_alias_to_configured_upstream_model() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_llm-universal-proxy"));
+    let temp = TempDir::new("full-flow-claude-family");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let llmup_claude = bin_dir.join("llmup-claude");
+    link_or_copy(&bin, &llmup_claude);
+    let fake_claude = bin_dir.join("claude");
+    write_fake_claude_full_flow(&fake_claude);
+
+    for alias in ["haiku", "sonnet", "opus"] {
+        let provider_key = format!("provider-secret-full-flow-claude-{alias}");
+        let expected_upstream_model = format!("real-upstream-{alias}-model");
+        let expected_authorization = format!("Bearer {provider_key}");
+        let expected_model_for_mock = expected_upstream_model.clone();
+        let expected_authorization_for_mock = expected_authorization.clone();
+        let (mock_base, _mock, captured) =
+            common::mock_upstream::spawn_asserting_openai_responses_mock(move |request| {
+                if request.method != "POST" {
+                    return Err(format!("unexpected method {}", request.method));
+                }
+                if request.path != "/v1/responses" {
+                    return Err(format!("unexpected path {}", request.path));
+                }
+                if request.headers.get("authorization").map(String::as_str)
+                    != Some(expected_authorization_for_mock.as_str())
+                {
+                    return Err(format!(
+                        "unexpected authorization {:?}",
+                        request.headers.get("authorization")
+                    ));
+                }
+                if request
+                    .body
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(expected_model_for_mock.as_str())
+                {
+                    return Err(format!("unexpected model body {}", request.body));
+                }
+                Ok(())
+            })
+            .await;
+
+        let llmup_home = temp.path().join(format!(".llmup-{alias}"));
+        fs::create_dir_all(&llmup_home).expect("create llmup home");
+        fs::write(
+            llmup_home.join("config.yaml"),
+            format!(
+                "\
+listen: 127.0.0.1:8080
+upstream_timeout_secs: 120
+
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+
+upstreams:
+  DEFAULT:
+    api_root: {mock_base}/v1
+    format: openai-responses
+    provider_key:
+      env: LLMUP_PROVIDER_FAMILY_API_KEY
+
+model_aliases:
+  main: DEFAULT:real-upstream-main-model
+  haiku: DEFAULT:real-upstream-haiku-model
+  sonnet: DEFAULT:real-upstream-sonnet-model
+  opus: DEFAULT:real-upstream-opus-model
+"
+            ),
+        )
+        .expect("write family alias config");
+        fs::write(
+            llmup_home.join("secrets.env"),
+            format!(
+                "LLM_UNIVERSAL_PROXY_KEY=local-proxy-key-family-{alias}\nLLMUP_PROVIDER_FAMILY_API_KEY={provider_key}\n"
+            ),
+        )
+        .expect("write family alias secrets");
+
+        let fake_log = temp.path().join(format!("fake-claude-family-{alias}.log"));
+        let output = Command::new(&llmup_claude)
+            .args(["--llmup-model", alias, "--dangerously-skip-permissions"])
+            .env("PATH", path_with_bin_dir_first(&bin_dir))
+            .env("LLMUP_HOME", &llmup_home)
+            .env("LLMUP_FAKE_LOG", &fake_log)
+            .env("LLMUP_PROVIDER_FAMILY_API_KEY", "parent-provider-key")
+            .env("UNRELATED_SECRET_COPY", &provider_key)
+            .env("ANTHROPIC_API_KEY", "parent-anthropic-key")
+            .env("ANTHROPIC_MODEL", "parent-model")
+            .env("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1")
+            .env(
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES",
+                "thinking",
+            )
+            .env(
+                "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES",
+                "thinking",
+            )
+            .env(
+                "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES",
+                "thinking",
+            )
+            .env("HOME", temp.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run llmup-claude family alias full flow");
+        assert!(
+            output.status.success(),
+            "family alias {alias} full flow failed stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let requests = captured
+            .wait_for_count(2, std::time::Duration::from_secs(2))
+            .await;
+        assert_eq!(
+            requests.len(),
+            2,
+            "main and subagent requests for {alias} should reach upstream"
+        );
+        for request in &requests {
+            assert_eq!(
+                request
+                    .body
+                    .get("model")
+                    .and_then(serde_json::Value::as_str),
+                Some(expected_upstream_model.as_str())
+            );
+        }
+
+        let fake = fs::read_to_string(&fake_log).expect("read fake client log");
+        assert!(fake.contains(&format!("ANTHROPIC_API_KEY=local-proxy-key-family-{alias}")));
+        assert!(!fake.contains(&provider_key));
+        assert!(!fake.contains("parent-provider-key"));
+        assert!(!fake.contains("parent-model"));
+        assert!(fake.contains(&format!("ANTHROPIC_MODEL={alias}")));
+        assert!(fake.contains(&format!("ANTHROPIC_CUSTOM_MODEL_OPTION={alias}")));
+        assert!(fake.contains(&format!("SUBAGENT_MODEL={alias}")));
+        for family_alias in ["haiku", "sonnet", "opus"] {
+            let family = family_alias.to_ascii_uppercase();
+            assert!(fake.contains(&format!("ANTHROPIC_DEFAULT_{family}_MODEL={family_alias}")));
+            assert!(fake.contains(&format!(
+                "ANTHROPIC_DEFAULT_{family}_MODEL_SUPPORTED_CAPABILITIES=unset"
+            )));
+        }
+        assert!(fake.contains("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=unset"));
+    }
 }
 
 #[cfg(unix)]
@@ -968,7 +1289,7 @@ async fn codex_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
         .env("PATH", path_with_bin_dir_first(&bin_dir))
         .env("LLMUP_HOME", &llmup_home)
         .env("LLMUP_FAKE_LOG", &fake_log)
-        .env("LLMUP_PROVIDER_DEFAULT_API_KEY", "parent-provider-key")
+        .env("LLMUP_PROVIDER_MAIN_API_KEY", "parent-provider-key")
         .env("UNRELATED_SECRET_COPY", PROVIDER_KEY)
         .env("OPENAI_API_KEY", "parent-openai-key")
         .env("HOME", temp.path())
@@ -984,9 +1305,29 @@ async fn codex_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
     );
 
     let requests = captured
-        .wait_for_count(1, std::time::Duration::from_secs(2))
+        .wait_for_count(2, std::time::Duration::from_secs(2))
         .await;
-    assert_eq!(requests.len(), 1, "upstream request should be captured");
+    assert_eq!(
+        requests.len(),
+        2,
+        "main and subagent upstream requests should be captured"
+    );
+    let request_bodies = requests
+        .iter()
+        .map(|request| serde_json::to_string(&request.body).expect("serialize captured body"))
+        .collect::<Vec<_>>();
+    assert!(
+        request_bodies
+            .iter()
+            .any(|body| body.contains("codex-main")),
+        "main request body should reach upstream: {request_bodies:?}"
+    );
+    assert!(
+        request_bodies
+            .iter()
+            .any(|body| body.contains("codex-subagent")),
+        "subagent request body should reach upstream: {request_bodies:?}"
+    );
 
     let fake = fs::read_to_string(&fake_log).expect("read fake client log");
     let local_proxy_key = local_proxy_key(&llmup_home);
@@ -994,7 +1335,183 @@ async fn codex_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
     assert!(!fake.contains(PROVIDER_KEY));
     assert!(!fake.contains("parent-provider-key"));
     assert!(fake.contains("ARG=-m"));
-    assert!(fake.contains("ARG=default"));
+    assert!(fake.contains("ARG=main"));
+    assert!(fake.contains("SUBAGENT_MODEL=main"));
+    assert!(fake.contains("OPENAI_FALLBACK_BASE_URL=http://127.0.0.1:"));
+    assert!(fake.contains("/openai/v1"));
+    assert!(fake.contains("ARG=resume"));
+    assert!(fake.contains("ARG=--last"));
+
+    let user_config = fs::read_to_string(llmup_home.join("config.yaml")).expect("read user config");
+    assert!(user_config.contains("listen: 127.0.0.1:8080"));
+    assert_runtime_yaml_preserves_data_auth_and_overrides_listen(&llmup_home);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_custom_agent_explicit_model_routes_alias_and_rejects_unknown_before_upstream() {
+    const PROVIDER_KEY: &str = "provider-secret-custom-agent-codex";
+    const LOCAL_PROXY_KEY: &str = "local-proxy-key-custom-agent-codex";
+    const CUSTOM_ALIAS: &str = "custom-agent";
+    const CUSTOM_UPSTREAM_MODEL: &str = "routed-custom-agent-upstream-model";
+    const UNKNOWN_MODEL: &str = "unconfigured-custom-agent-model";
+
+    let (mock_base, _mock, captured) =
+        common::mock_upstream::spawn_asserting_openai_responses_mock(|request| {
+            if request.method != "POST" {
+                return Err(format!("unexpected method {}", request.method));
+            }
+            if request.path != "/v1/responses" {
+                return Err(format!("unexpected path {}", request.path));
+            }
+            if request.headers.get("authorization").map(String::as_str)
+                != Some("Bearer provider-secret-custom-agent-codex")
+            {
+                return Err(format!(
+                    "unexpected authorization {:?}",
+                    request.headers.get("authorization")
+                ));
+            }
+            if request
+                .body
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                != Some(CUSTOM_UPSTREAM_MODEL)
+            {
+                return Err(format!("unexpected model body {}", request.body));
+            }
+            if !serde_json::to_string(&request.body)
+                .expect("serialize captured body")
+                .contains("codex-custom-agent-valid")
+            {
+                return Err(format!("missing custom-agent marker {}", request.body));
+            }
+            Ok(())
+        })
+        .await;
+
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_llm-universal-proxy"));
+    let temp = TempDir::new("custom-agent-codex");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let llmup_codex = bin_dir.join("llmup-codex");
+    link_or_copy(&bin, &llmup_codex);
+    let fake_log = temp.path().join("fake-codex-custom-agent.log");
+    let fake_codex = bin_dir.join("codex");
+    write_fake_codex_custom_agent_gate(&fake_codex);
+
+    let llmup_home = temp.path().join(".llmup");
+    fs::create_dir_all(&llmup_home).expect("create llmup home");
+    fs::write(
+        llmup_home.join("config.yaml"),
+        format!(
+            "\
+listen: 127.0.0.1:8080
+upstream_timeout_secs: 120
+
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+
+upstreams:
+  DEFAULT:
+    api_root: {mock_base}/v1
+    format: openai-responses
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+    surface_defaults:
+      modalities:
+        input: [\"text\"]
+        output: [\"text\"]
+      tools:
+        supports_search: false
+        supports_view_image: false
+        apply_patch_transport: freeform
+        supports_parallel_calls: false
+  CUSTOM:
+    api_root: {mock_base}/v1
+    format: openai-responses
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+    surface_defaults:
+      modalities:
+        input: [\"text\"]
+        output: [\"text\"]
+      tools:
+        supports_search: false
+        supports_view_image: false
+        apply_patch_transport: freeform
+        supports_parallel_calls: false
+
+model_aliases:
+  main: DEFAULT:default-upstream-codex-model
+  {CUSTOM_ALIAS}: CUSTOM:{CUSTOM_UPSTREAM_MODEL}
+"
+        ),
+    )
+    .expect("write custom agent config");
+    fs::write(
+        llmup_home.join("secrets.env"),
+        format!(
+            "LLM_UNIVERSAL_PROXY_KEY={LOCAL_PROXY_KEY}\nLLMUP_PROVIDER_DEFAULT_API_KEY={PROVIDER_KEY}\n"
+        ),
+    )
+    .expect("write custom agent secrets");
+
+    let output = Command::new(&llmup_codex)
+        .args(["resume", "--last"])
+        .env("PATH", path_with_bin_dir_first(&bin_dir))
+        .env("LLMUP_HOME", &llmup_home)
+        .env("LLMUP_FAKE_LOG", &fake_log)
+        .env("LLMUP_FAKE_CODEX_CUSTOM_MODEL", CUSTOM_ALIAS)
+        .env("LLMUP_FAKE_CODEX_UNKNOWN_MODEL", UNKNOWN_MODEL)
+        .env("LLMUP_PROVIDER_DEFAULT_API_KEY", "parent-provider-key")
+        .env("UNRELATED_SECRET_COPY", PROVIDER_KEY)
+        .env("OPENAI_API_KEY", "parent-openai-key")
+        .env("HOME", temp.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run llmup-codex custom-agent gate");
+    assert!(
+        output.status.success(),
+        "custom-agent gate failed stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = captured.snapshot();
+    assert_eq!(
+        requests.len(),
+        1,
+        "unknown custom-agent model must be rejected by llmup before upstream: {requests:?}"
+    );
+    let request_body =
+        serde_json::to_string(&requests[0].body).expect("serialize captured custom-agent body");
+    assert!(
+        request_body.contains("codex-custom-agent-valid"),
+        "valid custom-agent body should reach upstream: {request_body}"
+    );
+    assert!(
+        !request_body.contains(UNKNOWN_MODEL),
+        "unknown custom-agent model should not reach upstream: {request_body}"
+    );
+
+    let fake = fs::read_to_string(&fake_log).expect("read fake client log");
+    assert!(fake.contains("LAUNCHER_MODEL=main"));
+    assert!(fake.contains(&format!("OPENAI_API_KEY={LOCAL_PROXY_KEY}")));
+    assert!(fake.contains("BASE_URL=http://127.0.0.1:"));
+    assert!(fake.contains("/openai/v1"));
+    assert!(fake.contains("UNKNOWN_STATUS=400"));
+    assert!(fake.contains(UNKNOWN_MODEL));
+    assert!(fake.contains("ambiguous") || fake.contains("routable"));
+    assert!(!fake.contains("mock_assertion_failed"));
+    assert!(!fake.contains(PROVIDER_KEY));
+    assert!(!fake.contains("parent-provider-key"));
+    assert!(fake.contains("ARG=-m"));
+    assert!(fake.contains("ARG=main"));
     assert!(fake.contains("ARG=resume"));
     assert!(fake.contains("ARG=--last"));
 
@@ -1024,7 +1541,7 @@ fn explicit_launcher_port_collision_fails_with_requested_port_in_error() {
         &llmup_config,
         &llmup_home,
         temp.path(),
-        "anthropic",
+        "anthropic-messages",
         "http://127.0.0.1:9/v1",
         "unused-upstream-model",
         "unused-provider-key",
