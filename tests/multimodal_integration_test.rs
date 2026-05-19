@@ -95,7 +95,7 @@ async fn multimodal_openai_remote_image_to_anthropic_maps_to_url_source() {
 #[tokio::test]
 async fn multimodal_anthropic_polluted_url_image_to_openai_targets_fails_closed_before_upstream() {
     for upstream_format in [
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
     ] {
         for image_url in [
@@ -104,7 +104,7 @@ async fn multimodal_anthropic_polluted_url_image_to_openai_targets_fails_closed_
             TRAILING_CONTROL_REMOTE_IMAGE_URL,
         ] {
             match upstream_format {
-                UpstreamFormat::OpenAiCompletion => {
+                UpstreamFormat::OpenAiChatCompletions => {
                     let (mock_base, _mock, captured) =
                         spawn_asserting_openai_completion_mock(|_| {
                             Err("polluted Anthropic image URL reached OpenAI Chat upstream"
@@ -172,7 +172,7 @@ async fn multimodal_openai_chat_responses_polluted_media_sources_fail_closed_bef
         Err("polluted Responses media source reached OpenAI Chat upstream".to_string())
     })
     .await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let response = authenticated_reqwest_client()

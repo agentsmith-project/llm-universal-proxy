@@ -897,7 +897,7 @@ async fn stale_client_provider_key_context_does_not_use_new_proxy_server_key() {
         vec![redaction_upstream_config(
             "primary",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             None,
         )],
@@ -916,7 +916,7 @@ async fn stale_client_provider_key_context_does_not_use_new_proxy_server_key() {
         &state,
         snapshot_race_config(
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             Some(new_server_key),
         ),
         data_auth::DataAccess::ProxyKey {
@@ -937,7 +937,7 @@ async fn stale_client_provider_key_context_does_not_use_new_proxy_server_key() {
                 "stream": false
             }),
             requested_model: "primary:gpt-4o-mini".to_string(),
-            client_format: crate::formats::UpstreamFormat::OpenAiCompletion,
+            client_format: crate::formats::UpstreamFormat::OpenAiChatCompletions,
             forced_stream: None,
             auth_context,
         },
@@ -977,7 +977,7 @@ async fn stale_proxy_key_context_does_not_drop_or_replace_old_server_key() {
         vec![redaction_upstream_config(
             "primary",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(old_server_key.to_string()),
@@ -1001,7 +1001,7 @@ async fn stale_proxy_key_context_does_not_drop_or_replace_old_server_key() {
         &state,
         snapshot_race_config(
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
         ),
         data_auth::DataAccess::ClientProviderKey,
@@ -1020,7 +1020,7 @@ async fn stale_proxy_key_context_does_not_drop_or_replace_old_server_key() {
                 "stream": false
             }),
             requested_model: "primary:gpt-4o-mini".to_string(),
-            client_format: crate::formats::UpstreamFormat::OpenAiCompletion,
+            client_format: crate::formats::UpstreamFormat::OpenAiChatCompletions,
             forced_stream: None,
             auth_context,
         },
@@ -1052,7 +1052,7 @@ async fn redactor_uses_same_snapshot_as_outbound_runtime_after_auth_race() {
         vec![redaction_upstream_config(
             "primary",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(old_server_key.to_string()),
@@ -1076,7 +1076,7 @@ async fn redactor_uses_same_snapshot_as_outbound_runtime_after_auth_race() {
         &state,
         snapshot_race_config(
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
         ),
         data_auth::DataAccess::ClientProviderKey,
@@ -1095,7 +1095,7 @@ async fn redactor_uses_same_snapshot_as_outbound_runtime_after_auth_race() {
                 "stream": false
             }),
             requested_model: "primary:gpt-4o-mini".to_string(),
-            client_format: crate::formats::UpstreamFormat::OpenAiCompletion,
+            client_format: crate::formats::UpstreamFormat::OpenAiChatCompletions,
             forced_stream: None,
             auth_context,
         },
@@ -1286,7 +1286,7 @@ async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_fro
             spawn_openai_raw_mock(StatusCode::UNAUTHORIZED, upstream_body).await;
         let state = app_state_with_all_provider_redaction_sources(
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             data_access,
         )
         .await;
@@ -1302,7 +1302,7 @@ async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_fro
                 "stream": false
             }),
             "inline:gpt-4o-mini".to_string(),
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
         ))
         .await;
@@ -1404,7 +1404,7 @@ async fn client_provider_key_upstream_error_redaction_is_request_scoped_and_not_
         vec![redaction_upstream_config(
             "client",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             None,
         )],
@@ -1428,7 +1428,7 @@ async fn client_provider_key_upstream_error_redaction_is_request_scoped_and_not_
             "stream": false
         }),
         "client:gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     ))
     .await;
@@ -1483,7 +1483,7 @@ async fn non_stream_success_redacts_known_credentials_from_response_and_debug_tr
         vec![redaction_upstream_config(
             "primary",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(server_provider_secret.to_string()),
@@ -1508,7 +1508,7 @@ async fn non_stream_success_redacts_known_credentials_from_response_and_debug_tr
             "stream": false
         }),
         "primary:gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -1549,7 +1549,7 @@ async fn non_stream_success_redacts_known_credentials_from_response_and_debug_tr
         vec![redaction_upstream_config(
             "client",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             None,
         )],
@@ -1574,7 +1574,7 @@ async fn non_stream_success_redacts_known_credentials_from_response_and_debug_tr
             "stream": false
         }),
         "client:gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -1618,7 +1618,7 @@ async fn streaming_success_redacts_known_credentials_from_sse_response() {
         vec![redaction_upstream_config(
             "primary",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(server_provider_secret.to_string()),
@@ -1642,7 +1642,7 @@ async fn streaming_success_redacts_known_credentials_from_sse_response() {
             "stream": true
         }),
         "primary:gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -1677,7 +1677,7 @@ async fn streaming_success_redacts_known_credentials_from_sse_response() {
         vec![redaction_upstream_config(
             "client",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             None,
         )],
@@ -1701,7 +1701,7 @@ async fn streaming_success_redacts_known_credentials_from_sse_response() {
             "stream": true
         }),
         "client:gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -1737,7 +1737,7 @@ async fn request_metadata_redacts_client_provider_key_in_hook_debug_logs_and_met
         vec![redaction_upstream_config(
             "client",
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             None,
         )],
@@ -1770,7 +1770,7 @@ async fn request_metadata_redacts_client_provider_key_in_hook_debug_logs_and_met
             "stream": false
         }),
         format!("model-{client_secret}"),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     ))
     .await;
@@ -1829,8 +1829,10 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
         spawn_openai_completion_mock(server_response_body).await;
     let (hook_base, exchange_payloads, usage_payloads, hook_server) =
         spawn_exchange_usage_hook_capture_mock().await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     enable_exchange_usage_hooks_for_default_namespace(&state, &hook_base).await;
     let trace_path = enable_debug_trace_for_default_namespace(&state).await;
 
@@ -1846,7 +1848,7 @@ async fn request_processing_observability_is_emitted_to_trace_hooks_and_metrics(
             "stream": false
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -1921,7 +1923,7 @@ async fn debug_trace_preserved_prompt_cache_does_not_backfill_missing_target_fie
         client_model: "gpt-4o-mini".to_string(),
         upstream_name: "primary".to_string(),
         upstream_model: "gpt-4o-mini".to_string(),
-        client_format: crate::formats::UpstreamFormat::OpenAiCompletion,
+        client_format: crate::formats::UpstreamFormat::OpenAiChatCompletions,
         upstream_format: crate::formats::UpstreamFormat::OpenAiResponses,
         llmup: crate::request_processing::RequestProcessingInfo {
             request_processing:
@@ -1987,8 +1989,10 @@ async fn request_processing_observability_marks_local_state_capture_and_expansio
     let (mock_base, _requests, upstream_server) =
         spawn_openai_completion_mock(server_response_body).await;
     let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
     let trace_path = enable_debug_trace_for_default_namespace(&state).await;
 
@@ -2118,7 +2122,7 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_map
             "stream": false
         }),
         "claude-3".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -2198,7 +2202,7 @@ async fn debug_trace_records_prompt_cache_components_for_openai_to_anthropic_mix
             "stream": false
         }),
         "claude-3".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -2303,8 +2307,10 @@ async fn debug_trace_records_prompt_cache_disposition_for_explicit_openai_mappin
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_mock(server_response_body).await;
     let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
     let trace_path = enable_debug_trace_for_default_namespace(&state).await;
 
@@ -2409,8 +2415,10 @@ async fn debug_trace_records_prompt_cache_components_for_anthropic_to_openai_mix
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_mock(server_response_body).await;
     let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
     let trace_path = enable_debug_trace_for_default_namespace(&state).await;
 
@@ -2541,8 +2549,10 @@ async fn anthropic_to_openai_chat_synthesizes_prompt_cache_key_from_final_static
     });
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_mock(server_response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     async fn send(
         state: Arc<AppState>,
@@ -2729,8 +2739,10 @@ async fn anthropic_cache_control_changes_do_not_drive_synthesized_openai_key() {
     });
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_mock(server_response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     for ttl in ["5m", "1h"] {
         let response = handle_request_core(
@@ -2793,8 +2805,10 @@ async fn anthropic_claude_code_second_round_thinking_context_management_reaches_
     });
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_mock(server_response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     {
         let mut runtime = state.runtime.write().await;
         let namespace = runtime
@@ -3141,8 +3155,10 @@ async fn debug_trace_records_prompt_cache_disposition_for_synthesized_openai_key
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_mock(server_response_body).await;
     let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
     let trace_path = enable_debug_trace_for_default_namespace(&state).await;
 
@@ -3292,7 +3308,7 @@ async fn debug_trace_records_prompt_cache_detail_for_dropped_openai_key_to_anthr
             "stream": false
         }),
         "claude-3".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -3370,8 +3386,10 @@ async fn constructed_non_stream_upstream_error_preserves_portability_warning_hea
     .to_string();
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_raw_mock(StatusCode::BAD_REQUEST, upstream_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -3414,8 +3432,10 @@ async fn prompt_cache_synthesized_key_echoed_by_upstream_error_is_redacted_every
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_prompt_cache_echo_error_mock().await;
     let (hook_base, hook_payloads, hook_server) = spawn_hook_capture_mock().await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     enable_exchange_hook_for_default_namespace(&state, &hook_base).await;
     let trace_path = enable_debug_trace_for_default_namespace(&state).await;
 
@@ -3488,8 +3508,10 @@ async fn prompt_cache_synthesized_key_echoed_by_upstream_success_header_is_redac
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_prompt_cache_echo_header_mock(StatusCode::OK, server_response_body)
             .await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -3505,7 +3527,7 @@ async fn prompt_cache_synthesized_key_echoed_by_upstream_success_header_is_redac
             "stream": false
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -3547,8 +3569,10 @@ async fn prompt_cache_synthesized_key_echoed_by_upstream_error_header_is_redacte
             server_response_body,
         )
         .await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -3564,7 +3588,7 @@ async fn prompt_cache_synthesized_key_echoed_by_upstream_error_header_is_redacte
             "stream": false
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -3603,8 +3627,10 @@ async fn constructed_streaming_upstream_error_preserves_portability_warning_head
     .to_string();
     let (mock_base, requests, upstream_server) =
         spawn_openai_completion_raw_mock(StatusCode::SERVICE_UNAVAILABLE, upstream_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -3665,7 +3691,7 @@ async fn request_metadata_redacts_proxy_and_provider_keys_in_hook_debug_logs_and
         vec![redaction_upstream_config(
             &upstream_name,
             &mock_base,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(provider_secret.to_string()),
@@ -3700,7 +3726,7 @@ async fn request_metadata_redacts_proxy_and_provider_keys_in_hook_debug_logs_and
             "stream": false
         }),
         format!("{upstream_name}:model-{provider_secret}-{proxy_secret}"),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     ))
     .await;
@@ -3752,7 +3778,7 @@ async fn request_metadata_redacts_proxy_and_provider_keys_from_public_model_erro
             redaction_upstream_config(
                 &left_upstream,
                 "http://127.0.0.1:9/v1",
-                crate::formats::UpstreamFormat::OpenAiCompletion,
+                crate::formats::UpstreamFormat::OpenAiChatCompletions,
                 None,
                 Some(crate::config::SecretSourceConfig {
                     inline: Some(provider_secret.to_string()),
@@ -3762,7 +3788,7 @@ async fn request_metadata_redacts_proxy_and_provider_keys_from_public_model_erro
             redaction_upstream_config(
                 "right",
                 "http://127.0.0.1:9/v1",
-                crate::formats::UpstreamFormat::OpenAiCompletion,
+                crate::formats::UpstreamFormat::OpenAiChatCompletions,
                 None,
                 Some(crate::config::SecretSourceConfig {
                     inline: Some("right-provider-key".to_string()),
@@ -3795,7 +3821,7 @@ async fn request_metadata_redacts_proxy_and_provider_keys_from_public_model_erro
             "stream": false
         }),
         format!("ambiguous-{provider_secret}-{proxy_secret}"),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     ))
     .await;
@@ -3839,8 +3865,10 @@ async fn openai_chat_request_body_limit_rejects_before_upstream() {
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     set_resource_limits(
         &state,
         crate::config::ResourceLimits {
@@ -3898,8 +3926,10 @@ async fn non_stream_upstream_response_body_limit_fails_closed_without_payload_le
     .to_string();
     let (mock_base, requests, server) =
         spawn_openai_completion_raw_mock(StatusCode::OK, raw_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     set_resource_limits(
         &state,
         crate::config::ResourceLimits {
@@ -3920,7 +3950,7 @@ async fn non_stream_upstream_response_body_limit_fails_closed_without_payload_le
             "stream": false
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -3945,8 +3975,10 @@ async fn upstream_error_body_limit_fails_closed_without_error_payload_leak() {
     let raw_body = format!("{upstream_sentinel}{}", "x".repeat(1024));
     let (mock_base, requests, server) =
         spawn_openai_completion_raw_mock(StatusCode::BAD_REQUEST, raw_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     set_resource_limits(
         &state,
         crate::config::ResourceLimits {
@@ -3967,7 +3999,7 @@ async fn upstream_error_body_limit_fails_closed_without_error_payload_leak() {
             "stream": false
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -4224,8 +4256,8 @@ fn classify_request_processing_marks_same_protocol_without_fields_as_transformat
     });
 
     let info = crate::request_processing::classify_request_processing(request_processing_input(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body,
     ));
 
@@ -4255,7 +4287,7 @@ fn classify_request_processing_marks_translation_and_route_mutation_as_transform
     });
     let cross_format =
         crate::request_processing::classify_request_processing(request_processing_input(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             crate::formats::UpstreamFormat::Anthropic,
             &body,
         ));
@@ -4265,8 +4297,8 @@ fn classify_request_processing_marks_translation_and_route_mutation_as_transform
     );
 
     let mut alias_rewrite = request_processing_input(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     alias_rewrite.requested_model = "alias-model";
@@ -4278,8 +4310,8 @@ fn classify_request_processing_marks_translation_and_route_mutation_as_transform
     );
 
     let mut surface_policy = request_processing_input(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     surface_policy.route_policy_requires_body_mutation = true;
@@ -4297,8 +4329,8 @@ fn classify_request_processing_marks_forced_stream_as_transformation_required() 
         "messages": [{ "role": "user", "content": "Hi" }]
     });
     let mut input = request_processing_input(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     input.forced_stream = true;
@@ -4323,8 +4355,8 @@ fn classify_request_processing_marks_same_format_openai_chat_coalescing_as_trans
     });
 
     let info = crate::request_processing::classify_request_processing(request_processing_input(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body,
     ));
 
@@ -4340,8 +4372,8 @@ fn classify_request_processing_marks_model_insertion_without_hitting_native_resp
         "messages": [{ "role": "user", "content": "Hi" }]
     });
     let chat = crate::request_processing::classify_request_processing(request_processing_input(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &chat_without_model,
     ));
     assert_eq!(
@@ -4430,7 +4462,7 @@ fn classify_request_processing_exposes_state_bridge_fields_as_transformation_req
     ] {
         let mut input = request_processing_input(
             crate::formats::UpstreamFormat::OpenAiResponses,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             &body,
         );
         input.state_bridge = state_bridge;
@@ -4455,8 +4487,8 @@ fn classify_request_processing_preserves_native_prompt_cache_field_only_on_same_
     });
     let openai_same =
         crate::request_processing::classify_request_processing(request_processing_input(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             &openai_body,
         ));
     assert_eq!(
@@ -4466,7 +4498,7 @@ fn classify_request_processing_preserves_native_prompt_cache_field_only_on_same_
 
     let openai_cross =
         crate::request_processing::classify_request_processing(request_processing_input(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             crate::formats::UpstreamFormat::Anthropic,
             &openai_body,
         ));
@@ -4556,7 +4588,7 @@ fn classify_request_processing_marks_anthropic_cache_control_to_openai_as_droppe
 
     for (case_name, body) in cases {
         for upstream_format in [
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             crate::formats::UpstreamFormat::OpenAiResponses,
         ] {
             let info =
@@ -4584,7 +4616,7 @@ fn classify_request_processing_marks_openai_prompt_cache_key_to_anthropic_as_dro
     });
     let chat_to_anthropic =
         crate::request_processing::classify_request_processing(request_processing_input(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             crate::formats::UpstreamFormat::Anthropic,
             &chat_body,
         ));
@@ -4620,7 +4652,7 @@ fn classify_request_processing_preserves_openai_family_prompt_cache_across_trans
     });
     let chat_to_responses =
         crate::request_processing::classify_request_processing(request_processing_input(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             crate::formats::UpstreamFormat::OpenAiResponses,
             &chat_body,
         ));
@@ -4637,7 +4669,7 @@ fn classify_request_processing_preserves_openai_family_prompt_cache_across_trans
     let responses_to_chat =
         crate::request_processing::classify_request_processing(request_processing_input(
             crate::formats::UpstreamFormat::OpenAiResponses,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             &responses_body,
         ));
     assert_eq!(
@@ -4660,7 +4692,7 @@ fn classify_request_processing_marks_openai_to_anthropic_explicit_cache_control_
     });
     let chat_to_anthropic =
         crate::request_processing::classify_request_processing(request_processing_input(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             crate::formats::UpstreamFormat::Anthropic,
             &chat_body,
         ));
@@ -4705,7 +4737,7 @@ fn classify_request_processing_marks_anthropic_to_openai_explicit_prompt_cache_e
     });
 
     for upstream_format in [
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         crate::formats::UpstreamFormat::OpenAiResponses,
     ] {
         let info =
@@ -4736,7 +4768,7 @@ fn classify_request_processing_does_not_mark_anthropic_to_openai_prompt_cache_re
     });
 
     for upstream_format in [
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         crate::formats::UpstreamFormat::OpenAiResponses,
     ] {
         let info =
@@ -4778,7 +4810,7 @@ fn request_translation_policy_requires_body_mutation_only_for_injecting_policy_h
         },
     };
     assert!(!request_translation_policy_requires_body_mutation(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body,
         &gate_only
     ));
@@ -4794,7 +4826,7 @@ fn request_translation_policy_requires_body_mutation_only_for_injecting_policy_h
         },
     };
     assert!(request_translation_policy_requires_body_mutation(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body,
         &output_limit
     ));
@@ -4812,7 +4844,7 @@ fn request_translation_policy_requires_body_mutation_only_for_injecting_policy_h
         },
     };
     assert!(!request_translation_policy_requires_body_mutation(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body,
         &parallel_gate
     ));
@@ -4826,7 +4858,7 @@ fn request_translation_policy_requires_body_mutation_only_for_injecting_policy_h
         }]
     });
     assert!(request_translation_policy_requires_body_mutation(
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         &body_with_tools,
         &parallel_gate
     ));
@@ -4857,8 +4889,10 @@ async fn same_format_openai_streaming_transformation_required_rejects_reserved_t
     })];
     let (mock_base, requests, server) =
         spawn_openai_completion_stream_mock_with_events(response_events).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     {
         let mut runtime = state.runtime.write().await;
         let namespace = runtime
@@ -4887,7 +4921,7 @@ async fn same_format_openai_streaming_transformation_required_rejects_reserved_t
             "stream": true
         }),
         "alias-chat".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -4926,8 +4960,10 @@ async fn live_openai_same_format_empty_policy_rejects_reserved_legacy_function_n
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -4944,7 +4980,7 @@ async fn live_openai_same_format_empty_policy_rejects_reserved_legacy_function_n
             "stream": false
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -4983,8 +5019,10 @@ async fn live_responses_store_true_fails_closed_before_upstream() {
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -5061,7 +5099,7 @@ async fn live_openai_chat_store_true_to_responses_fails_closed_before_upstream()
             "stream": false
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -5105,8 +5143,10 @@ async fn live_responses_plain_text_custom_tool_bridge_to_openai_keeps_visible_to
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -5191,8 +5231,10 @@ async fn live_responses_custom_tool_bridge_to_openai_restores_non_stream_respons
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -5500,8 +5542,10 @@ async fn same_format_openai_streaming_passthrough_preserves_regular_delta_conten
     })];
     let (mock_base, requests, server) =
         spawn_openai_completion_stream_mock_with_events(response_events).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -5514,7 +5558,7 @@ async fn same_format_openai_streaming_passthrough_preserves_regular_delta_conten
             "stream": true
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -5553,8 +5597,10 @@ async fn live_responses_rejects_external_tool_bridge_context_ingress() {
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -5626,8 +5672,10 @@ async fn live_responses_custom_tool_bridge_uses_default_bridge() {
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -5687,8 +5735,10 @@ async fn live_responses_grammar_custom_tool_bridge_to_openai_uses_default_bridge
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -5746,8 +5796,10 @@ async fn live_responses_grammar_custom_tool_bridge_to_openai_default_allows_with
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -6308,7 +6360,7 @@ async fn live_openai_request_uses_configured_default_output_limit_for_anthropic_
             "stream": false
         }),
         "minimax-openai".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -6340,8 +6392,10 @@ async fn live_openai_same_format_request_applies_surface_parallel_tool_gate() {
         }]
     });
     let (mock_base, requests, server) = spawn_openai_completion_mock(response_body).await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
     {
         let mut runtime = state.runtime.write().await;
         let namespace = runtime
@@ -6385,7 +6439,7 @@ async fn live_openai_same_format_request_applies_surface_parallel_tool_gate() {
             "stream": false
         }),
         "serial-openai".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -6553,7 +6607,7 @@ async fn openai_chat_streaming_first_response_timeout_fails_closed_without_body_
     .await;
     let state = app_state_for_single_upstream_with_timeout(
         mock_base,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         std::time::Duration::from_millis(50),
     );
 
@@ -6571,7 +6625,7 @@ async fn openai_chat_streaming_first_response_timeout_fails_closed_without_body_
                 "stream": true
             }),
             "gpt-4o-mini".to_string(),
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
         ),
     )
@@ -6607,8 +6661,10 @@ async fn same_format_openai_chat_streaming_fails_closed_on_non_sse_success() {
         format!(r#"{{"id":"chatcmpl_json","object":"chat.completion","sentinel":"{SENTINEL}"}}"#),
     )
     .await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -6621,7 +6677,7 @@ async fn same_format_openai_chat_streaming_fails_closed_on_non_sse_success() {
             "stream": true
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;
@@ -6648,8 +6704,10 @@ async fn translated_responses_streaming_fails_closed_on_non_sse_success() {
         format!(r#"{{"id":"chatcmpl_json","object":"chat.completion","sentinel":"{SENTINEL}"}}"#),
     )
     .await;
-    let state =
-        app_state_for_single_upstream(mock_base, crate::formats::UpstreamFormat::OpenAiCompletion);
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
 
     let response = handle_request_core(
         state,
@@ -6695,7 +6753,7 @@ async fn streaming_requests_are_not_cut_off_by_unary_upstream_timeout() {
         spawn_delayed_openai_completion_stream_mock(std::time::Duration::from_millis(150)).await;
     let state = app_state_for_single_upstream_with_timeout(
         mock_base,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         std::time::Duration::from_millis(50),
     );
 
@@ -6710,7 +6768,7 @@ async fn streaming_requests_are_not_cut_off_by_unary_upstream_timeout() {
             "stream": true
         }),
         "gpt-4o-mini".to_string(),
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
     )
     .await;

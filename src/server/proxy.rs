@@ -335,12 +335,14 @@ pub(super) async fn handle_openai_chat_completions(
     request: Request,
 ) -> Response<Body> {
     let Some(auth_context) = data_auth::request_auth_context_from_request(&request) else {
-        return data_auth::missing_request_auth_context_response(UpstreamFormat::OpenAiCompletion);
+        return data_auth::missing_request_auth_context_response(
+            UpstreamFormat::OpenAiChatCompletions,
+        );
     };
     let (headers, body) = match read_limited_json_request(
         &state,
         DEFAULT_NAMESPACE,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &auth_context,
         request,
     )
@@ -369,12 +371,14 @@ pub(super) async fn handle_openai_chat_completions_namespaced(
     request: Request,
 ) -> Response<Body> {
     let Some(auth_context) = data_auth::request_auth_context_from_request(&request) else {
-        return data_auth::missing_request_auth_context_response(UpstreamFormat::OpenAiCompletion);
+        return data_auth::missing_request_auth_context_response(
+            UpstreamFormat::OpenAiChatCompletions,
+        );
     };
     let (headers, body) = match read_limited_json_request(
         &state,
         &namespace,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &auth_context,
         request,
     )
@@ -552,7 +556,7 @@ async fn handle_openai_chat_completions_inner(
         "/openai/v1/chat/completions".to_string(),
         body,
         requested_model,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         None,
         auth_context,
     )
@@ -2946,7 +2950,7 @@ fn request_body_has_explicit_output_limit(target_format: UpstreamFormat, body: &
 
     match target_format {
         UpstreamFormat::Anthropic => obj.get("max_tokens").is_some(),
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             obj.get("max_completion_tokens").is_some() || obj.get("max_tokens").is_some()
         }
         UpstreamFormat::OpenAiResponses => obj.get("max_output_tokens").is_some(),
@@ -2958,7 +2962,7 @@ fn request_body_has_explicit_parallel_tool_calls_preference(
     body: &Value,
 ) -> bool {
     match target_format {
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => body
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => body
             .get("parallel_tool_calls")
             .and_then(Value::as_bool)
             .is_some(),
@@ -2973,7 +2977,7 @@ fn request_body_has_explicit_parallel_tool_calls_preference(
 
 fn request_body_has_tool_definitions(target_format: UpstreamFormat, body: &Value) -> bool {
     match target_format {
-        UpstreamFormat::OpenAiCompletion
+        UpstreamFormat::OpenAiChatCompletions
         | UpstreamFormat::OpenAiResponses
         | UpstreamFormat::Anthropic => body
             .get("tools")

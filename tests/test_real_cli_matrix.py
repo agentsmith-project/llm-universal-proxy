@@ -446,7 +446,7 @@ class RealCliMatrixTests(unittest.TestCase):
             ],
         )
         [chat_trace] = trace_contracts(chat_fixture.verifier)
-        self.assertEqual(chat_trace["upstream_format"], "openai-completion")
+        self.assertEqual(chat_trace["upstream_format"], "openai-chat-completions")
         self.assertEqual(chat_trace["request_index"], -1)
         self.assertTrue(chat_trace["require_response_for_each_request"])
         self.assertIn("upstream_summary.message_roles", chat_trace["required_request_fields"])
@@ -587,7 +587,7 @@ class RealCliMatrixTests(unittest.TestCase):
                     provider_key_env: TEST_PROVIDER_API_KEY
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                 model_aliases:
                   minimax-anth: "MINIMAX-ANTHROPIC:MiniMax-M2.7-highspeed"
@@ -619,7 +619,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
@@ -664,7 +664,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     surface_defaults:
                       modalities:
@@ -814,7 +814,7 @@ class RealCliMatrixTests(unittest.TestCase):
         )
         self.assertEqual(
             targets["preset-openai-compatible"].upstream_format,
-            "openai-completion",
+            "openai-chat-completions",
         )
         self.assertEqual(
             targets["preset-openai-responses-compatible"].upstream_format,
@@ -833,7 +833,7 @@ class RealCliMatrixTests(unittest.TestCase):
             )
         }
 
-        self.assertEqual(qwen_targets["qwen-local"].upstream_format, "openai-completion")
+        self.assertEqual(qwen_targets["qwen-local"].upstream_format, "openai-chat-completions")
 
     def test_preset_trace_filter_keeps_real_provider_model_after_target_resolution(self):
         module = load_module()
@@ -1063,7 +1063,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: MINIMAX_API_KEY
                 model_aliases:
                   minimax-openai: "MINIMAX-OPENAI:MiniMax-M2.7-highspeed"
@@ -1116,7 +1116,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
@@ -1156,7 +1156,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     surface_defaults:
                       modalities:
@@ -1217,7 +1217,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     proxy:
                       url: http://upstream-proxy.example:8080
@@ -1306,7 +1306,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
@@ -1334,7 +1334,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
@@ -1361,7 +1361,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
@@ -1385,7 +1385,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     codex:
                       input_modalities: ["text"]
@@ -1857,7 +1857,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
@@ -1922,7 +1922,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     surface_defaults:
                       modalities:
@@ -1955,7 +1955,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 upstreams:
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
-                    format: openai-completion
+                    format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
                     surface_defaults:
                       modalities:
@@ -2188,7 +2188,7 @@ class RealCliMatrixTests(unittest.TestCase):
             (
                 "preset-openai-compatible",
                 "PRESET-OPENAI-COMPATIBLE",
-                "openai-completion",
+                "openai-chat-completions",
             ),
             (
                 "preset-openai-responses-compatible",
@@ -2218,7 +2218,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 module,
                 name="preset-openai-compatible",
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
-                upstream_format="openai-completion",
+                upstream_format="openai-chat-completions",
             ),
             fixture=make_expected_fail_closed_fixture(module),
         )
@@ -2703,7 +2703,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 2,
                 "require_response_for_each_request": True,
                 "forbid_response_http_statuses": [400],
@@ -2732,7 +2732,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {
                     "client_summary": {
                         "message_roles": ["user"],
@@ -2753,7 +2753,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "response",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "http_status": 200,
             },
             {
@@ -2761,7 +2761,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {
                     "client_summary": {
                         "message_roles": ["user", "assistant", "user"],
@@ -2794,7 +2794,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "response",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "http_status": 200,
             },
         )
@@ -2822,7 +2822,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 2,
                 "request_index": -1,
                 "required_request_objects": [
@@ -2839,7 +2839,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {
                     "client_summary": {
                         "messages_tail": [
@@ -2856,7 +2856,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {"client_summary": {"messages_tail": []}},
             },
         )
@@ -2885,7 +2885,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 2,
                 "required_on_request": "last",
                 "required_request_objects": [
@@ -2909,7 +2909,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "phase": "request",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "request": {"client_summary": {"messages_tail": []}},
                     },
                     {
@@ -2917,7 +2917,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "phase": "request",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "request": {
                             "client_summary": {
                                 "messages_tail": [
@@ -2945,7 +2945,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 2,
                 "require_response_for_each_request": True,
             },
@@ -2962,7 +2962,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "phase": "request",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "request": {"client_summary": {"messages_tail": []}},
                     },
                     {
@@ -2970,7 +2970,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "phase": "request",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "request": {"client_summary": {"messages_tail": []}},
                     },
                     {
@@ -2978,7 +2978,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "phase": "response",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "http_status": 200,
                     },
                 ),
@@ -3001,7 +3001,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "type": "trace_request_contract",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "min_request_count": 0,
                         "required_on_request": selector,
                     },
@@ -3019,7 +3019,7 @@ class RealCliMatrixTests(unittest.TestCase):
                                 "phase": "request",
                                 "path": "/other",
                                 "client_format": "anthropic",
-                                "upstream_format": "openai-completion",
+                                "upstream_format": "openai-chat-completions",
                                 "request": {
                                     "client_summary": {"messages_tail": []}
                                 },
@@ -3049,7 +3049,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "type": "trace_request_contract",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "min_request_count": 2,
                         **selector,
                         "required_request_contains": [
@@ -3073,7 +3073,7 @@ class RealCliMatrixTests(unittest.TestCase):
                                 "phase": "request",
                                 "path": "/anthropic/v1/messages",
                                 "client_format": "anthropic",
-                                "upstream_format": "openai-completion",
+                                "upstream_format": "openai-chat-completions",
                                 "request": {
                                     "upstream_summary": {
                                         "message_roles": [
@@ -3089,7 +3089,7 @@ class RealCliMatrixTests(unittest.TestCase):
                                 "phase": "request",
                                 "path": "/anthropic/v1/messages",
                                 "client_format": "anthropic",
-                                "upstream_format": "openai-completion",
+                                "upstream_format": "openai-chat-completions",
                                 "request": {
                                     "upstream_summary": {
                                         "message_roles": ["user", "assistant"]
@@ -3114,7 +3114,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 2,
                 "same_request": True,
                 "required_request_fields": ["client_summary.message_roles"],
@@ -3132,7 +3132,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {"client_summary": {"message_roles": ["user"]}},
             },
             {
@@ -3140,7 +3140,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {
                     "client_summary": {
                         "messages_tail": [
@@ -3179,7 +3179,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 2,
                 "required_request_objects": [
                     {
@@ -3195,7 +3195,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {
                     "client_summary": {
                         "messages_tail": [
@@ -3233,7 +3233,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 2,
                 "required_request_fields": ["client_summary.messages_tail"],
                 "required_request_objects": [
@@ -3250,7 +3250,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {
                     "client_summary": {
                         "messages_tail": [
@@ -3267,7 +3267,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {
                     "client_summary": {
                         "messages_tail": [
@@ -3305,7 +3305,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 2,
                 "forbid_response_http_statuses": [400],
                 "required_request_objects": [
@@ -3322,7 +3322,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {
                     "client_summary": {
                         "messages_tail": [
@@ -3339,7 +3339,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {"client_summary": {"messages_tail": []}},
             },
             {
@@ -3347,7 +3347,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "response",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "http_status": 400,
             },
         )
@@ -3375,7 +3375,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "min_request_count": 1,
                 "forbid_response_http_statuses": [400],
                 "min_response_count": 1,
@@ -3387,7 +3387,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "phase": "request",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "request": {"client_summary": {"messages_tail": []}},
             },
         )
@@ -3415,7 +3415,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 "type": "trace_request_contract",
                 "path": "/anthropic/v1/messages",
                 "client_format": "anthropic",
-                "upstream_format": "openai-completion",
+                "upstream_format": "openai-chat-completions",
                 "forbid_response_http_statuses": ["400"],
             },
         )
@@ -3432,7 +3432,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "phase": "request",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "request": {"client_summary": {"messages_tail": []}},
                     },
                     {
@@ -3440,7 +3440,7 @@ class RealCliMatrixTests(unittest.TestCase):
                         "phase": "response",
                         "path": "/anthropic/v1/messages",
                         "client_format": "anthropic",
-                        "upstream_format": "openai-completion",
+                        "upstream_format": "openai-chat-completions",
                         "http_status": 200,
                     },
                 ),
@@ -3668,7 +3668,7 @@ class RealCliMatrixTests(unittest.TestCase):
                                 "path": "/anthropic/v1/messages",
                                 "stream": True,
                                 "client_format": "anthropic",
-                                "upstream_format": "openai-completion",
+                                "upstream_format": "openai-chat-completions",
                                 "client_model": "minimax-anth",
                                 "upstream_name": "MINIMAX-ANTHROPIC",
                                 "upstream_model": "MiniMax-M2.7-highspeed",
@@ -3956,7 +3956,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 module,
                 name="preset-openai-compatible",
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
-                upstream_format="openai-completion",
+                upstream_format="openai-chat-completions",
             ),
             fixture=make_fixture(module),
         )
@@ -3997,7 +3997,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 module,
                 name="preset-openai-compatible",
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
-                upstream_format="openai-completion",
+                upstream_format="openai-chat-completions",
             ),
             fixture=make_expected_fail_closed_fixture(module),
         )
@@ -4038,7 +4038,7 @@ class RealCliMatrixTests(unittest.TestCase):
                 module,
                 name="preset-openai-compatible",
                 upstream_name="PRESET-OPENAI-COMPATIBLE",
-                upstream_format="openai-completion",
+                upstream_format="openai-chat-completions",
             ),
             fixture=make_expected_fail_closed_fixture(module),
         )

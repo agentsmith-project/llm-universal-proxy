@@ -42,7 +42,7 @@ pub(super) fn error_response(
 ) -> Response<Body> {
     let normalized_error = normalize_upstream_error(status, message);
     match format {
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
             (status, Json(openai_error_body(&normalized_error))).into_response()
         }
         UpstreamFormat::Anthropic => (
@@ -254,7 +254,7 @@ pub(super) fn normalized_non_stream_upstream_error(
 ) -> Option<(StatusCode, String)> {
     if !matches!(
         client_format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses
     ) {
         return None;
     }

@@ -626,7 +626,7 @@ fn append_upstream_summary(summary: &mut String, config: &Config) {
 
 fn user_facing_format_name(format: UpstreamFormat) -> String {
     match format {
-        UpstreamFormat::OpenAiCompletion => "openai-chat-completions",
+        UpstreamFormat::OpenAiChatCompletions => "openai-chat-completions",
         UpstreamFormat::OpenAiResponses => "openai-responses",
         UpstreamFormat::Anthropic => "anthropic-messages",
     }

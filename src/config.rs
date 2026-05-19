@@ -1671,7 +1671,7 @@ pub fn build_upstream_url(
 ) -> String {
     let base = api_root.trim_end_matches('/');
     match format {
-        UpstreamFormat::OpenAiCompletion => format!("{base}/chat/completions"),
+        UpstreamFormat::OpenAiChatCompletions => format!("{base}/chat/completions"),
         UpstreamFormat::OpenAiResponses => format!("{base}/responses"),
         UpstreamFormat::Anthropic => format!("{base}/messages"),
     }
@@ -1697,7 +1697,7 @@ mod tests {
         assert_eq!(
             build_upstream_url(
                 "https://api.openai.com/v1",
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 None,
                 false
             ),
@@ -1744,7 +1744,7 @@ mod tests {
         assert_eq!(
             build_upstream_url(
                 "https://api.openai.com/v1",
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 None,
                 false
             ),
@@ -1762,7 +1762,7 @@ mod tests {
         assert_eq!(
             build_upstream_url(
                 "https://open.bigmodel.cn/api/paas/v4",
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 None,
                 false
             ),
@@ -1815,7 +1815,7 @@ upstreams:
             ))
             .expect_err("native Gemini upstream formats must be removed");
             assert!(
-                error.contains("format: openai-completion"),
+                error.contains("format: openai-chat-completions"),
                 "error should explain the OpenAI-compatible migration path: {error}"
             );
             assert!(
@@ -1834,7 +1834,7 @@ proxy:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     proxy: direct
   proxied:
     api_root: https://api.anthropic.com/v1
@@ -1868,7 +1868,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
         )
         .unwrap();
@@ -1887,7 +1887,7 @@ upstreams:
             upstreams: vec![RuntimeUpstreamConfig {
                 name: "default".to_string(),
                 api_root: "https://api.openai.com/v1".to_string(),
-                fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+                fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
                 provider_key_env: None,
                 provider_key: None,
                 upstream_headers: Vec::new(),
@@ -1939,7 +1939,7 @@ conversation_state_bridge:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
         )
         .expect_err("conversation_state_bridge.mode should be an unknown YAML field");
@@ -1960,7 +1960,7 @@ upstreams:
             "upstreams": [{
                 "name": "demo",
                 "api_root": "https://api.openai.com/v1",
-                "fixed_upstream_format": "openai-completion"
+                "fixed_upstream_format": "openai-chat-completions"
             }]
         }))
         .expect_err("conversation_state_bridge.mode should be an unknown runtime/admin field");
@@ -1977,7 +1977,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
         )
         .expect("config should parse");
@@ -2017,7 +2017,7 @@ upstreams:
                 "upstreams": [{
                     "name": "default",
                     "api_root": "https://api.openai.com/v1",
-                    "fixed_upstream_format": "openai-completion"
+                    "fixed_upstream_format": "openai-chat-completions"
                 }],
                 "model_aliases": {}
             });
@@ -2040,7 +2040,7 @@ compatibility_mode: {mode}
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
             ))
             .expect_err("legacy compatibility_mode must fail YAML parsing");
@@ -2072,7 +2072,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     {field}
 "#
             ))
@@ -2095,7 +2095,7 @@ upstreams:
             let mut upstream = serde_json::json!({
                 "name": "default",
                 "api_root": "https://api.openai.com/v1",
-                "fixed_upstream_format": "openai-completion"
+                "fixed_upstream_format": "openai-chat-completions"
             });
             upstream[field] = serde_json::json!("legacy");
             let payload = serde_json::json!({
@@ -2120,7 +2120,7 @@ upstreams:
                 "upstreams": [{
                     "name": "default",
                     "api_root": "https://api.openai.com/v1",
-                    "fixed_upstream_format": "openai-completion"
+                    "fixed_upstream_format": "openai-chat-completions"
                 }],
                 "hooks": {
                     "exchange": {
@@ -2222,7 +2222,7 @@ upstreams:
 upstreams:
   default:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 model_aliases:
   demo:
     target: default:gpt-4
@@ -2239,7 +2239,7 @@ hooks:
 upstreams:
   default:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
             ),
             (
@@ -2253,7 +2253,7 @@ hooks:
 upstreams:
   default:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
             ),
         ] {
@@ -2284,7 +2284,7 @@ upstreams:
         };
         let upstream = &c.upstreams[0];
         assert!(c
-            .upstream_url_for_format(upstream, UpstreamFormat::OpenAiCompletion, None, false)
+            .upstream_url_for_format(upstream, UpstreamFormat::OpenAiChatCompletions, None, false)
             .ends_with("/v1/chat/completions"));
         assert!(c
             .upstream_url_for_format(upstream, UpstreamFormat::OpenAiResponses, None, false)
@@ -2394,7 +2394,7 @@ upstreams:
                 UpstreamConfig {
                     name: "b".to_string(),
                     api_root: "https://b.example.com/v1".to_string(),
-                    fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+                    fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
                     provider_key_env: None,
                     provider_key: None,
                     upstream_headers: Vec::new(),
@@ -2471,7 +2471,7 @@ data_auth:
 upstreams:
   inline:
     api_root: https://api.inline.example/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key:
       inline: inline-provider-secret
   env:
@@ -2531,7 +2531,7 @@ upstreams:
         let upstream = UpstreamConfig {
             name: "inline".to_string(),
             api_root: "https://api.inline.example/v1".to_string(),
-            fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+            fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
             provider_key_env: None,
             provider_key: Some(source.clone()),
             upstream_headers: Vec::new(),
@@ -2564,7 +2564,7 @@ upstreams:
                 {
                     "name": "inline",
                     "api_root": "https://api.inline.example/v1",
-                    "fixed_upstream_format": "openai-completion",
+                    "fixed_upstream_format": "openai-chat-completions",
                     "provider_key": { "inline": "runtime-provider-secret" }
                 },
                 {
@@ -2598,7 +2598,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key:
       inline: super-secret-inline-value
       env: DEMO_PROVIDER_KEY
@@ -2610,7 +2610,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key:
       inline: super-secret-inline-value
     provider_key_env: DEMO_PROVIDER_KEY
@@ -2622,7 +2622,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key:
       inline: "   "
 "#,
@@ -2633,7 +2633,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key:
       env: "   "
 "#,
@@ -2659,7 +2659,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: "   "
 "#,
         )
@@ -2684,7 +2684,7 @@ listen: 127.0.0.1:8080
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     upstream_headers:
       {forbidden}: secret
 "#
@@ -2709,7 +2709,7 @@ upstreams:
             upstreams: vec![RuntimeUpstreamConfig {
                 name: "default".to_string(),
                 api_root: "https://api.openai.com/v1".to_string(),
-                fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+                fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
                 provider_key_env: None,
                 provider_key: None,
                 upstream_headers: vec![("openai-api-key".to_string(), "secret".to_string())],
@@ -2749,7 +2749,7 @@ resource_limits:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
         )
         .unwrap();
@@ -2771,7 +2771,7 @@ upstreams:
             upstreams: vec![UpstreamConfig {
                 name: "demo".to_string(),
                 api_root: "https://api.openai.com/v1".to_string(),
-                fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+                fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
                 provider_key_env: None,
                 provider_key: None,
                 upstream_headers: Vec::new(),
@@ -2800,7 +2800,7 @@ hooks:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
         )
         .unwrap();
@@ -2816,7 +2816,7 @@ proxy:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
         )
         .unwrap();
@@ -2830,7 +2830,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     proxy:
       url: http:///missing-host
 "#,
@@ -2849,7 +2849,7 @@ upstreams:
 upstreams:
   demo:
     api_root: https://user:pass@example.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
         )
         .unwrap();
@@ -2863,7 +2863,7 @@ hooks:
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
-    format: openai-completion
+    format: openai-chat-completions
 "#,
         )
         .unwrap();

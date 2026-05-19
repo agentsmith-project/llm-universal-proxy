@@ -45,7 +45,7 @@ use super::{
 fn openai_family_format(format: UpstreamFormat) -> bool {
     matches!(
         format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses
     )
 }
 
@@ -134,7 +134,7 @@ fn assess_anthropic_prompt_cache_extensions(
 fn openai_known_cache_control_paths(client_format: UpstreamFormat, body: &Value) -> Vec<String> {
     let mut paths = Vec::new();
     match client_format {
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             collect_top_level_tool_cache_control_paths(body, &mut paths);
             if let Some(messages) = body.get("messages").and_then(Value::as_array) {
                 for (message_index, message) in messages.iter().enumerate() {
@@ -241,7 +241,7 @@ pub(super) fn shared_control_profile_for_target(
     target_format: UpstreamFormat,
 ) -> SharedControlProfile {
     match target_format {
-        UpstreamFormat::OpenAiCompletion => SharedControlProfile {
+        UpstreamFormat::OpenAiChatCompletions => SharedControlProfile {
             metadata: true,
             user: true,
             service_tier: true,
@@ -426,7 +426,7 @@ pub(super) fn responses_include_has_nonportable_items(
         !matches!(
             (target_format, *item),
             (
-                UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses,
+                UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses,
                 "message.output_text.logprobs"
             )
         )
@@ -715,7 +715,7 @@ pub(super) fn responses_nonportable_tool_choice_message(
     match choice_type {
         "function" => None,
         "custom" => match target_format {
-            UpstreamFormat::OpenAiCompletion | UpstreamFormat::Anthropic => None,
+            UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::Anthropic => None,
             _ => Some(format!(
                 "OpenAI Responses tool_choice.type `custom` cannot be faithfully translated to {target_label}"
             )),
@@ -727,7 +727,7 @@ pub(super) fn responses_nonportable_tool_choice_message(
                     Some("custom")
                         if matches!(
                             target_format,
-                            UpstreamFormat::OpenAiCompletion | UpstreamFormat::Anthropic
+                            UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::Anthropic
                         ) =>
                     {
                         None
@@ -794,7 +794,7 @@ pub(super) fn responses_custom_tool_format_reject_message(
 ) -> Option<String> {
     if !matches!(
         target_format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::Anthropic
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::Anthropic
     ) {
         return None;
     }
@@ -822,7 +822,7 @@ fn responses_custom_tool_bridge_warning_messages(
 ) -> Vec<String> {
     if !matches!(
         target_format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::Anthropic
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::Anthropic
     ) {
         return Vec::new();
     }
@@ -1062,7 +1062,9 @@ pub(super) fn cross_protocol_requested_choice_count(
     body: &Value,
 ) -> Option<(&'static str, u64)> {
     match client_format {
-        UpstreamFormat::OpenAiCompletion => body.get("n").and_then(Value::as_u64).map(|n| ("n", n)),
+        UpstreamFormat::OpenAiChatCompletions => {
+            body.get("n").and_then(Value::as_u64).map(|n| ("n", n))
+        }
         _ => None,
     }
 }
@@ -1086,7 +1088,7 @@ pub(super) fn cross_protocol_requested_choice_count_message(
 
 pub(super) fn request_has_custom_tools(client_format: UpstreamFormat, body: &Value) -> bool {
     match client_format {
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             body.get("tools")
                 .and_then(Value::as_array)
                 .map(|tools| {
@@ -1159,7 +1161,7 @@ pub(super) fn request_invalid_structured_tool_arguments_message(
     target_label: &str,
 ) -> Option<String> {
     match client_format {
-        UpstreamFormat::OpenAiCompletion => body
+        UpstreamFormat::OpenAiChatCompletions => body
             .get("messages")
             .and_then(Value::as_array)
             .and_then(|messages| {
@@ -1284,7 +1286,7 @@ fn modality_label(modality: ModelModality) -> &'static str {
 
 fn request_has_surface_tooling(client_format: UpstreamFormat, body: &Value) -> bool {
     match client_format {
-        UpstreamFormat::OpenAiCompletion
+        UpstreamFormat::OpenAiChatCompletions
         | UpstreamFormat::OpenAiResponses
         | UpstreamFormat::Anthropic => body
             .get("tools")
@@ -1298,7 +1300,7 @@ fn request_explicitly_enables_parallel_tool_calls(
     body: &Value,
 ) -> bool {
     match client_format {
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
             body.get("parallel_tool_calls").and_then(Value::as_bool) == Some(true)
         }
         UpstreamFormat::Anthropic => {
@@ -1316,7 +1318,7 @@ fn openai_request_file_mime_conflict_message(
     body: &Value,
 ) -> Option<String> {
     match client_format {
-        UpstreamFormat::OpenAiCompletion => openai_completion_file_mime_conflict_message(body),
+        UpstreamFormat::OpenAiChatCompletions => openai_completion_file_mime_conflict_message(body),
         UpstreamFormat::OpenAiResponses => openai_responses_file_mime_conflict_message(body),
         UpstreamFormat::Anthropic => None,
     }
@@ -1369,7 +1371,7 @@ fn request_input_modalities(
 ) -> BTreeSet<ModelModality> {
     let mut modalities = BTreeSet::new();
     match client_format {
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             openai_collect_completion_input_modalities(body, &mut modalities);
         }
         UpstreamFormat::OpenAiResponses => {
@@ -1566,7 +1568,7 @@ fn request_output_modalities(
 ) -> BTreeSet<ModelModality> {
     let mut modalities = BTreeSet::new();
     match client_format {
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
             openai_collect_output_modalities(body, &mut modalities);
         }
         UpstreamFormat::Anthropic => {}
@@ -2375,7 +2377,7 @@ pub(crate) fn assess_request_translation(
         ));
     }
 
-    if client_format == UpstreamFormat::OpenAiCompletion
+    if client_format == UpstreamFormat::OpenAiChatCompletions
         && upstream_format == UpstreamFormat::OpenAiResponses
     {
         if let Some(message) = normalized_openai_audio_contract(body).err().or_else(|| {
@@ -2404,7 +2406,7 @@ pub(crate) fn assess_request_translation(
         }
     }
 
-    if client_format == UpstreamFormat::OpenAiCompletion
+    if client_format == UpstreamFormat::OpenAiChatCompletions
         && upstream_format == UpstreamFormat::Anthropic
     {
         if let Some(message) = normalized_openai_audio_contract(body).err().or_else(|| {

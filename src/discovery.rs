@@ -7,7 +7,7 @@ use crate::formats::UpstreamFormat;
 
 /// Order of "genericity" for default conversion target (first supported wins).
 const DEFAULT_TARGET_ORDER: [UpstreamFormat; 3] = [
-    UpstreamFormat::OpenAiCompletion,
+    UpstreamFormat::OpenAiChatCompletions,
     UpstreamFormat::OpenAiResponses,
     UpstreamFormat::Anthropic,
 ];
@@ -132,7 +132,7 @@ impl DiscoveredUpstream {
 /// Minimal JSON body for probe (invalid but enough to get a non-404 from the right endpoint).
 fn minimal_probe_body(format: UpstreamFormat) -> serde_json::Value {
     match format {
-        UpstreamFormat::OpenAiCompletion => serde_json::json!({
+        UpstreamFormat::OpenAiChatCompletions => serde_json::json!({
             "model": "gpt-4o",
             "messages": []
         }),
@@ -191,7 +191,7 @@ fn default_headers_for_format(format: UpstreamFormat) -> Vec<(&'static str, &'st
 
 fn auth_header_for_format(format: UpstreamFormat, api_key: &str) -> (&'static str, String) {
     match format {
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
             ("authorization", format!("Bearer {api_key}"))
         }
         UpstreamFormat::Anthropic => ("x-api-key", api_key.to_string()),
@@ -260,7 +260,7 @@ mod tests {
         let supported =
             discover_supported_formats(&client, &format!("http://{addr}"), None, &[]).await;
 
-        assert!(supported.contains(&UpstreamFormat::OpenAiCompletion));
+        assert!(supported.contains(&UpstreamFormat::OpenAiChatCompletions));
         assert!(supported.contains(&UpstreamFormat::OpenAiResponses));
         assert!(supported.contains(&UpstreamFormat::Anthropic));
 
@@ -289,7 +289,7 @@ mod tests {
             UpstreamFormat::Anthropic
         );
         assert_eq!(
-            cap.upstream_format_for_request(UpstreamFormat::OpenAiCompletion),
+            cap.upstream_format_for_request(UpstreamFormat::OpenAiChatCompletions),
             UpstreamFormat::Anthropic
         );
     }
@@ -297,23 +297,23 @@ mod tests {
     #[test]
     fn capability_from_supported_default_target_order() {
         let mut supported = HashSet::new();
-        supported.insert(UpstreamFormat::OpenAiCompletion);
+        supported.insert(UpstreamFormat::OpenAiChatCompletions);
         let cap = UpstreamCapability::from_supported(supported).expect("capability");
-        assert_eq!(cap.default_target, UpstreamFormat::OpenAiCompletion);
+        assert_eq!(cap.default_target, UpstreamFormat::OpenAiChatCompletions);
         assert_eq!(
             cap.upstream_format_for_request(UpstreamFormat::OpenAiResponses),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
         assert_eq!(
-            cap.upstream_format_for_request(UpstreamFormat::OpenAiCompletion),
-            UpstreamFormat::OpenAiCompletion
+            cap.upstream_format_for_request(UpstreamFormat::OpenAiChatCompletions),
+            UpstreamFormat::OpenAiChatCompletions
         );
     }
 
     #[test]
     fn should_passthrough_when_client_in_supported() {
-        let cap = UpstreamCapability::fixed(UpstreamFormat::OpenAiCompletion);
-        assert!(cap.should_passthrough(UpstreamFormat::OpenAiCompletion));
+        let cap = UpstreamCapability::fixed(UpstreamFormat::OpenAiChatCompletions);
+        assert!(cap.should_passthrough(UpstreamFormat::OpenAiChatCompletions));
         assert!(!cap.should_passthrough(UpstreamFormat::Anthropic));
     }
 

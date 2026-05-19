@@ -341,7 +341,7 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
         for secret_value in sentinel_by_env.values():
             self.assertNotIn(secret_value, config_text)
         self.assertNotIn("MINIMAX", config_text.upper())
-        self.assertIn("format: openai-completion", config_text)
+        self.assertIn("format: openai-chat-completions", config_text)
         self.assertIn("format: anthropic", config_text)
 
     def test_compatible_provider_config_supports_separate_surface_credentials(self):

@@ -278,7 +278,7 @@ fn upsert_header(headers: &mut Vec<(String, String)>, name: String, value: Strin
 /// - Anthropic: `x-api-key: xxx`
 fn auth_header_for_format(format: UpstreamFormat, api_key: &str) -> (String, String) {
     match format {
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
             ("authorization".to_string(), format!("Bearer {api_key}"))
         }
         UpstreamFormat::Anthropic => ("x-api-key".to_string(), api_key.to_string()),

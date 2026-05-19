@@ -4,7 +4,7 @@ use crate::formats::UpstreamFormat;
 
 pub(crate) fn translation_target_label(format: UpstreamFormat) -> &'static str {
     match format {
-        UpstreamFormat::OpenAiCompletion => "OpenAI Chat Completions",
+        UpstreamFormat::OpenAiChatCompletions => "OpenAI Chat Completions",
         UpstreamFormat::OpenAiResponses => "OpenAI Responses",
         UpstreamFormat::Anthropic => "Anthropic",
     }

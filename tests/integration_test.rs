@@ -287,14 +287,14 @@ impl CapturedBridgeBodies {
 }
 
 #[derive(Clone)]
-struct SequencedOpenAiCompletionState {
+struct SequencedOpenAiChatCompletionsState {
     captured: CapturedBridgeBodies,
     calls: Arc<AtomicUsize>,
     first_tool_calls: Vec<Value>,
 }
 
 #[derive(Clone)]
-struct SequencedOpenAiCompletionReasoningState {
+struct SequencedOpenAiChatCompletionsReasoningState {
     captured: CapturedBridgeBodies,
     calls: Arc<AtomicUsize>,
 }
@@ -312,7 +312,7 @@ async fn spawn_sequenced_openai_completion_tool_calls_mock(
     let port = listener.local_addr().unwrap().port();
     let base = format!("http://127.0.0.1:{port}");
     let captured = CapturedBridgeBodies::default();
-    let state = SequencedOpenAiCompletionState {
+    let state = SequencedOpenAiChatCompletionsState {
         captured: captured.clone(),
         calls: Arc::new(AtomicUsize::new(0)),
         first_tool_calls,
@@ -333,7 +333,7 @@ async fn spawn_sequenced_openai_completion_tool_calls_mock(
 }
 
 async fn sequenced_openai_completion_tool_handler(
-    State(state): State<SequencedOpenAiCompletionState>,
+    State(state): State<SequencedOpenAiChatCompletionsState>,
     Json(body): Json<Value>,
 ) -> Response {
     state.captured.push(body.clone());
@@ -369,7 +369,7 @@ async fn spawn_sequenced_openai_completion_reasoning_mock(
     let port = listener.local_addr().unwrap().port();
     let base = format!("http://127.0.0.1:{port}");
     let captured = CapturedBridgeBodies::default();
-    let state = SequencedOpenAiCompletionReasoningState {
+    let state = SequencedOpenAiChatCompletionsReasoningState {
         captured: captured.clone(),
         calls: Arc::new(AtomicUsize::new(0)),
     };
@@ -389,7 +389,7 @@ async fn spawn_sequenced_openai_completion_reasoning_mock(
 }
 
 async fn sequenced_openai_completion_reasoning_handler(
-    State(state): State<SequencedOpenAiCompletionReasoningState>,
+    State(state): State<SequencedOpenAiChatCompletionsReasoningState>,
     Json(body): Json<Value>,
 ) -> Response {
     state.captured.push(body.clone());
@@ -519,7 +519,7 @@ async fn sequenced_anthropic_thinking_handler(
 }
 
 #[derive(Clone)]
-struct StreamingOpenAiCompletionBridgeState {
+struct StreamingOpenAiChatCompletionsBridgeState {
     captured: CapturedBridgeBodies,
     fail_stream: bool,
     hold_stream_open: bool,
@@ -540,7 +540,7 @@ async fn spawn_streaming_openai_completion_bridge_mock_with_stream_hold(
     let port = listener.local_addr().unwrap().port();
     let base = format!("http://127.0.0.1:{port}");
     let captured = CapturedBridgeBodies::default();
-    let state = StreamingOpenAiCompletionBridgeState {
+    let state = StreamingOpenAiChatCompletionsBridgeState {
         captured: captured.clone(),
         fail_stream,
         hold_stream_open,
@@ -568,7 +568,7 @@ async fn spawn_streaming_openai_completion_reasoning_bridge_mock_with_stream_hol
     let port = listener.local_addr().unwrap().port();
     let base = format!("http://127.0.0.1:{port}");
     let captured = CapturedBridgeBodies::default();
-    let state = StreamingOpenAiCompletionBridgeState {
+    let state = StreamingOpenAiChatCompletionsBridgeState {
         captured: captured.clone(),
         fail_stream: false,
         hold_stream_open,
@@ -590,7 +590,7 @@ async fn spawn_streaming_openai_completion_reasoning_bridge_mock_with_stream_hol
 }
 
 async fn streaming_openai_completion_bridge_handler(
-    State(state): State<StreamingOpenAiCompletionBridgeState>,
+    State(state): State<StreamingOpenAiChatCompletionsBridgeState>,
     Json(body): Json<Value>,
 ) -> Response {
     state.captured.push(body.clone());
@@ -791,8 +791,8 @@ fn demo_runtime_config(mock_base: &str) -> RuntimeConfigPayload {
         proxy: Some(ProxyConfig::Direct),
         upstreams: vec![RuntimeUpstreamConfig {
             name: "default".to_string(),
-            api_root: upstream_api_root(mock_base, UpstreamFormat::OpenAiCompletion),
-            fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+            api_root: upstream_api_root(mock_base, UpstreamFormat::OpenAiChatCompletions),
+            fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
             provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
@@ -857,7 +857,7 @@ listen: 127.0.0.1:18888
 upstreams:
   MINIMAX-OPENAI:
     api_root: https://api.minimaxi.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: MINIMAX_API_KEY
     limits:
       context_window: 200000
@@ -1062,7 +1062,7 @@ fn runtime_config_round_trip_preserves_model_alias_limits() {
 
 #[test]
 fn effective_model_surface_merges_upstream_defaults_and_alias_overrides() {
-    let mut config = proxy_config("http://example.com", UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config("http://example.com", UpstreamFormat::OpenAiChatCompletions);
     config.upstreams[0].limits = Some(ModelLimits {
         context_window: Some(200_000),
         max_output_tokens: Some(128_000),
@@ -1717,7 +1717,7 @@ async fn non_empty_static_config_without_data_auth_or_env_rejects_startup() {
     let _proxy_key = ScopedEnvVar::remove(PROXY_KEY_ENV);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let config = proxy_config("https://example.com", UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config("https://example.com", UpstreamFormat::OpenAiChatCompletions);
     let result = tokio::time::timeout(
         Duration::from_millis(500),
         run_with_listener(config, listener),
@@ -1857,8 +1857,8 @@ async fn runtime_namespace_config_can_be_created_from_empty_start_with_null_or_m
         proxy: Some(ProxyConfig::Direct),
         upstreams: vec![RuntimeUpstreamConfig {
             name: "default".to_string(),
-            api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion),
-            fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+            api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
+            fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
             provider_key_env: None,
             provider_key: None,
             upstream_headers: vec![
@@ -1970,8 +1970,8 @@ async fn admin_runtime_payload_rejects_legacy_compatibility_mode() {
                 "proxy": "direct",
                 "upstreams": [{
                     "name": "default",
-                    "api_root": upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion),
-                    "fixed_upstream_format": "openai-completion"
+                    "api_root": upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
+                    "fixed_upstream_format": "openai-chat-completions"
                 }],
                 "model_aliases": {}
             }
@@ -2381,7 +2381,7 @@ async fn admin_dynamic_config_rejects_legacy_upstream_auth_fields() {
         let mut upstream = json!({
             "name": "default",
             "api_root": "https://example.com/v1",
-            "fixed_upstream_format": "openai-completion"
+            "fixed_upstream_format": "openai-chat-completions"
         });
         let upstream_object = upstream.as_object_mut().unwrap();
         for (key, value) in legacy_field.as_object().unwrap() {
@@ -2826,7 +2826,8 @@ async fn admin_put_data_auth_does_not_overwrite_concurrent_namespace_cas_update(
         .expect("data-auth rebuild should block inside discovery");
 
     let (new_mock_base, _new_mock) = spawn_openai_completion_mock().await;
-    let expected_api_root = upstream_api_root(&new_mock_base, UpstreamFormat::OpenAiCompletion);
+    let expected_api_root =
+        upstream_api_root(&new_mock_base, UpstreamFormat::OpenAiChatCompletions);
     let mut namespace_payload = demo_runtime_config(&new_mock_base);
     namespace_payload.upstreams[0].provider_key_env = Some(PROVIDER_KEY_ENV.to_string());
     let mut namespace_update = {
@@ -3199,8 +3200,8 @@ async fn admin_namespace_state_redacts_inline_credentials_and_hook_authorization
                 }),
                 upstreams: vec![RuntimeUpstreamConfig {
                     name: "default".to_string(),
-                    api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion),
-                    fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+                    api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
+                    fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
                     provider_key_env: Some("DEMO_KEY".to_string()),
                     provider_key: None,
                     upstream_headers: vec![
@@ -3261,7 +3262,7 @@ async fn admin_namespace_state_redacts_inline_credentials_and_hook_authorization
     );
     assert_eq!(
         state["config"]["upstreams"][0]["api_root"],
-        upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion)
+        upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions)
     );
     assert_eq!(
         state["config"]["proxy"]["url"],
@@ -3274,7 +3275,7 @@ async fn admin_namespace_state_redacts_inline_credentials_and_hook_authorization
     );
     assert_eq!(
         state["upstreams"][0]["api_root"],
-        upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion)
+        upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions)
     );
     assert_eq!(state["upstreams"][0]["proxy_source"], "upstream");
     assert_eq!(state["upstreams"][0]["proxy_mode"], "proxy");
@@ -3395,8 +3396,8 @@ async fn admin_namespace_state_reports_namespace_proxy_source_over_http() {
                 }),
                 upstreams: vec![RuntimeUpstreamConfig {
                     name: "default".to_string(),
-                    api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion),
-                    fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+                    api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
+                    fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
                     provider_key_env: None,
                     provider_key: None,
                     upstream_headers: Vec::new(),
@@ -3855,7 +3856,7 @@ async fn proxy_key_mode_without_provider_key_env_fails_closed_at_startup() {
         upstreams: vec![UpstreamConfig {
             name: "default".to_string(),
             api_root: "https://example.com/v1".to_string(),
-            fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+            fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
             provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
@@ -3889,7 +3890,7 @@ fn config_with_upstream_header(header_name: &str) -> Config {
         upstreams: vec![UpstreamConfig {
             name: "default".to_string(),
             api_root: "https://example.com/v1".to_string(),
-            fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+            fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
             provider_key_env: None,
             provider_key: None,
             upstream_headers: vec![(header_name.to_string(), "server-held-value".to_string())],
@@ -4090,7 +4091,7 @@ fn config_accepts_versionless_absolute_api_root() {
 upstreams:
   demo:
     api_root: https://api.openai.com
-    format: openai-completion
+    format: openai-chat-completions
 "#,
     )
     .unwrap();
@@ -4100,7 +4101,7 @@ upstreams:
 #[tokio::test]
 async fn openai_namespace_chat_completions_works() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -4151,7 +4152,7 @@ async fn openai_namespace_chat_completions_accepts_gzip_upstream_json() {
         axum::serve(listener, app).await.ok();
     });
     let mock_base = format!("http://127.0.0.1:{port}");
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -4489,7 +4490,7 @@ async fn openai_namespace_response_resource_routes_reject_reserved_public_identi
 #[tokio::test]
 async fn openai_namespace_response_get_requires_available_native_responses_upstream() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -4684,7 +4685,7 @@ async fn discovery_single_openai_completion_upstream_is_available_and_not_fixed(
     let _env_guard = ADMIN_TOKEN_ENV_LOCK.lock().await;
     let _admin_token = ScopedEnvVar::remove("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN");
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = auto_discovery_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = auto_discovery_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let state = default_namespace_state(&proxy_base).await;
@@ -4692,7 +4693,7 @@ async fn discovery_single_openai_completion_upstream_is_available_and_not_fixed(
     assert!(state["upstreams"][0]["fixed_upstream_format"].is_null());
     assert_eq!(
         state["upstreams"][0]["supported_formats"],
-        json!(["openai-completion"])
+        json!(["openai-chat-completions"])
     );
     assert_eq!(state["upstreams"][0]["availability"]["status"], "available");
 
@@ -5058,7 +5059,7 @@ async fn conversation_state_bridge_replays_text_history_to_openai_chat_upstream(
     let (mock_base, _mock, captured) = spawn_asserting_openai_completion_mock(|_| Ok(())).await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -5115,7 +5116,7 @@ async fn conversation_state_bridge_replays_reasoning_summary_to_openai_chat_upst
     let (mock_base, _mock, captured) = spawn_sequenced_openai_completion_reasoning_mock().await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -5298,7 +5299,7 @@ async fn conversation_state_bridge_streaming_text_capture_to_openai_chat_upstrea
     let (mock_base, _mock, captured) = spawn_streaming_openai_completion_bridge_mock(false).await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -5360,7 +5361,7 @@ async fn conversation_state_bridge_streaming_reasoning_capture_replays_before_up
         spawn_streaming_openai_completion_reasoning_bridge_mock_with_stream_hold(true).await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -5440,7 +5441,7 @@ async fn conversation_state_bridge_streaming_completed_id_replays_before_upstrea
         spawn_streaming_openai_completion_bridge_mock_with_stream_hold(false, true).await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -5667,7 +5668,7 @@ async fn conversation_state_bridge_streaming_response_failed_does_not_save_repla
     let (mock_base, _mock, captured) = spawn_streaming_openai_completion_bridge_mock(true).await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -5736,7 +5737,7 @@ async fn conversation_state_bridge_replays_function_call_output_to_openai_chat_u
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -5857,7 +5858,7 @@ async fn conversation_state_bridge_replays_function_call_output_object_to_openai
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6055,7 +6056,7 @@ async fn conversation_state_bridge_replays_custom_tool_call_output_to_openai_cha
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6237,7 +6238,7 @@ async fn conversation_state_bridge_rejects_missing_function_call_output_for_pend
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6299,7 +6300,7 @@ async fn conversation_state_bridge_rejects_mismatched_function_call_output_befor
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6375,7 +6376,7 @@ async fn conversation_state_bridge_rejects_duplicate_function_call_output_before
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6449,7 +6450,7 @@ async fn conversation_state_bridge_rejects_extra_function_call_output_after_pend
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6523,7 +6524,7 @@ async fn conversation_state_bridge_rejects_missing_custom_tool_call_output_for_p
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6586,7 +6587,7 @@ async fn conversation_state_bridge_rejects_function_call_output_for_pending_cust
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6653,7 +6654,7 @@ async fn conversation_state_bridge_rejects_custom_tool_call_output_for_pending_f
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6719,7 +6720,7 @@ async fn conversation_state_bridge_rejects_mismatched_custom_tool_call_output_be
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6786,7 +6787,7 @@ async fn conversation_state_bridge_rejects_extra_custom_tool_call_output_after_p
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -6859,7 +6860,7 @@ async fn conversation_state_bridge_rejects_store_true_before_tool_output_pending
     .await;
     let config = bridge_memory_proxy_config(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         60,
         1024 * 1024,
     );
@@ -7679,7 +7680,7 @@ async fn assert_responses_context_management_rejects_on_live_proxy_path(
     upstream_format: UpstreamFormat,
 ) {
     let (mock_base, _mock, captured) = match upstream_format {
-        UpstreamFormat::OpenAiCompletion => spawn_capture_openai_completion_mock().await,
+        UpstreamFormat::OpenAiChatCompletions => spawn_capture_openai_completion_mock().await,
         UpstreamFormat::Anthropic => spawn_capture_anthropic_mock().await,
         UpstreamFormat::OpenAiResponses => unreachable!("same-provider passthrough is allowed"),
     };
@@ -7724,7 +7725,10 @@ async fn assert_responses_context_management_rejects_on_live_proxy_path(
 
 #[tokio::test]
 async fn responses_context_management_fails_closed_for_cross_provider_live_paths() {
-    for upstream_format in [UpstreamFormat::OpenAiCompletion, UpstreamFormat::Anthropic] {
+    for upstream_format in [
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+    ] {
         assert_responses_context_management_rejects_on_live_proxy_path(upstream_format).await;
     }
 }
@@ -7900,7 +7904,7 @@ async fn responses_store_true_fails_closed_on_live_proxy_path() {
 #[tokio::test]
 async fn responses_store_true_fails_closed_on_live_openai_chat_proxy_path() {
     let (mock_base, _mock, captured) = spawn_asserting_openai_completion_mock(|_| Ok(())).await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -7998,7 +8002,7 @@ async fn anthropic_messages_to_openai_prompt_cache_extension_reaches_upstream() 
         Ok(())
     })
     .await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8051,7 +8055,7 @@ async fn anthropic_namespace_messages_works() {
 #[tokio::test]
 async fn translated_anthropic_tool_error_returns_400_with_error_body() {
     let (mock_base, _mock) = spawn_openai_completion_terminal_mock("tool_error").await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8074,7 +8078,7 @@ async fn translated_anthropic_tool_error_returns_400_with_error_body() {
 #[tokio::test]
 async fn translated_anthropic_error_returns_500_with_error_body() {
     let (mock_base, _mock) = spawn_openai_completion_terminal_mock("error").await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8097,7 +8101,7 @@ async fn translated_anthropic_error_returns_500_with_error_body() {
 #[tokio::test]
 async fn translated_anthropic_message_body_stays_200() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8128,7 +8132,7 @@ async fn anthropic_raw_upstream_429_returns_rate_limit_error() {
         }),
     )
     .await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8161,7 +8165,7 @@ async fn anthropic_raw_upstream_401_returns_authentication_error() {
         }),
     )
     .await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8194,7 +8198,7 @@ async fn anthropic_raw_upstream_403_returns_permission_error() {
         }),
     )
     .await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8227,7 +8231,7 @@ async fn anthropic_raw_upstream_404_returns_not_found_error() {
         }),
     )
     .await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8260,7 +8264,7 @@ async fn anthropic_raw_upstream_413_returns_request_too_large() {
         }),
     )
     .await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8293,7 +8297,7 @@ async fn anthropic_raw_upstream_503_returns_api_error() {
         }),
     )
     .await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let res = Client::new()
@@ -8477,7 +8481,7 @@ async fn native_google_routes_are_not_registered() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
     let config = config_with_alias(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gemini-local",
         "gemini-1.5",
     );
@@ -8577,7 +8581,7 @@ async fn gemini_brand_model_can_use_openai_compatible_upstream() {
         upstreams: vec![UpstreamConfig {
             name: "gemini-openai-compatible".to_string(),
             api_root: format!("{upstream_base}/v1beta/openai"),
-            fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+            fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
             provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
@@ -8585,7 +8589,7 @@ async fn gemini_brand_model_can_use_openai_compatible_upstream() {
             limits: None,
             surface_defaults: None,
         }],
-        ..proxy_config(&upstream_base, UpstreamFormat::OpenAiCompletion)
+        ..proxy_config(&upstream_base, UpstreamFormat::OpenAiChatCompletions)
     };
     let (proxy_base, _proxy) = start_proxy(config).await;
 
@@ -8619,7 +8623,7 @@ async fn openai_models_endpoint_lists_local_aliases() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
     let mut config = config_with_alias_limits(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "sonnet",
         "gpt-4o",
         Some(ModelLimits {
@@ -8782,7 +8786,7 @@ async fn openai_models_endpoint_retrieves_local_alias_object_with_llmup_owner() 
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
     let config = config_with_alias(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "sonnet",
         "gpt-4o",
     );
@@ -8805,7 +8809,7 @@ async fn openai_models_endpoint_retrieves_local_alias_object_with_llmup_owner() 
 #[tokio::test]
 async fn openai_models_endpoint_resolves_direct_upstream_model_surface() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     config.upstreams[0].name = "MINIMAX-OPENAI".to_string();
     config.upstreams[0].limits = Some(ModelLimits {
         context_window: Some(200_000),
@@ -8862,7 +8866,7 @@ async fn openai_models_endpoint_resolves_direct_upstream_model_surface() {
 #[tokio::test]
 async fn upstream_openai_completion_passthrough_non_streaming() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -8886,7 +8890,7 @@ async fn upstream_openai_completion_passthrough_non_streaming() {
 #[tokio::test]
 async fn openai_completion_omitted_stream_defaults_to_non_streaming() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -8916,7 +8920,7 @@ async fn openai_completion_omitted_stream_defaults_to_non_streaming() {
 #[tokio::test]
 async fn upstream_openai_completion_client_anthropic_translated_non_streaming() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     // Client sends Anthropic format (system + messages) → proxy translates to OpenAI for upstream, then response back to Anthropic shape.
@@ -9013,7 +9017,7 @@ async fn anthropic_messages_endpoint_passthrough_non_streaming() {
 #[tokio::test]
 async fn anthropic_messages_endpoint_translates_to_openai_upstream() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -9729,7 +9733,7 @@ async fn multi_upstream_supports_explicit_upstream_model_selector() {
             named_upstream(
                 "OPENAI",
                 &openai_base,
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 None,
             ),
         ],
@@ -9782,7 +9786,7 @@ async fn multi_upstream_supports_local_model_alias() {
             named_upstream(
                 "OPENAI",
                 &openai_base,
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 None,
             ),
         ],
@@ -9825,7 +9829,7 @@ async fn multi_upstream_requires_explicit_resolution_for_ambiguous_model() {
             named_upstream(
                 "OPENAI",
                 &openai_base,
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 None,
             ),
         ],
@@ -9958,7 +9962,7 @@ async fn proxy_key_auth_ignores_raw_client_provider_key() {
 async fn usage_and_exchange_hooks_fire_for_non_streaming_requests() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
     let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     config.hooks = HookConfig {
         max_pending_bytes: 100 * 1024 * 1024,
         timeout: Duration::from_secs(3),
@@ -10016,7 +10020,7 @@ async fn usage_and_exchange_hooks_fire_for_non_streaming_requests() {
 async fn provider_cache_usage_usage_hook_includes_non_stream_openai_chat_source_fields() {
     let (mock_base, _mock) = spawn_openai_completion_provider_cache_usage_mock().await;
     let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     config.hooks = HookConfig {
         max_pending_bytes: 100 * 1024 * 1024,
         timeout: Duration::from_secs(3),
@@ -10062,7 +10066,7 @@ async fn provider_cache_usage_usage_hook_includes_non_stream_openai_chat_source_
         usage["provider_cache_usage"],
         json!({
             "provider": "openai",
-            "source_format": "openai-completion",
+            "source_format": "openai-chat-completions",
             "hit_tokens": 128,
             "read_tokens": 128,
             "source_fields": [
@@ -10084,7 +10088,7 @@ async fn provider_cache_usage_usage_hook_omits_same_format_constructed_source_fi
     let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
     let mut config = config_with_alias(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         alias_model,
         upstream_model,
     );
@@ -10128,8 +10132,8 @@ async fn provider_cache_usage_usage_hook_omits_same_format_constructed_source_fi
         .find(|payload| payload.get("usage").is_some())
         .unwrap();
 
-    assert_eq!(usage["client_format"], "openai-completion");
-    assert_eq!(usage["upstream_format"], "openai-completion");
+    assert_eq!(usage["client_format"], "openai-chat-completions");
+    assert_eq!(usage["upstream_format"], "openai-chat-completions");
     assert_eq!(usage["client_model"], alias_model);
     assert_eq!(usage["upstream_model"], upstream_model);
     assert_llmup_external_contract(&usage["llmup"], "constructed", "synthesized");
@@ -10184,7 +10188,7 @@ async fn provider_cache_usage_usage_hook_omits_non_stream_cross_protocol_client_
         .find(|payload| payload.get("usage").is_some())
         .unwrap();
 
-    assert_eq!(usage["client_format"], "openai-completion");
+    assert_eq!(usage["client_format"], "openai-chat-completions");
     assert_eq!(usage["upstream_format"], "openai-responses");
     assert_eq!(usage["usage"]["cached_input_tokens"], 128);
     assert!(
@@ -10206,7 +10210,7 @@ async fn exchange_hook_non_stream_success_uses_public_redacted_response_body_whe
     let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
     let mut config = config_with_alias(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         alias_model,
         upstream_model,
     );
@@ -10276,7 +10280,7 @@ async fn exchange_hook_stream_success_uses_redacted_sse_capture_when_transformat
     let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
     let mut config = config_with_alias(
         &mock_base,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         alias_model,
         upstream_model,
     );
@@ -10350,7 +10354,7 @@ async fn hooks_exchange_hook_raw_sse_success_observes_redacted_debug_and_usage_w
         uuid::Uuid::new_v4()
     ));
 
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     config.upstreams[0].provider_key = Some(SecretSourceConfig {
         inline: Some(provider_secret.to_string()),
         env: None,
@@ -10547,7 +10551,7 @@ async fn hooks_capture_reasoning_for_responses_stream_passthrough() {
 async fn hooks_mark_cancelled_when_stream_is_dropped_early() {
     let (mock_base, _mock) = spawn_slow_openai_completion_mock().await;
     let (hook_base, _hook, captured) = spawn_hook_capture_server().await;
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     config.hooks = HookConfig {
         max_pending_bytes: 100 * 1024 * 1024,
         timeout: Duration::from_secs(3),
@@ -10758,7 +10762,7 @@ async fn concurrent_openai_to_anthropic_requests_keep_headers_isolated_without_i
 #[tokio::test]
 async fn upstream_openai_completion_streaming_passthrough() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -10818,7 +10822,7 @@ async fn upstream_anthropic_streaming_translated_to_openai() {
 #[tokio::test]
 async fn anthropic_messages_endpoint_streaming_translates_to_openai_upstream() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -11100,7 +11104,7 @@ async fn upstream_openai_responses_streaming_passthrough() {
 #[tokio::test]
 async fn health_returns_ok() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -11119,7 +11123,7 @@ async fn health_returns_ok() {
 #[tokio::test]
 async fn post_invalid_json_returns_422_or_400() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -11140,7 +11144,7 @@ async fn post_invalid_json_returns_422_or_400() {
 #[tokio::test]
 async fn post_empty_body_returns_4xx() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -11167,7 +11171,7 @@ async fn upstream_unreachable_returns_502() {
         upstreams: vec![UpstreamConfig {
             name: "default".to_string(),
             api_root: "http://127.0.0.1:31999/v1".to_string(),
-            fixed_upstream_format: Some(UpstreamFormat::OpenAiCompletion),
+            fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
             provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
@@ -11201,7 +11205,7 @@ async fn upstream_unreachable_returns_502() {
 #[tokio::test]
 async fn nonexistent_path_returns_404() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();
@@ -11216,7 +11220,7 @@ async fn nonexistent_path_returns_404() {
 #[tokio::test]
 async fn openai_completion_non_streaming_explicit_false() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = Client::new();

@@ -39,7 +39,7 @@ upstreams:
 
   PRESET-OPENAI-COMPATIBLE:
     api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
-    format: openai-completion
+    format: openai-chat-completions
     # Env var name, not the secret value.
     provider_key_env: PRESET_ENDPOINT_API_KEY
     limits:

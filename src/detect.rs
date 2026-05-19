@@ -51,7 +51,7 @@ fn detect_by_body(body: &Value) -> UpstreamFormat {
         || body.get("logit_bias").is_some()
         || body.get("user").is_some()
     {
-        return UpstreamFormat::OpenAiCompletion;
+        return UpstreamFormat::OpenAiChatCompletions;
     }
 
     // Claude/Anthropic: messages with content array, or system / anthropic_version
@@ -81,7 +81,7 @@ fn detect_by_body(body: &Value) -> UpstreamFormat {
     }
 
     // Default: OpenAI Chat Completions
-    UpstreamFormat::OpenAiCompletion
+    UpstreamFormat::OpenAiChatCompletions
 }
 
 #[cfg(test)]
@@ -125,7 +125,7 @@ mod tests {
         let body = json!({ "contents": [{ "role": "user", "parts": [{ "text": "Hi" }] }] });
         assert_eq!(
             detect_request_format(path, &body),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
     }
 
@@ -135,7 +135,7 @@ mod tests {
         let body = json!({ "messages": [{ "role": "user", "content": "Hi" }], "response_format": { "type": "json_object" } });
         assert_eq!(
             detect_request_format(path, &body),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
     }
 
@@ -155,7 +155,7 @@ mod tests {
         let body = json!({ "messages": [{ "role": "user", "content": "Hi" }], "model": "gpt-4o" });
         assert_eq!(
             detect_request_format(path, &body),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
     }
 

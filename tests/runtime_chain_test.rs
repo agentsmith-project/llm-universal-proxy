@@ -1312,7 +1312,7 @@ async fn exchange_hook_non_stream_transformation_required_redacts_request_body_a
     let (mock_base, _mock) = spawn_openai_completion_secret_echo_mock(TEST_PROVIDER_KEY).await;
     let (hook_base, _hook_mock, exchange, _usage) = spawn_hook_capture_mock().await;
 
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let alias_model = "redaction-alias";
     let upstream_model = "gpt-4-redaction-target";
     config.model_aliases.insert(
@@ -1399,7 +1399,7 @@ async fn exchange_hook_streaming_redacts_request_body_and_plain_header_metadata(
     let (mock_base, _mock) = spawn_openai_completion_secret_echo_mock(TEST_PROVIDER_KEY).await;
     let (hook_base, _hook_mock, exchange, _usage) = spawn_hook_capture_mock().await;
 
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let alias_model = "stream-redaction-alias";
     let upstream_model = "gpt-4-stream-redaction-target";
     config.model_aliases.insert(
@@ -1481,7 +1481,7 @@ async fn exchange_hook_streaming_redacts_request_body_and_plain_header_metadata(
 async fn allowed_upstream_response_headers_redact_known_secret_values_and_keep_safe_values() {
     let (mock_base, _mock) =
         spawn_openai_completion_response_header_echo_mock(TEST_PROVIDER_KEY).await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let response = Client::new()
@@ -1748,7 +1748,7 @@ async fn translated_stream_delivers_first_chunk_incrementally() {
 #[tokio::test]
 async fn downstream_disconnect_stops_upstream_stream_promptly() {
     let (mock_base, _mock, drop_notify) = spawn_disconnect_observing_openai_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let response = Client::new()
@@ -1784,7 +1784,7 @@ async fn downstream_disconnect_stops_upstream_stream_promptly() {
 #[tokio::test]
 async fn downstream_disconnect_aborts_upstream_before_response_headers() {
     let (mock_base, _mock, request_started, abort_notify) = spawn_pending_openai_send_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
     let request_body = json!({
         "model": "gpt-4",
@@ -1851,14 +1851,14 @@ async fn concurrent_live_requests_keep_namespaces_and_sessions_isolated() {
         &client,
         &proxy_base,
         "alpha",
-        runtime_namespace_config(&alpha_base, UpstreamFormat::OpenAiCompletion, "alpha"),
+        runtime_namespace_config(&alpha_base, UpstreamFormat::OpenAiChatCompletions, "alpha"),
     )
     .await;
     let _ = apply_namespace_config(
         &client,
         &proxy_base,
         "beta",
-        runtime_namespace_config(&beta_base, UpstreamFormat::OpenAiCompletion, "beta"),
+        runtime_namespace_config(&beta_base, UpstreamFormat::OpenAiChatCompletions, "beta"),
     )
     .await;
 
@@ -2076,7 +2076,7 @@ async fn slow_debug_trace_sink_does_not_delay_stream_teardown() {
     let (mock_base, _mock, drop_notify) =
         spawn_large_openai_stream_mock(200_000, Duration::from_secs(30)).await;
 
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     config.debug_trace = DebugTraceConfig {
         path: Some(slow_sink.path_string()),
         max_text_chars: 200_000,
@@ -2119,7 +2119,7 @@ async fn debug_trace_background_writer_does_not_silent_drop_under_blocked_sink()
     let (mock_base, _mock, _drop_notify) =
         spawn_large_openai_stream_mock(8_192, Duration::ZERO).await;
 
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     config.debug_trace = DebugTraceConfig {
         path: Some(trace_capture.path_string()),
         max_text_chars: 256,
@@ -2199,7 +2199,7 @@ async fn exchange_capture_for_long_stream_is_bounded_by_capture_budget() {
     let (hook_base, _hook_mock, exchange, _usage) = spawn_hook_capture_mock().await;
     let capture_budget_bytes = 16 * 1024usize;
 
-    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     config.hooks = HookConfig {
         max_pending_bytes: capture_budget_bytes,
         timeout: Duration::from_secs(5),

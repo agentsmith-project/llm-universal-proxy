@@ -314,7 +314,7 @@ pub struct NormalizedUsage {
 impl NormalizedUsage {
     pub fn from_client_body(format: UpstreamFormat, body: &Value) -> Self {
         match format {
-            UpstreamFormat::OpenAiCompletion => {
+            UpstreamFormat::OpenAiChatCompletions => {
                 let usage = body.get("usage").unwrap_or(&Value::Null);
                 let input_tokens = usage.get("prompt_tokens").and_then(Value::as_u64);
                 let output_tokens = usage.get("completion_tokens").and_then(Value::as_u64);
@@ -453,7 +453,7 @@ impl ProviderCacheUsage {
     fn from_usage(format: UpstreamFormat, usage: &Value) -> Option<Self> {
         let mut cache_usage = Self {
             provider: match format {
-                UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+                UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
                     ProviderCacheUsageProvider::OpenAi
                 }
                 UpstreamFormat::Anthropic => ProviderCacheUsageProvider::Anthropic,
@@ -466,7 +466,7 @@ impl ProviderCacheUsage {
         };
 
         match format {
-            UpstreamFormat::OpenAiCompletion => {
+            UpstreamFormat::OpenAiChatCompletions => {
                 if let Some(cached_tokens) = usage
                     .get("prompt_tokens_details")
                     .and_then(|details| details.get("cached_tokens"))
@@ -1616,7 +1616,7 @@ impl<S> Drop for HookCaptureStream<S> {
 
 #[derive(Debug)]
 enum ClientSseAccumulator {
-    OpenAiCompletion(OpenAiCompletionAccumulator),
+    OpenAiChatCompletions(OpenAiChatCompletionsAccumulator),
     Responses(ResponsesAccumulator),
     Anthropic(AnthropicAccumulator),
 }
@@ -1624,7 +1624,9 @@ enum ClientSseAccumulator {
 impl ClientSseAccumulator {
     fn new(format: UpstreamFormat) -> Self {
         match format {
-            UpstreamFormat::OpenAiCompletion => Self::OpenAiCompletion(Default::default()),
+            UpstreamFormat::OpenAiChatCompletions => {
+                Self::OpenAiChatCompletions(Default::default())
+            }
             UpstreamFormat::OpenAiResponses => Self::Responses(Default::default()),
             UpstreamFormat::Anthropic => Self::Anthropic(Default::default()),
         }
@@ -1632,7 +1634,7 @@ impl ClientSseAccumulator {
 
     fn on_event(&mut self, event: &Value, capture_exchange: bool) {
         match self {
-            Self::OpenAiCompletion(acc) => acc.on_event(event, capture_exchange),
+            Self::OpenAiChatCompletions(acc) => acc.on_event(event, capture_exchange),
             Self::Responses(acc) => acc.on_event(event, capture_exchange),
             Self::Anthropic(acc) => acc.on_event(event, capture_exchange),
         }
@@ -1640,7 +1642,7 @@ impl ClientSseAccumulator {
 
     fn final_response_body(&self) -> Value {
         match self {
-            Self::OpenAiCompletion(acc) => acc.final_body(),
+            Self::OpenAiChatCompletions(acc) => acc.final_body(),
             Self::Responses(acc) => acc.final_body(),
             Self::Anthropic(acc) => acc.final_body(),
         }
@@ -1648,7 +1650,7 @@ impl ClientSseAccumulator {
 
     fn final_usage(&self) -> NormalizedUsage {
         match self {
-            Self::OpenAiCompletion(acc) => acc.final_usage(),
+            Self::OpenAiChatCompletions(acc) => acc.final_usage(),
             Self::Responses(acc) => acc.final_usage(),
             Self::Anthropic(acc) => acc.final_usage(),
         }
@@ -1656,7 +1658,7 @@ impl ClientSseAccumulator {
 
     fn final_provider_cache_usage(&self) -> Option<ProviderCacheUsage> {
         match self {
-            Self::OpenAiCompletion(acc) => acc.final_provider_cache_usage(),
+            Self::OpenAiChatCompletions(acc) => acc.final_provider_cache_usage(),
             Self::Responses(acc) => acc.final_provider_cache_usage(),
             Self::Anthropic(acc) => acc.final_provider_cache_usage(),
         }
@@ -1664,7 +1666,7 @@ impl ClientSseAccumulator {
 
     fn protocol_terminal(&self) -> Option<ProtocolTerminal> {
         match self {
-            Self::OpenAiCompletion(acc) => acc.protocol_terminal(),
+            Self::OpenAiChatCompletions(acc) => acc.protocol_terminal(),
             Self::Responses(acc) => acc.protocol_terminal(),
             Self::Anthropic(acc) => acc.protocol_terminal(),
         }
@@ -1798,7 +1800,7 @@ fn strip_internal_replay_metadata(value: &mut Value) {
 }
 
 #[derive(Debug, Default)]
-struct OpenAiCompletionAccumulator {
+struct OpenAiChatCompletionsAccumulator {
     id: Option<String>,
     created: Option<u64>,
     model: Option<String>,
@@ -1810,7 +1812,7 @@ struct OpenAiCompletionAccumulator {
     protocol_terminal: Option<ProtocolTerminal>,
 }
 
-impl OpenAiCompletionAccumulator {
+impl OpenAiChatCompletionsAccumulator {
     fn on_event(&mut self, event: &Value, capture_exchange: bool) {
         if event.get("_done").and_then(Value::as_bool) == Some(true) {
             self.protocol_terminal
@@ -1949,7 +1951,7 @@ impl OpenAiCompletionAccumulator {
             .as_ref()
             .map(|usage| {
                 NormalizedUsage::from_client_body(
-                    UpstreamFormat::OpenAiCompletion,
+                    UpstreamFormat::OpenAiChatCompletions,
                     &json!({ "usage": usage }),
                 )
             })
@@ -1958,7 +1960,7 @@ impl OpenAiCompletionAccumulator {
 
     fn final_provider_cache_usage(&self) -> Option<ProviderCacheUsage> {
         self.usage.as_ref().and_then(|usage| {
-            ProviderCacheUsage::from_usage(UpstreamFormat::OpenAiCompletion, usage)
+            ProviderCacheUsage::from_usage(UpstreamFormat::OpenAiChatCompletions, usage)
         })
     }
 
@@ -2362,7 +2364,7 @@ mod tests {
     #[test]
     fn provider_cache_usage_openai_chat_parser_reports_unique_cached_token_source_field() {
         let provider_cache_usage = ProviderCacheUsage::from_client_body(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &json!({
                 "usage": {
                     "prompt_tokens": 256,
@@ -2378,7 +2380,7 @@ mod tests {
         let payload = serde_json::to_value(provider_cache_usage).expect("serialize");
 
         assert_eq!(payload["provider"], "openai");
-        assert_eq!(payload["source_format"], "openai-completion");
+        assert_eq!(payload["source_format"], "openai-chat-completions");
         assert_eq!(payload["hit_tokens"], 128);
         assert_eq!(payload["read_tokens"], 128);
         assert!(payload.get("write_tokens").is_none());
@@ -2492,10 +2494,10 @@ mod tests {
             }
         });
         let payload = usage_hook_payload(
-            &provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion),
+            &provider_cache_usage_test_ctx(UpstreamFormat::OpenAiChatCompletions),
             200,
-            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
-            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
             StreamObservation::non_stream_completed(),
         );
 
@@ -2516,13 +2518,13 @@ mod tests {
                 }
             }
         });
-        let ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        let ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiChatCompletions);
 
         let payload = usage_hook_payload(
             &ctx,
             200,
-            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
-            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
             StreamObservation::non_stream_completed(),
         );
 
@@ -2545,14 +2547,14 @@ mod tests {
                 }
             }
         });
-        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiChatCompletions);
         ctx.llmup.zero_transform_forwarding_active = true;
 
         let payload = usage_hook_payload(
             &ctx,
             200,
-            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
-            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
             StreamObservation::non_stream_completed(),
         );
 
@@ -2565,7 +2567,7 @@ mod tests {
             payload["provider_cache_usage"],
             json!({
                 "provider": "openai",
-                "source_format": "openai-completion",
+                "source_format": "openai-chat-completions",
                 "hit_tokens": 128,
                 "read_tokens": 128,
                 "source_fields": [
@@ -2581,11 +2583,11 @@ mod tests {
 
     #[test]
     fn usage_hook_payload_projects_local_state_handling_only_when_active() {
-        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiChatCompletions);
         let payload = usage_hook_payload(
             &ctx,
             200,
-            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &json!({})),
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &json!({})),
             None,
             StreamObservation::non_stream_completed(),
         );
@@ -2606,7 +2608,10 @@ mod tests {
             let payload = usage_hook_payload(
                 &ctx,
                 200,
-                NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &json!({})),
+                NormalizedUsage::from_client_body(
+                    UpstreamFormat::OpenAiChatCompletions,
+                    &json!({}),
+                ),
                 None,
                 StreamObservation::non_stream_completed(),
             );
@@ -2626,14 +2631,14 @@ mod tests {
                 }
             }
         });
-        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiChatCompletions);
         ctx.upstream_format = UpstreamFormat::Anthropic;
 
         let payload = usage_hook_payload(
             &ctx,
             200,
-            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
-            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
             StreamObservation::non_stream_completed(),
         );
 
@@ -2655,15 +2660,15 @@ mod tests {
                 }
             }
         });
-        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiCompletion);
+        let mut ctx = provider_cache_usage_test_ctx(UpstreamFormat::OpenAiChatCompletions);
         ctx.stream = true;
         ctx.upstream_format = UpstreamFormat::Anthropic;
 
         let payload = usage_hook_payload(
             &ctx,
             200,
-            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
-            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiCompletion, &body),
+            NormalizedUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
+            ProviderCacheUsage::from_client_body(UpstreamFormat::OpenAiChatCompletions, &body),
             StreamObservation {
                 transport_outcome: TransportOutcome::CompletedEof,
                 protocol_terminal: None,
@@ -2931,8 +2936,8 @@ mod tests {
             path: "/openai/v1/responses".to_string(),
             method: "POST".to_string(),
             stream: true,
-            client_format: UpstreamFormat::OpenAiCompletion,
-            upstream_format: UpstreamFormat::OpenAiCompletion,
+            client_format: UpstreamFormat::OpenAiChatCompletions,
+            upstream_format: UpstreamFormat::OpenAiChatCompletions,
             client_model: "gpt-4".to_string(),
             upstream_name: "default".to_string(),
             upstream_model: "gpt-4".to_string(),
@@ -2945,7 +2950,7 @@ mod tests {
         let stream = HookCaptureStream {
             inner: stream::pending::<Result<Bytes, std::io::Error>>(),
             buffer: Vec::new(),
-            observer: ClientSseAccumulator::new(UpstreamFormat::OpenAiCompletion),
+            observer: ClientSseAccumulator::new(UpstreamFormat::OpenAiChatCompletions),
             exchange_capture: None,
             dispatcher,
             ctx,
@@ -3115,7 +3120,8 @@ mod tests {
 
     #[test]
     fn event_spool_capture_replays_full_openai_response_body() {
-        let mut sink = EventSpoolSink::new(UpstreamFormat::OpenAiCompletion, 4096).expect("spool");
+        let mut sink =
+            EventSpoolSink::new(UpstreamFormat::OpenAiChatCompletions, 4096).expect("spool");
         sink.on_event(&json!({
             "id": "chatcmpl_1",
             "created": 7,
@@ -3148,7 +3154,8 @@ mod tests {
 
     #[test]
     fn event_spool_capture_marks_incomplete_openai_replayable_tool_calls() {
-        let mut sink = EventSpoolSink::new(UpstreamFormat::OpenAiCompletion, 4096).expect("spool");
+        let mut sink =
+            EventSpoolSink::new(UpstreamFormat::OpenAiChatCompletions, 4096).expect("spool");
         sink.on_event(&json!({
             "id": "chatcmpl_1",
             "created": 7,
@@ -3228,7 +3235,8 @@ mod tests {
 
     #[test]
     fn exchange_hook_payload_strips_internal_non_replayable_tool_call_metadata() {
-        let mut sink = EventSpoolSink::new(UpstreamFormat::OpenAiCompletion, 4096).expect("spool");
+        let mut sink =
+            EventSpoolSink::new(UpstreamFormat::OpenAiChatCompletions, 4096).expect("spool");
         sink.on_event(&json!({
             "id": "chatcmpl_1",
             "created": 7,
@@ -3269,8 +3277,8 @@ mod tests {
                 path: "/v1/chat/completions".to_string(),
                 method: "POST".to_string(),
                 stream: true,
-                client_format: UpstreamFormat::OpenAiCompletion,
-                upstream_format: UpstreamFormat::OpenAiCompletion,
+                client_format: UpstreamFormat::OpenAiChatCompletions,
+                upstream_format: UpstreamFormat::OpenAiChatCompletions,
                 client_model: "gpt-4.1".to_string(),
                 upstream_name: "default".to_string(),
                 upstream_model: "gpt-4.1".to_string(),
@@ -3298,7 +3306,8 @@ mod tests {
 
     #[test]
     fn event_spool_capture_reports_truncation_when_budget_exceeded() {
-        let mut sink = EventSpoolSink::new(UpstreamFormat::OpenAiCompletion, 64).expect("spool");
+        let mut sink =
+            EventSpoolSink::new(UpstreamFormat::OpenAiChatCompletions, 64).expect("spool");
         sink.on_event(&json!({
             "id": "chatcmpl_1",
             "created": 7,
@@ -3335,7 +3344,7 @@ mod tests {
     fn event_spool_capture_reports_queue_overflow_without_replay() {
         let start_barrier = Arc::new(std::sync::Barrier::new(2));
         let mut sink = EventSpoolSink::new_with_options(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             4096,
             SpoolWriterOptions {
                 queue_capacity: 1,

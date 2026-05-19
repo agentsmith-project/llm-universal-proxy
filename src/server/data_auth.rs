@@ -627,7 +627,9 @@ pub(super) async fn require_data_access(
             request.extensions_mut().insert(auth_context);
             next.run(request).await
         }
-        Err((status, message)) => error_response(UpstreamFormat::OpenAiCompletion, status, message),
+        Err((status, message)) => {
+            error_response(UpstreamFormat::OpenAiChatCompletions, status, message)
+        }
     }
 }
 

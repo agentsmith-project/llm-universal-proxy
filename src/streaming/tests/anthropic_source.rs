@@ -27,7 +27,7 @@ fn translate_sse_event_anthropic_to_openai_rejects_reserved_tool_name() {
     let mut state = StreamState::default();
     let out = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_start",
             "index": 0,
@@ -249,7 +249,7 @@ fn translate_sse_event_anthropic_plain_thinking_to_openai_buffers_until_stop_and
     let mut state = StreamState::default();
     let first = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "message_start",
             "message": { "id": "msg_1", "model": "claude-3" }
@@ -258,7 +258,7 @@ fn translate_sse_event_anthropic_plain_thinking_to_openai_buffers_until_stop_and
     );
     let second = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_start",
             "index": 0,
@@ -271,7 +271,7 @@ fn translate_sse_event_anthropic_plain_thinking_to_openai_buffers_until_stop_and
     );
     let third = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_delta",
             "index": 0,
@@ -281,7 +281,7 @@ fn translate_sse_event_anthropic_plain_thinking_to_openai_buffers_until_stop_and
     );
     let fourth = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_stop",
             "index": 0
@@ -290,7 +290,7 @@ fn translate_sse_event_anthropic_plain_thinking_to_openai_buffers_until_stop_and
     );
     let fifth = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_start",
             "index": 1,
@@ -303,7 +303,7 @@ fn translate_sse_event_anthropic_plain_thinking_to_openai_buffers_until_stop_and
     );
     let sixth = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_delta",
             "index": 1,
@@ -543,7 +543,7 @@ fn translate_sse_event_anthropic_signature_delta_to_openai_drops_signature_and_f
     let mut state = StreamState::default();
     let _ = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "message_start",
             "message": { "id": "msg_1", "model": "claude-3" }
@@ -552,7 +552,7 @@ fn translate_sse_event_anthropic_signature_delta_to_openai_drops_signature_and_f
     );
     let _ = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_start",
             "index": 0,
@@ -565,7 +565,7 @@ fn translate_sse_event_anthropic_signature_delta_to_openai_drops_signature_and_f
     );
     let buffered = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_delta",
             "index": 0,
@@ -575,7 +575,7 @@ fn translate_sse_event_anthropic_signature_delta_to_openai_drops_signature_and_f
     );
     let dropped_signature = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_delta",
             "index": 0,
@@ -585,7 +585,7 @@ fn translate_sse_event_anthropic_signature_delta_to_openai_drops_signature_and_f
     );
     let flushed = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_stop",
             "index": 0
@@ -620,7 +620,7 @@ fn translate_sse_event_anthropic_omitted_thinking_skips_reasoning_and_keeps_foll
     let mut state = StreamState::default();
     let _ = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "message_start",
             "message": { "id": "msg_1", "model": "claude-3" }
@@ -629,7 +629,7 @@ fn translate_sse_event_anthropic_omitted_thinking_skips_reasoning_and_keeps_foll
     );
     let rejected = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_start",
             "index": 0,
@@ -642,7 +642,7 @@ fn translate_sse_event_anthropic_omitted_thinking_skips_reasoning_and_keeps_foll
     );
     let text_start = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_start",
             "index": 1,
@@ -655,7 +655,7 @@ fn translate_sse_event_anthropic_omitted_thinking_skips_reasoning_and_keeps_foll
     );
     let text_delta = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "content_block_delta",
             "index": 1,
@@ -1888,7 +1888,7 @@ fn translate_sse_event_anthropic_incomplete_tool_use_to_openai_completion_degrad
     ] {
         out.extend(translate_sse_event(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &event,
             &mut state,
         ));
@@ -1954,7 +1954,7 @@ fn translate_sse_event_anthropic_valid_then_invalid_tool_use_to_openai_completio
     ] {
         out.extend(translate_sse_event(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &event,
             &mut state,
         ));
@@ -2021,7 +2021,7 @@ fn translate_sse_event_anthropic_valid_then_invalid_server_tool_use_to_openai_co
     ] {
         out.extend(translate_sse_event(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &event,
             &mut state,
         ));
@@ -2049,7 +2049,7 @@ fn anthropic_error_event_maps_context_to_openai_context_finish() {
     let mut state = StreamState::default();
     let out = translate_sse_event(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "type": "error",
             "error": {
@@ -2073,7 +2073,7 @@ fn anthropic_error_event_maps_context_to_openai_context_finish() {
 #[test]
 fn anthropic_error_event_sanitizes_internal_artifacts_for_public_clients() {
     for client_format in [
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
     ] {
         let mut state = StreamState::default();
@@ -2142,7 +2142,7 @@ fn anthropic_error_event_maps_non_specialized_failures_to_openai_error_finish() 
         let mut state = StreamState::default();
         let out = translate_sse_event(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &serde_json::json!({
                 "type": "error",
                 "error": {
@@ -2184,7 +2184,7 @@ fn anthropic_error_event_preserves_specialized_openai_error_finishes() {
         let mut state = StreamState::default();
         let out = translate_sse_event(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &serde_json::json!({
                 "type": "error",
                 "error": {

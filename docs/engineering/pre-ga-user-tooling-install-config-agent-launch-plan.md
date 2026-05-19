@@ -172,7 +172,7 @@ llmup-config
 - OpenAI Responses 接口。仅当服务商明确要求 `/v1/responses` 时选择。
 - Anthropic Messages 接口。仅当服务商明确要求 `/v1/messages` 时选择。
 
-工程实现按用户选择生成清晰配置值；底层解析仍接受旧的 `openai-completion` 和 `anthropic` 作为别名，但新配置不再生成这些容易误读的短名：
+工程实现按用户选择生成清晰配置值；底层解析仍接受少量历史短名作为别名，但新配置不再生成这些容易误读的短名：
 
 | 用户看到的选择 | 生成的配置值 |
 | --- | --- |

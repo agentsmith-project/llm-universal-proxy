@@ -161,7 +161,7 @@ fn same_protocol_request_mutation_required(input: &RequestProcessingInput<'_>) -
         return false;
     }
     match input.client_format {
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             openai_chat_has_instruction_roles(input.body)
                 || openai_chat_has_adjacent_coalescible_string_messages(input.body)
                 || input.upstream_model.starts_with("MiniMax-")

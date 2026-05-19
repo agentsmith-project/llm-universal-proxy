@@ -47,7 +47,7 @@ upstreams:
 
   GOOGLE-OPENAI-COMPATIBLE:
     api_root: https://generativelanguage.googleapis.com/v1beta/openai
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: GEMINI_API_KEY
     proxy: direct
     # Explicit direct:

@@ -1044,7 +1044,7 @@ fn insert_prompt_cache_component_metadata(
 
 fn extract_request_delta(format: UpstreamFormat, body: &Value, max_text_chars: usize) -> Value {
     match format {
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             let messages = body
                 .get("messages")
                 .and_then(Value::as_array)
@@ -1118,7 +1118,7 @@ fn summarize_request_body(format: UpstreamFormat, body: &Value, max_text_chars: 
             "tool_names": body.get("tools").and_then(Value::as_array).map(|tools| tool_names_from_responses(tools)),
             "input_tail": extract_request_delta(format, body, max_text_chars),
         }),
-        UpstreamFormat::OpenAiCompletion => json!({
+        UpstreamFormat::OpenAiChatCompletions => json!({
             "model": body.get("model"),
             "stream": body.get("stream"),
             "max_tokens": body.get("max_tokens"),
@@ -1297,7 +1297,7 @@ fn summarize_non_stream_response(
     max_text_chars: usize,
 ) -> Value {
     match format {
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             let choice = body
                 .get("choices")
                 .and_then(Value::as_array)
@@ -1329,7 +1329,7 @@ fn summarize_non_stream_response(
 
 fn accumulate_event(format: UpstreamFormat, event: &Value, summary: &mut ResponseSummary) {
     match format {
-        UpstreamFormat::OpenAiCompletion => accumulate_openai_completion_event(event, summary),
+        UpstreamFormat::OpenAiChatCompletions => accumulate_openai_completion_event(event, summary),
         UpstreamFormat::OpenAiResponses => accumulate_responses_event(event, summary),
         UpstreamFormat::Anthropic => accumulate_claude_event(event, summary),
     }
@@ -1595,8 +1595,8 @@ mod tests {
                 client_model: "gpt-4.1".to_string(),
                 upstream_name: "default".to_string(),
                 upstream_model: "gpt-4.1".to_string(),
-                client_format: UpstreamFormat::OpenAiCompletion,
-                upstream_format: UpstreamFormat::OpenAiCompletion,
+                client_format: UpstreamFormat::OpenAiChatCompletions,
+                upstream_format: UpstreamFormat::OpenAiChatCompletions,
                 llmup: RequestProcessingInfo::default(),
             },
             200,
@@ -1648,8 +1648,8 @@ mod tests {
             client_model: "gpt-4.1".to_string(),
             upstream_name: "default".to_string(),
             upstream_model: "gpt-4.1".to_string(),
-            client_format: UpstreamFormat::OpenAiCompletion,
-            upstream_format: UpstreamFormat::OpenAiCompletion,
+            client_format: UpstreamFormat::OpenAiChatCompletions,
+            upstream_format: UpstreamFormat::OpenAiChatCompletions,
             llmup: RequestProcessingInfo::default(),
         };
         let body = json!({
@@ -1715,7 +1715,7 @@ mod tests {
     #[test]
     fn prompt_cache_detail_uses_llmup_disposition_when_redacted_body_hides_components() {
         let ctx = prompt_cache_debug_trace_context(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::Anthropic,
             PromptCacheRequestControl::Dropped,
         );
@@ -1741,7 +1741,7 @@ mod tests {
     #[test]
     fn prompt_cache_detail_does_not_pair_llmup_disposition_with_mismatched_redacted_component() {
         let ctx = prompt_cache_debug_trace_context(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::Anthropic,
             PromptCacheRequestControl::ExplicitExtensionMapped,
         );
@@ -1804,7 +1804,7 @@ mod tests {
         let mut summary = ResponseSummary::new(12);
 
         accumulate_event(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &json!({
                 "choices": [{
                     "delta": {
@@ -1823,7 +1823,7 @@ mod tests {
             &mut summary,
         );
         accumulate_event(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &json!({
                 "choices": [{
                     "delta": {

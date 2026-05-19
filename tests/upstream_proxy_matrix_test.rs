@@ -374,7 +374,7 @@ fn openai_auto_discovery_config(upstream_base: &str) -> Config {
         proxy: None,
         upstreams: vec![UpstreamConfig {
             name: "default".to_string(),
-            api_root: upstream_api_root(upstream_base, UpstreamFormat::OpenAiCompletion),
+            api_root: upstream_api_root(upstream_base, UpstreamFormat::OpenAiChatCompletions),
             fixed_upstream_format: None,
             provider_key_env: None,
             provider_key: None,
@@ -728,7 +728,7 @@ fn raw_forwarding_cases() -> [RawForwardingCase; 3] {
     [
         RawForwardingCase {
             name: "openai chat",
-            format: UpstreamFormat::OpenAiCompletion,
+            format: UpstreamFormat::OpenAiChatCompletions,
             llmup_path: "/openai/v1/chat/completions",
             upstream_path: "/v1/chat/completions",
             request_body: RAW_CHAT_REQUEST,
@@ -1036,7 +1036,7 @@ async fn mutation_required_stream_request_does_not_activate_raw_sse_forwarding()
         RawUpstreamResponse::sse_success(RAW_OPENAI_CHAT_INTERNAL_ARTIFACT_STREAM_RESPONSE),
     )
     .await;
-    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiChatCompletions);
     config.model_aliases.insert(
         "alias-chat".to_string(),
         ModelAlias {
@@ -1102,7 +1102,7 @@ async fn alias_model_rewrite_prevents_raw_non_stream_response_forwarding() {
         RawUpstreamResponse::success(RAW_CHAT_SUCCESS_RESPONSE),
     )
     .await;
-    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiChatCompletions);
     config.model_aliases.insert(
         "alias-chat".to_string(),
         ModelAlias {
@@ -1155,7 +1155,7 @@ async fn alias_model_rewrite_prevents_raw_non_stream_response_forwarding() {
 #[tokio::test]
 async fn openai_chat_same_format_eligible_request_forwards_exact_raw_body_bytes() {
     let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
-    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiChatCompletions);
     let (llmup_base, _llmup) = start_proxy(config).await;
     let client = direct_data_client();
     let raw_json = r#"{
@@ -1213,7 +1213,7 @@ async fn openai_chat_same_format_eligible_request_forwards_exact_raw_body_bytes(
 #[tokio::test]
 async fn raw_eligible_openai_chat_rejects_reserved_legacy_function_name_without_upstream_call() {
     let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
-    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiChatCompletions);
     let (llmup_base, _llmup) = start_proxy(config).await;
     let client = direct_data_client();
     let raw_json = r#"{
@@ -1253,7 +1253,7 @@ async fn raw_eligible_openai_chat_rejects_reserved_legacy_function_name_without_
 #[tokio::test]
 async fn openai_chat_same_format_rejects_anthropic_cache_extension_without_upstream_call() {
     let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
-    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    let config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiChatCompletions);
     let (llmup_base, _llmup) = start_proxy(config).await;
     let client = direct_data_client();
     let raw_json = r#"{
@@ -1470,7 +1470,7 @@ async fn anthropic_same_format_eligible_request_forwards_exact_raw_body_bytes() 
 #[tokio::test]
 async fn alias_model_rewrite_does_not_forward_original_raw_body_bytes() {
     let (upstream_base, _upstream, captured_upstream) = spawn_openai_capture_upstream().await;
-    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiCompletion);
+    let mut config = fixed_format_config(&upstream_base, UpstreamFormat::OpenAiChatCompletions);
     config.model_aliases.insert(
         "alias-chat".to_string(),
         ModelAlias {
@@ -1523,7 +1523,7 @@ proxy: direct
 upstreams:
   OPENAI:
     api_root: http://example.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     proxy:
       url: http://upstream-proxy.local:8080
 "#,
@@ -1646,11 +1646,11 @@ proxy:
 upstreams:
   OPENAI:
     api_root: {api_root}
-    format: openai-completion
+    format: openai-chat-completions
     proxy:
       url: {override_proxy_base}
 "#,
-        api_root = upstream_api_root(&upstream_base, UpstreamFormat::OpenAiCompletion),
+        api_root = upstream_api_root(&upstream_base, UpstreamFormat::OpenAiChatCompletions),
     );
     let config = Config::from_yaml_str(&yaml).unwrap();
     let (llmup_base, _llmup) = start_proxy(config).await;
@@ -1702,9 +1702,9 @@ proxy: direct
 upstreams:
   OPENAI:
     api_root: {api_root}
-    format: openai-completion
+    format: openai-chat-completions
 "#,
-        api_root = upstream_api_root(&upstream_base, UpstreamFormat::OpenAiCompletion),
+        api_root = upstream_api_root(&upstream_base, UpstreamFormat::OpenAiChatCompletions),
     );
     let config = Config::from_yaml_str(&yaml).unwrap();
     let (llmup_base, _llmup) = start_proxy(config).await;
@@ -1761,7 +1761,7 @@ upstreams:
     api_root: {api_root}
     proxy: direct
 "#,
-        api_root = upstream_api_root(&upstream_base, UpstreamFormat::OpenAiCompletion),
+        api_root = upstream_api_root(&upstream_base, UpstreamFormat::OpenAiChatCompletions),
     );
     let config = Config::from_yaml_str(&yaml).unwrap();
     let (llmup_base, _llmup) = start_proxy(config).await;

@@ -832,7 +832,7 @@ listen: 127.0.0.1:18888
 upstreams:
   MINIMAX-OPENAI:
     api_root: "https://api.minimaxi.com/v1"
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: TEST_PROVIDER_API_KEY
     surface_defaults:
       modalities:
@@ -931,7 +931,7 @@ listen: 127.0.0.1:18888
 upstreams:
   PRESET-COMPAT:
     api_root: "https://preset.example/v1"
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: PRESET_ENDPOINT_API_KEY
 model_aliases:
   preset-chat: "PRESET-COMPAT:preset-model"
@@ -1086,7 +1086,7 @@ listen: 127.0.0.1:18888
 upstreams:
   PRESET-COMPAT:
     api_root: "https://preset.example/v1"
-    format: openai-completion
+    format: openai-chat-completions
 model_aliases:
   preset-chat: "PRESET-COMPAT:preset-model"
 """.lstrip(),
@@ -1168,7 +1168,7 @@ proxy:
 upstreams:
   MINIMAX-OPENAI:
     api_root: "https://api.minimaxi.com/v1"
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: TEST_PROVIDER_API_KEY
     proxy:
       url: http://upstream-proxy.example:8080
@@ -1234,7 +1234,7 @@ listen: 127.0.0.1:18888
 upstreams:
   MINIMAX-OPENAI:
     api_root: "https://api.minimaxi.com/v1"
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: TEST_PROVIDER_API_KEY
     surface_defaults:
       modalities:

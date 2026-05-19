@@ -62,9 +62,11 @@ ANTHROPIC_NATIVE_UPSTREAM_FORMAT = "anthropic"
 CANONICAL_UPSTREAM_FORMAT_BY_ALIAS = {
     "anthropic": "anthropic",
     "claude": "anthropic",
-    "openai": "openai-completion",
-    "chat": "openai-completion",
-    "openai-completion": "openai-completion",
+    "openai": "openai-chat-completions",
+    "chat": "openai-chat-completions",
+    "openai-completion": "openai-chat-completions",
+    "openai-chat-completions": "openai-chat-completions",
+    "chat-completions": "openai-chat-completions",
     "responses": "openai-responses",
     "openai-responses": "openai-responses",
 }
@@ -1187,7 +1189,7 @@ def _runtime_upstreams(
         qwen_upstream = collections.OrderedDict(
             [
                 ("api_root", dotenv_env["LOCAL_QWEN_BASE_URL"]),
-                ("format", "openai-completion"),
+                ("format", "openai-chat-completions"),
                 ("provider_key_env", "LOCAL_QWEN_API_KEY"),
             ]
         )

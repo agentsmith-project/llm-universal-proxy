@@ -31,7 +31,7 @@ async fn build_runtime_namespace_state_exposes_resolved_per_upstream_clients() {
         upstreams: vec![crate::config::UpstreamConfig {
             name: "primary".to_string(),
             api_root: api_root.clone(),
-            fixed_upstream_format: Some(crate::formats::UpstreamFormat::OpenAiCompletion),
+            fixed_upstream_format: Some(crate::formats::UpstreamFormat::OpenAiChatCompletions),
             provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
@@ -63,7 +63,7 @@ async fn build_runtime_namespace_state_exposes_resolved_per_upstream_clients() {
     let upstream_client = upstream_state.client.clone();
     let url = crate::config::build_upstream_url(
         &api_root,
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
         false,
     );

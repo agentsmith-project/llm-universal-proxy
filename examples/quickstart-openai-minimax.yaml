@@ -26,7 +26,7 @@ upstreams:
 
   MINIMAX_OPENAI_COMPATIBLE_EXAMPLE:
     api_root: https://api.minimaxi.com/v1
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: MINIMAX_API_KEY
     surface_defaults:
       modalities:

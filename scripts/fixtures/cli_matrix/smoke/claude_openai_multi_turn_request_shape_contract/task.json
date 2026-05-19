@@ -46,7 +46,7 @@
         "type": "trace_request_contract",
         "path": "/anthropic/v1/messages",
         "client_format": "anthropic",
-        "upstream_format": "openai-completion",
+        "upstream_format": "openai-chat-completions",
         "min_request_count": 2,
         "require_response_for_each_request": true,
         "forbid_response_http_statuses": [

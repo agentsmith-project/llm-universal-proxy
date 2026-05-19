@@ -86,10 +86,10 @@ pub fn translate_request_with_policy(
     validate_public_request_tool_names(client_format, body)?;
 
     if client_format == upstream_format {
-        if stream && client_format != UpstreamFormat::OpenAiCompletion {
+        if stream && client_format != UpstreamFormat::OpenAiChatCompletions {
             normalize_openai_roles_for_compatibility(client_format, body);
         }
-        if client_format == UpstreamFormat::OpenAiCompletion {
+        if client_format == UpstreamFormat::OpenAiChatCompletions {
             apply_openai_completion_maximum_safe_role_repairs(body);
             apply_openai_completion_compat_overrides(model, body);
         }
@@ -97,16 +97,16 @@ pub fn translate_request_with_policy(
         return Ok(());
     }
     // Step 1: client → openai (if client is not openai)
-    if client_format != UpstreamFormat::OpenAiCompletion {
+    if client_format != UpstreamFormat::OpenAiChatCompletions {
         if client_format == UpstreamFormat::Anthropic && openai_family_format(upstream_format) {
             apply_anthropic_context_management_request_edits(body)?;
         }
         client_to_openai_completion(client_format, upstream_format, body)?;
     }
-    apply_request_translation_policy_defaults(UpstreamFormat::OpenAiCompletion, &policy, body);
+    apply_request_translation_policy_defaults(UpstreamFormat::OpenAiChatCompletions, &policy, body);
     apply_request_scoped_bridge_structural_repair_pass(upstream_format, body)?;
     // Step 2: openai → upstream (if upstream is not openai)
-    if upstream_format != UpstreamFormat::OpenAiCompletion {
+    if upstream_format != UpstreamFormat::OpenAiChatCompletions {
         openai_completion_to_upstream(upstream_format, model, body)?;
         if stream {
             if upstream_format == UpstreamFormat::OpenAiResponses {
@@ -116,7 +116,7 @@ pub fn translate_request_with_policy(
             }
         }
     } else {
-        if stream && upstream_format != UpstreamFormat::OpenAiCompletion {
+        if stream && upstream_format != UpstreamFormat::OpenAiChatCompletions {
             normalize_openai_roles_for_compatibility(upstream_format, body);
         }
         apply_openai_completion_maximum_safe_role_repairs(body);
@@ -129,7 +129,7 @@ pub fn translate_request_with_policy(
 fn openai_family_format(format: UpstreamFormat) -> bool {
     matches!(
         format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses
     )
 }
 
@@ -340,7 +340,7 @@ fn apply_request_translation_policy_default_output_limit(
         UpstreamFormat::Anthropic => {
             obj.insert("max_tokens".to_string(), Value::from(max_output_tokens));
         }
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             obj.insert(
                 "max_completion_tokens".to_string(),
                 Value::from(max_output_tokens),
@@ -368,7 +368,7 @@ fn apply_request_translation_policy_parallel_tool_gate(
     }
 
     match target_format {
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
             if let Some(obj) = body.as_object_mut() {
                 obj.insert("parallel_tool_calls".to_string(), Value::Bool(false));
             }
@@ -400,7 +400,7 @@ fn request_body_has_explicit_output_limit(target_format: UpstreamFormat, body: &
 
     match target_format {
         UpstreamFormat::Anthropic => obj.get("max_tokens").is_some(),
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             obj.get("max_completion_tokens").is_some() || obj.get("max_tokens").is_some()
         }
         UpstreamFormat::OpenAiResponses => obj.get("max_output_tokens").is_some(),
@@ -412,7 +412,7 @@ fn request_body_has_explicit_parallel_tool_calls_preference(
     body: &Value,
 ) -> bool {
     match target_format {
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => body
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => body
             .get("parallel_tool_calls")
             .and_then(Value::as_bool)
             .is_some(),
@@ -427,7 +427,7 @@ fn request_body_has_explicit_parallel_tool_calls_preference(
 
 fn request_body_has_tool_definitions(target_format: UpstreamFormat, body: &Value) -> bool {
     match target_format {
-        UpstreamFormat::OpenAiCompletion
+        UpstreamFormat::OpenAiChatCompletions
         | UpstreamFormat::OpenAiResponses
         | UpstreamFormat::Anthropic => body
             .get("tools")
@@ -471,7 +471,7 @@ fn apply_openai_completion_compat_overrides(model: &str, body: &mut Value) {
 
 fn normalize_openai_roles_for_compatibility(format: UpstreamFormat, body: &mut Value) {
     match format {
-        UpstreamFormat::OpenAiCompletion => normalize_openai_messages_for_compatibility(body),
+        UpstreamFormat::OpenAiChatCompletions => normalize_openai_messages_for_compatibility(body),
         UpstreamFormat::OpenAiResponses => normalize_openai_responses_roles(body),
         _ => {}
     }
@@ -664,7 +664,7 @@ fn client_to_openai_completion(
     body: &mut Value,
 ) -> Result<(), String> {
     match from {
-        UpstreamFormat::OpenAiCompletion => {}
+        UpstreamFormat::OpenAiChatCompletions => {}
         UpstreamFormat::OpenAiResponses => {
             responses_to_messages(body, target_format)?;
         }
@@ -681,7 +681,7 @@ fn openai_completion_to_upstream(
     body: &mut Value,
 ) -> Result<(), String> {
     match to {
-        UpstreamFormat::OpenAiCompletion => {}
+        UpstreamFormat::OpenAiChatCompletions => {}
         UpstreamFormat::OpenAiResponses => {
             messages_to_responses(body)?;
         }
@@ -815,7 +815,7 @@ pub fn translate_response_with_context(
     } else {
         upstream_response_to_openai(upstream_format, body, bridge_context)?
     };
-    if client_format == UpstreamFormat::OpenAiCompletion {
+    if client_format == UpstreamFormat::OpenAiChatCompletions {
         return Ok(openai);
     }
     openai_response_to_client(client_format, &openai, bridge_context)
@@ -828,7 +828,7 @@ fn upstream_response_to_openai(
     bridge_context: Option<&tools::ToolBridgeContext>,
 ) -> Result<Value, String> {
     match upstream_format {
-        UpstreamFormat::OpenAiCompletion => Ok(normalize_openai_completion_response(body)),
+        UpstreamFormat::OpenAiChatCompletions => Ok(normalize_openai_completion_response(body)),
         UpstreamFormat::Anthropic => claude_response_to_openai(body, bridge_context),
         UpstreamFormat::OpenAiResponses => responses_response_to_openai(body),
     }
@@ -846,7 +846,7 @@ fn openai_response_to_client(
         ));
     }
     match client_format {
-        UpstreamFormat::OpenAiCompletion => Ok(body.clone()),
+        UpstreamFormat::OpenAiChatCompletions => Ok(body.clone()),
         UpstreamFormat::OpenAiResponses => openai_response_to_responses(body, bridge_context),
         UpstreamFormat::Anthropic => openai_response_to_claude(body),
     }
@@ -857,7 +857,7 @@ pub(crate) fn validate_public_request_tool_names(
     body: &Value,
 ) -> Result<(), String> {
     match format {
-        UpstreamFormat::OpenAiCompletion => validate_openai_request_tool_names(body),
+        UpstreamFormat::OpenAiChatCompletions => validate_openai_request_tool_names(body),
         UpstreamFormat::OpenAiResponses => validate_responses_request_tool_names(body),
         UpstreamFormat::Anthropic => validate_anthropic_body_tool_names(body),
     }
@@ -865,7 +865,7 @@ pub(crate) fn validate_public_request_tool_names(
 
 fn validate_public_response_tool_names(format: UpstreamFormat, body: &Value) -> Result<(), String> {
     match format {
-        UpstreamFormat::OpenAiCompletion => validate_openai_response_tool_names(body),
+        UpstreamFormat::OpenAiChatCompletions => validate_openai_response_tool_names(body),
         UpstreamFormat::OpenAiResponses => validate_responses_response_tool_names(body),
         UpstreamFormat::Anthropic => validate_anthropic_body_tool_names(body),
     }

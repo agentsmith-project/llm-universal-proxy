@@ -154,7 +154,9 @@ pub(super) async fn require_admin_access(
 
     match authorize_admin_request(&state.admin_access, request.headers(), remote_addr) {
         Ok(()) => next.run(request).await,
-        Err((status, message)) => error_response(UpstreamFormat::OpenAiCompletion, status, message),
+        Err((status, message)) => {
+            error_response(UpstreamFormat::OpenAiChatCompletions, status, message)
+        }
     }
 }
 
@@ -308,7 +310,7 @@ pub(super) async fn handle_admin_data_auth_config(
         Ok(request) => request,
         Err(error) => {
             return error_response(
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 StatusCode::BAD_REQUEST,
                 &format!("invalid admin data auth request: {error}"),
             );
@@ -318,7 +320,7 @@ pub(super) async fn handle_admin_data_auth_config(
         Ok(state) => state,
         Err(error) => {
             return error_response(
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 StatusCode::BAD_REQUEST,
                 &format!("invalid data_auth config: {error}"),
             );
@@ -354,7 +356,7 @@ pub(super) async fn handle_admin_data_auth_config(
             super::data_auth::validate_runtime_config(&config, next_data_auth.access())
         {
             return error_response(
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 StatusCode::BAD_REQUEST,
                 &format!(
                     "failed to validate namespace `{namespace}` under data_auth config: {error}"
@@ -366,7 +368,7 @@ pub(super) async fn handle_admin_data_auth_config(
                 Ok(state) => state,
                 Err(error) => {
                     return error_response(
-                        UpstreamFormat::OpenAiCompletion,
+                        UpstreamFormat::OpenAiChatCompletions,
                         StatusCode::BAD_REQUEST,
                         &format!(
                         "failed to rebuild namespace `{namespace}` under data_auth config: {error}"
@@ -398,7 +400,7 @@ pub(super) async fn handle_admin_namespace_state(
     let runtime = state.runtime.read().await;
     let Some(item) = runtime.namespaces.get(&namespace) else {
         return error_response(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             StatusCode::NOT_FOUND,
             "namespace not found",
         );
@@ -442,7 +444,7 @@ pub(super) async fn handle_admin_namespace_config(
         Ok(request) => request,
         Err(error) => {
             return error_response(
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 StatusCode::BAD_REQUEST,
                 &error,
             );
@@ -453,7 +455,7 @@ pub(super) async fn handle_admin_namespace_config(
         Ok(config) => config,
         Err(error) => {
             return error_response(
-                UpstreamFormat::OpenAiCompletion,
+                UpstreamFormat::OpenAiChatCompletions,
                 StatusCode::BAD_REQUEST,
                 &format!("invalid runtime config: {error}"),
             );
@@ -463,7 +465,7 @@ pub(super) async fn handle_admin_namespace_config(
     let data_access = state.data_auth_policy.current_access().await;
     if let Err(error) = super::data_auth::validate_runtime_config(&config, &data_access) {
         return error_response(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             StatusCode::BAD_REQUEST,
             &format!("invalid runtime config: {error}"),
         );
@@ -486,7 +488,7 @@ pub(super) async fn handle_admin_namespace_config(
             Ok(state) => state,
             Err(error) => {
                 return error_response(
-                    UpstreamFormat::OpenAiCompletion,
+                    UpstreamFormat::OpenAiChatCompletions,
                     StatusCode::BAD_REQUEST,
                     &format!("failed to resolve namespace config: {error}"),
                 );

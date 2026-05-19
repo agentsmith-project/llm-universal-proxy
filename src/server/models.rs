@@ -24,7 +24,9 @@ pub(super) async fn handle_openai_models(
     auth_context: Option<Extension<RequestAuthContext>>,
 ) -> impl IntoResponse {
     let Some(auth_context) = data_auth::request_auth_context_from_extension(auth_context) else {
-        return data_auth::missing_request_auth_context_response(UpstreamFormat::OpenAiCompletion);
+        return data_auth::missing_request_auth_context_response(
+            UpstreamFormat::OpenAiChatCompletions,
+        );
     };
     handle_openai_models_inner(&auth_context, DEFAULT_NAMESPACE).await
 }
@@ -35,7 +37,9 @@ pub(super) async fn handle_openai_models_namespaced(
     auth_context: Option<Extension<RequestAuthContext>>,
 ) -> impl IntoResponse {
     let Some(auth_context) = data_auth::request_auth_context_from_extension(auth_context) else {
-        return data_auth::missing_request_auth_context_response(UpstreamFormat::OpenAiCompletion);
+        return data_auth::missing_request_auth_context_response(
+            UpstreamFormat::OpenAiChatCompletions,
+        );
     };
     handle_openai_models_inner(&auth_context, &namespace).await
 }
@@ -46,7 +50,9 @@ pub(super) async fn handle_openai_model(
     auth_context: Option<Extension<RequestAuthContext>>,
 ) -> impl IntoResponse {
     let Some(auth_context) = data_auth::request_auth_context_from_extension(auth_context) else {
-        return data_auth::missing_request_auth_context_response(UpstreamFormat::OpenAiCompletion);
+        return data_auth::missing_request_auth_context_response(
+            UpstreamFormat::OpenAiChatCompletions,
+        );
     };
     handle_openai_model_inner(&auth_context, DEFAULT_NAMESPACE, &id).await
 }
@@ -57,7 +63,9 @@ pub(super) async fn handle_openai_model_namespaced(
     auth_context: Option<Extension<RequestAuthContext>>,
 ) -> impl IntoResponse {
     let Some(auth_context) = data_auth::request_auth_context_from_extension(auth_context) else {
-        return data_auth::missing_request_auth_context_response(UpstreamFormat::OpenAiCompletion);
+        return data_auth::missing_request_auth_context_response(
+            UpstreamFormat::OpenAiChatCompletions,
+        );
     };
     handle_openai_model_inner(&auth_context, &namespace, &id).await
 }
@@ -117,7 +125,7 @@ async fn handle_openai_models_inner(
             &request_redactor,
         ),
         None => redacted_error_response(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             StatusCode::NOT_FOUND,
             "namespace not found",
             &request_redactor,
@@ -133,7 +141,7 @@ async fn handle_openai_model_inner(
     let request_redactor = redactor_for_model_request(auth_context);
     let Some(config) = namespace_config(auth_context, namespace) else {
         return redacted_error_response(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             StatusCode::NOT_FOUND,
             "namespace not found",
             &request_redactor,
@@ -142,7 +150,7 @@ async fn handle_openai_model_inner(
     match openai_model_object(&config, id) {
         Some(model) => redacted_json_response(StatusCode::OK, model, &request_redactor),
         None => redacted_error_response(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             StatusCode::NOT_FOUND,
             &format!("model `{id}` not found"),
             &request_redactor,

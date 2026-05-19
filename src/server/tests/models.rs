@@ -4,7 +4,7 @@ fn models_snapshot_config(alias: &str) -> crate::config::Config {
     let upstream = redaction_upstream_config(
         "primary",
         "http://127.0.0.1:9/v1",
-        crate::formats::UpstreamFormat::OpenAiCompletion,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
         None,
     );
@@ -229,7 +229,7 @@ async fn openai_models_list_redacts_alias_and_metadata_known_secrets() {
             &provider_alias,
             &provider_upstream,
             &provider_model,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             Some(PROVIDER_INLINE_REDACTION_SECRET),
         ),
         proxy_access.clone(),
@@ -289,7 +289,7 @@ async fn openai_models_list_redacts_alias_and_metadata_known_secrets() {
             &client_alias,
             &client_upstream,
             &client_model,
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
         ),
         data_auth::DataAccess::ClientProviderKey,
@@ -317,7 +317,7 @@ async fn openai_models_list_redacts_alias_and_metadata_known_secrets() {
 async fn openai_model_not_found_redacts_client_and_server_keys() {
     let provider_state = state_for_models_config(
         models_not_found_config(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             Some(PROVIDER_INLINE_REDACTION_SECRET),
         ),
         data_auth::DataAccess::ProxyKey {
@@ -349,7 +349,7 @@ async fn openai_model_not_found_redacts_client_and_server_keys() {
     );
 
     let client_state = state_for_models_config(
-        models_not_found_config(crate::formats::UpstreamFormat::OpenAiCompletion, None),
+        models_not_found_config(crate::formats::UpstreamFormat::OpenAiChatCompletions, None),
         data_auth::DataAccess::ClientProviderKey,
     )
     .await;

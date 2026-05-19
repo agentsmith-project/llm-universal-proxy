@@ -393,7 +393,7 @@ fn openai_family_static_prefix(
 ) -> Option<Value> {
     upstream_body.as_object()?;
     let protocol = match context.upstream_format {
-        UpstreamFormat::OpenAiCompletion => "openai_chat_completions",
+        UpstreamFormat::OpenAiChatCompletions => "openai_chat_completions",
         UpstreamFormat::OpenAiResponses => "openai_responses",
         UpstreamFormat::Anthropic => return None,
     };
@@ -413,7 +413,7 @@ fn openai_family_static_prefix(
 
 fn static_prefix_instructions(instruction_format: UpstreamFormat, body: &Value) -> Value {
     match instruction_format {
-        UpstreamFormat::OpenAiCompletion => openai_chat_static_instructions(body),
+        UpstreamFormat::OpenAiChatCompletions => openai_chat_static_instructions(body),
         UpstreamFormat::OpenAiResponses => {
             let mut instructions = serde_json::Map::new();
             if let Some(value) = body.get("instructions") {
@@ -522,7 +522,7 @@ fn openai_chat_compatibility_instruction(message: &Value) -> Option<Value> {
 
 fn openai_family_static_config(upstream_format: UpstreamFormat, body: &Value) -> Value {
     let fields: &[&str] = match upstream_format {
-        UpstreamFormat::OpenAiCompletion => &[
+        UpstreamFormat::OpenAiChatCompletions => &[
             "response_format",
             "tool_choice",
             "parallel_tool_calls",
@@ -652,7 +652,7 @@ fn anthropic_block_cache_control_present(block: &Value) -> bool {
 fn prompt_cache_target_provider(format: UpstreamFormat) -> PromptCacheTargetProvider {
     match format {
         UpstreamFormat::Anthropic => PromptCacheTargetProvider::Anthropic,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses => {
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
             PromptCacheTargetProvider::OpenAiFamily
         }
     }
@@ -661,7 +661,7 @@ fn prompt_cache_target_provider(format: UpstreamFormat) -> PromptCacheTargetProv
 fn openai_family_format(format: UpstreamFormat) -> bool {
     matches!(
         format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::OpenAiResponses
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses
     )
 }
 
@@ -923,7 +923,7 @@ mod tests {
                     { "role": "user", "content": "Final dynamic user turn." }
                 ]
             }),
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
         );
         let injected_tail = synthesized_prompt_cache_key(
             json!({
@@ -937,7 +937,7 @@ mod tests {
                     }
                 ]
             }),
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
         );
 
         assert_eq!(
@@ -959,7 +959,7 @@ mod tests {
                     { "role": "user", "content": "Dynamic question." }
                 ]
             }),
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
         );
         let second = synthesized_prompt_cache_key(
             json!({
@@ -972,7 +972,7 @@ mod tests {
                     { "role": "user", "content": "Dynamic question." }
                 ]
             }),
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
         );
 
         assert_ne!(
@@ -1044,7 +1044,7 @@ mod tests {
             "prompt_cache_key": "caller-explicit-key"
         });
         assert!(synthesize_openai_family_prompt_cache_key(
-            prompt_cache_synthesis_context(UpstreamFormat::OpenAiCompletion),
+            prompt_cache_synthesis_context(UpstreamFormat::OpenAiChatCompletions),
             &mut explicit,
         )
         .is_none());
@@ -1101,7 +1101,7 @@ mod tests {
         });
 
         let analysis = analyze_provider_prompt_cache_request_control(
-            crate::formats::UpstreamFormat::OpenAiCompletion,
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
             crate::formats::UpstreamFormat::Anthropic,
             &body,
         );
@@ -1135,7 +1135,7 @@ mod tests {
         let cases = [
             (
                 "openai_to_anthropic_mixed",
-                crate::formats::UpstreamFormat::OpenAiCompletion,
+                crate::formats::UpstreamFormat::OpenAiChatCompletions,
                 crate::formats::UpstreamFormat::Anthropic,
                 json!({
                     "messages": [{ "role": "user", "content": "Hi" }],
@@ -1165,7 +1165,7 @@ mod tests {
             ),
             (
                 "openai_to_anthropic_dropped_only",
-                crate::formats::UpstreamFormat::OpenAiCompletion,
+                crate::formats::UpstreamFormat::OpenAiChatCompletions,
                 crate::formats::UpstreamFormat::Anthropic,
                 json!({
                     "messages": [{ "role": "user", "content": "Hi" }],
@@ -1177,7 +1177,7 @@ mod tests {
             (
                 "anthropic_to_openai_mixed",
                 crate::formats::UpstreamFormat::Anthropic,
-                crate::formats::UpstreamFormat::OpenAiCompletion,
+                crate::formats::UpstreamFormat::OpenAiChatCompletions,
                 json!({
                     "messages": [
                         {
@@ -1218,7 +1218,7 @@ mod tests {
             (
                 "anthropic_to_openai_dropped_only",
                 crate::formats::UpstreamFormat::Anthropic,
-                crate::formats::UpstreamFormat::OpenAiCompletion,
+                crate::formats::UpstreamFormat::OpenAiChatCompletions,
                 json!({
                     "system": [
                         {
@@ -1233,7 +1233,7 @@ mod tests {
             ),
             (
                 "openai_same_family_preserved",
-                crate::formats::UpstreamFormat::OpenAiCompletion,
+                crate::formats::UpstreamFormat::OpenAiChatCompletions,
                 crate::formats::UpstreamFormat::OpenAiResponses,
                 json!({
                     "messages": [{ "role": "user", "content": "Hi" }],
@@ -1254,7 +1254,7 @@ mod tests {
             (
                 "anthropic_to_openai_retention_without_key",
                 crate::formats::UpstreamFormat::Anthropic,
-                crate::formats::UpstreamFormat::OpenAiCompletion,
+                crate::formats::UpstreamFormat::OpenAiChatCompletions,
                 json!({
                     "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Hi" }] }],
                     "extra_body": {

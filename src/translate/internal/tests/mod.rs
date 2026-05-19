@@ -363,8 +363,8 @@ fn translate_request_openai_passthrough_defaults_parallel_tool_calls_when_surfac
     });
 
     translate_request_with_policy(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         request_translation_policy_with_surface(crate::config::ModelSurface {
@@ -401,8 +401,8 @@ fn translate_request_openai_passthrough_rejects_parallel_tool_calls_override_whe
     });
 
     let err = translate_request_with_policy(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         request_translation_policy_with_surface(crate::config::ModelSurface {
@@ -440,8 +440,8 @@ fn translate_request_openai_passthrough_rejects_image_input_when_surface_is_text
     });
 
     let err = translate_request_with_policy(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         request_translation_policy_with_surface(crate::config::ModelSurface {
@@ -472,8 +472,8 @@ fn translate_request_openai_passthrough_rejects_audio_output_when_surface_is_tex
     });
 
     let err = translate_request_with_policy(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o-audio-preview",
         &mut body,
         request_translation_policy_with_surface(crate::config::ModelSurface {
@@ -678,7 +678,7 @@ fn surface_policy_distinguishes_pdf_from_generic_file_input() {
     });
 
     same_format_surface_input_result(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         pdf_body.clone(),
         vec![Text, Pdf],
@@ -686,7 +686,7 @@ fn surface_policy_distinguishes_pdf_from_generic_file_input() {
     .expect("pdf input surface should allow PDF files");
 
     let err = same_format_surface_input_result(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         generic_file_body.clone(),
         vec![Text, Pdf],
@@ -696,7 +696,7 @@ fn surface_policy_distinguishes_pdf_from_generic_file_input() {
     assert!(err.contains("file"), "err = {err}");
 
     same_format_surface_input_result(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         generic_file_body,
         vec![Text, File],
@@ -704,7 +704,7 @@ fn surface_policy_distinguishes_pdf_from_generic_file_input() {
     .expect("file input surface should allow generic file references");
 
     same_format_surface_input_result(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         pdf_body,
         vec![Text, File],
@@ -754,7 +754,7 @@ fn surface_policy_file_surface_rejects_openai_video_file_input() {
 
     for body in cases {
         let err = same_format_surface_input_result(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "gpt-4o",
             body,
             vec![Text, File],
@@ -789,7 +789,7 @@ fn surface_policy_file_surface_rejects_openai_file_data_uri_mime_conflict() {
     });
 
     let err = same_format_surface_input_result(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         body,
         vec![Text, File],
@@ -882,7 +882,7 @@ fn surface_policy_file_surface_rejects_openai_file_mime_provenance_conflict_vari
 
     for (_label, body, sources, mimes) in cases {
         let err = same_format_surface_input_result(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "gpt-4o",
             body,
             vec![Text, File],
@@ -1016,7 +1016,7 @@ fn responses_to_messages_via_translate() {
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -1043,7 +1043,7 @@ fn messages_to_responses_via_translate() {
         ]
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -1071,7 +1071,7 @@ fn messages_to_responses_preserves_reasoning_items() {
         ]
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -1105,7 +1105,7 @@ fn openai_responses_round_trip_merges_default_instructions_and_preserves_parts()
     });
     let mut body = original.clone();
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -1127,7 +1127,7 @@ fn openai_responses_round_trip_merges_default_instructions_and_preserves_parts()
 
     translate_request_with_policy(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         request_translation_policy(None),
@@ -1167,7 +1167,7 @@ fn translate_request_chat_to_responses_maps_user_image_audio_and_file_legally() 
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -1204,7 +1204,7 @@ fn translate_request_chat_to_responses_maps_user_image_to_input_image_legally() 
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -1270,7 +1270,7 @@ fn translate_request_chat_to_responses_rejects_polluted_uri_like_media_sources()
         ),
     ] {
         let err = translate_request(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
             "gpt-4o",
             &mut body,
@@ -1331,7 +1331,7 @@ fn translate_request_responses_to_chat_rejects_polluted_uri_like_media_sources()
     ] {
         let err = translate_request(
             UpstreamFormat::OpenAiResponses,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "gpt-4o",
             &mut body,
             false,
@@ -1354,7 +1354,7 @@ fn translate_request_chat_responses_reject_polluted_input_audio_data() {
         }]
     });
     let err = translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut chat_body,
@@ -1377,7 +1377,7 @@ fn translate_request_chat_responses_reject_polluted_input_audio_data() {
     });
     let err = translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut responses_body,
         false,
@@ -1412,7 +1412,7 @@ fn translate_request_chat_to_responses_uses_custom_tool_call_output_for_custom_t
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -1463,7 +1463,7 @@ fn translate_request_responses_to_openai_bridges_custom_tool_definition_choice_a
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -1594,7 +1594,7 @@ fn translate_request_responses_to_openai_rejects_reserved_bridge_prefix_for_func
     for mut body in cases {
         let err = translate_request(
             UpstreamFormat::OpenAiResponses,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "gpt-4o",
             &mut body,
             false,
@@ -1672,7 +1672,7 @@ fn translate_request_openai_to_responses_rejects_reserved_public_tool_names_with
 
     for mut body in cases {
         let err = translate_request(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
             "gpt-4o",
             &mut body,
@@ -1709,7 +1709,7 @@ fn translate_request_responses_tool_output_text_arrays_to_openai_text_parts() {
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -1752,7 +1752,7 @@ fn translate_request_responses_tool_output_media_arrays_to_openai_rejects() {
 
     let err = translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -1782,7 +1782,7 @@ fn translate_request_responses_to_openai_bridges_custom_tools_and_tool_choice_va
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -1835,7 +1835,7 @@ fn translate_request_responses_to_openai_bridges_custom_tools_and_tool_choice_va
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut allowed_tools_body,
         false,
@@ -1877,7 +1877,7 @@ fn translate_request_responses_to_openai_rejects_same_name_function_and_custom_b
 
     let err = translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -1906,7 +1906,7 @@ fn translate_request_responses_to_non_responses_rejects_namespace_tool_groups() 
 
     let err = translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -1931,7 +1931,7 @@ fn translate_request_responses_to_non_responses_rejects_namespaced_tool_calls() 
 
     let err = translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -1953,7 +1953,7 @@ fn translate_request_chat_to_responses_maps_top_level_refusal_to_refusal_part() 
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -1983,7 +1983,7 @@ fn translate_request_responses_to_openai_maps_refusal_to_top_level_message_field
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -2012,7 +2012,7 @@ fn translate_request_openai_to_anthropic_maps_data_uri_image() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -2044,7 +2044,7 @@ fn translate_request_openai_to_anthropic_maps_remote_image_url() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -2074,7 +2074,7 @@ fn translate_request_openai_to_anthropic_rejects_input_audio_without_native_mapp
     });
 
     let err = translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -2103,7 +2103,7 @@ fn translate_request_openai_to_anthropic_maps_pdf_data_uri_file_to_document() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -2138,7 +2138,7 @@ fn translate_request_openai_to_anthropic_maps_pdf_url_file_to_document() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -2181,7 +2181,7 @@ fn translate_request_openai_to_anthropic_rejects_file_id_and_bare_base64_file_da
 
     for (label, mut body) in cases {
         let err = translate_request(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::Anthropic,
             "claude-3",
             &mut body,
@@ -2198,7 +2198,7 @@ fn translate_request_openai_to_anthropic_rejects_file_id_and_bare_base64_file_da
 fn translate_request_openai_to_anthropic_rejects_typed_system_media() {
     let cases = [
         (
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "image_url",
             json!({
                 "model": "claude-3",
@@ -2215,7 +2215,7 @@ fn translate_request_openai_to_anthropic_rejects_typed_system_media() {
             }),
         ),
         (
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "input_audio",
             json!({
                 "model": "claude-3",
@@ -2232,7 +2232,7 @@ fn translate_request_openai_to_anthropic_rejects_typed_system_media() {
             }),
         ),
         (
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "future_part",
             json!({
                 "model": "claude-3",
@@ -2401,7 +2401,7 @@ fn translate_request_openai_to_responses_preserves_multiple_instruction_segments
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -2425,8 +2425,8 @@ fn translate_request_same_format_passthrough() {
     let mut body = json!({ "model": "gpt-4o", "messages": [{ "role": "user", "content": "Hi" }] });
     let orig = body.clone();
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2450,8 +2450,8 @@ fn translate_request_same_format_rejects_reserved_public_tool_names() {
     });
 
     let err = translate_request(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -2498,8 +2498,8 @@ fn translate_request_same_format_rejects_malformed_visible_reserved_tool_definit
 
     for mut body in cases {
         let err = translate_request(
-            UpstreamFormat::OpenAiCompletion,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
+            UpstreamFormat::OpenAiChatCompletions,
             "gpt-4o",
             &mut body,
             false,
@@ -2611,8 +2611,8 @@ fn translate_request_same_format_does_not_scan_regular_text_or_schema_as_selecto
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -2630,8 +2630,8 @@ fn translate_request_openai_same_format_default_merges_developer_role() {
         ]
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2657,8 +2657,8 @@ fn translate_request_openai_same_format_minimax_merges_developer_role_and_preser
         ]
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "MiniMax-M2.7-highspeed",
         &mut body,
         true,
@@ -2690,8 +2690,8 @@ fn translate_request_openai_same_format_coalesces_adjacent_string_messages() {
         ]
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2761,7 +2761,7 @@ fn translate_request_responses_to_openai() {
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2791,7 +2791,7 @@ fn translate_request_responses_to_minimax_openai_enables_reasoning_split() {
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "MiniMax-M2.7-highspeed",
         &mut body,
         true,
@@ -2819,7 +2819,7 @@ fn translate_request_responses_to_openai_coalesces_adjacent_string_messages() {
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2851,7 +2851,7 @@ fn translate_request_responses_to_openai_flattens_text_only_content_arrays() {
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2872,7 +2872,7 @@ fn translate_request_responses_to_openai_default_merges_developer_role_into_user
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2898,7 +2898,7 @@ fn translate_request_responses_to_openai_preserves_reasoning_items() {
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2920,7 +2920,7 @@ fn translate_request_responses_to_openai_maps_tool_choice_and_parallel_calls() {
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2959,7 +2959,7 @@ fn translate_request_responses_to_openai_maps_shared_controls_and_drops_response
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -2998,7 +2998,7 @@ fn translate_request_responses_to_openai_drops_stop_request_extension() {
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -3020,7 +3020,7 @@ fn translate_request_responses_to_openai_drops_undocumented_sampling_controls() 
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -3037,7 +3037,10 @@ fn translate_request_responses_to_openai_drops_undocumented_sampling_controls() 
 
 #[test]
 fn translate_request_responses_to_non_responses_rejects_hosted_tool_choice_selectors() {
-    for upstream_format in [UpstreamFormat::OpenAiCompletion, UpstreamFormat::Anthropic] {
+    for upstream_format in [
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+    ] {
         let mut body = json!({
             "model": "gpt-4o",
             "input": "Hello",
@@ -3076,7 +3079,10 @@ fn translate_request_responses_to_non_responses_rejects_hosted_tool_items() {
     ];
 
     for (label, item) in item_cases {
-        for upstream_format in [UpstreamFormat::OpenAiCompletion, UpstreamFormat::Anthropic] {
+        for upstream_format in [
+            UpstreamFormat::OpenAiChatCompletions,
+            UpstreamFormat::Anthropic,
+        ] {
             let mut body = json!({
                 "model": "gpt-4o",
                 "input": [item.clone()]
@@ -3098,7 +3104,10 @@ fn translate_request_responses_to_non_responses_rejects_hosted_tool_items() {
 
 #[test]
 fn translate_request_responses_to_non_responses_rejects_item_reference_items() {
-    for upstream_format in [UpstreamFormat::OpenAiCompletion, UpstreamFormat::Anthropic] {
+    for upstream_format in [
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+    ] {
         let mut body = json!({
             "model": "gpt-4o",
             "input": [{ "type": "item_reference", "id": "msg_123" }]
@@ -3130,7 +3139,7 @@ fn translate_request_responses_compaction_summary_text_survives_default_translat
 
     translate_request_with_policy(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "target-model",
         &mut body,
         request_translation_policy(None),
@@ -3194,7 +3203,7 @@ fn translate_request_responses_to_openai_drops_reasoning_encrypted_content_and_u
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "target-model",
         &mut body,
         false,
@@ -3377,7 +3386,7 @@ fn translate_request_responses_to_openai_preserves_function_tool_strict() {
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -3424,7 +3433,7 @@ fn translate_request_responses_to_openai_preserves_empty_input_and_uses_max_comp
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -3448,7 +3457,7 @@ fn translate_request_responses_to_openai_keeps_empty_input_empty() {
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -3473,7 +3482,7 @@ fn translate_request_responses_to_openai_preserves_mid_thread_instruction_segmen
     });
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "MiniMax-M2.7-highspeed",
         &mut body,
         true,
@@ -3503,7 +3512,7 @@ fn translate_response_openai_reasoning_details_maps_to_responses_reasoning() {
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -3536,7 +3545,7 @@ fn translate_response_openai_tool_only_turn_does_not_emit_empty_responses_messag
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -3568,7 +3577,7 @@ fn translate_response_openai_tool_only_turn_to_responses_does_not_create_empty_m
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -3589,7 +3598,7 @@ fn translate_request_openai_to_claude_has_system_and_messages() {
         ]
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -3620,7 +3629,7 @@ fn translate_request_openai_to_claude_maps_extra_body_anthropic_cache_control_to
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -3656,7 +3665,7 @@ fn translate_request_openai_to_claude_preserves_unsigned_thinking_without_replay
         ]
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -3698,7 +3707,7 @@ fn translate_request_openai_reasoning_and_tool_calls_to_claude_preserves_unsigne
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -3733,7 +3742,7 @@ fn translate_request_openai_to_claude_maps_tool_choice_and_parallel_calls() {
         "parallel_tool_calls": false
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -3786,7 +3795,7 @@ fn translate_request_openai_allowed_tools_to_claude_filters_function_subset() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -3859,7 +3868,7 @@ fn translate_request_openai_to_claude_preserves_top_p_stop_and_metadata() {
         "metadata": { "trace_id": "abc" }
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -3878,7 +3887,7 @@ fn translate_request_openai_to_claude_omitted_stream_defaults_false() {
         "messages": [{ "role": "user", "content": "Hi" }]
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -3897,7 +3906,7 @@ fn translate_request_openai_to_responses_maps_tool_choice() {
         "parallel_tool_calls": false
     });
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -3948,7 +3957,7 @@ fn translate_request_openai_to_responses_maps_shared_controls_and_normalizes_leg
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -3990,7 +3999,7 @@ fn translate_request_openai_custom_tool_to_responses_preserves_custom_type() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4031,7 +4040,7 @@ fn translate_request_openai_custom_tool_choice_to_responses_preserves_custom_typ
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4061,7 +4070,7 @@ fn translate_request_openai_history_custom_tool_call_to_responses_preserves_cust
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4105,7 +4114,7 @@ fn translate_request_openai_tool_text_part_arrays_to_responses_output_arrays() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4163,7 +4172,7 @@ fn translate_request_openai_custom_allowed_tools_to_responses_preserves_custom_s
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4199,7 +4208,7 @@ fn translate_request_openai_to_responses_maps_logprobs_to_include_and_drops_chat
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4236,7 +4245,7 @@ fn translate_request_openai_custom_tool_to_anthropic_rejects() {
     });
 
     let err = translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -4399,7 +4408,7 @@ fn assess_request_translation_responses_custom_tool_to_openai_default_allows_pla
     });
     let plain_text_assessment = assess_request_translation(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &plain_text_body,
     );
     assert_eq!(plain_text_assessment.decision(), TranslationDecision::Allow);
@@ -4428,7 +4437,7 @@ fn assess_request_translation_responses_custom_tool_to_openai_default_allows_pla
     });
     let grammar_assessment = assess_request_translation(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &grammar_body,
     );
 
@@ -4470,7 +4479,7 @@ fn translate_request_openai_to_responses_maps_max_completion_tokens_to_max_outpu
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4490,7 +4499,7 @@ fn translate_request_openai_to_claude_uses_policy_default_max_output_tokens_when
     });
 
     translate_request_with_policy(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3-7-sonnet",
         &mut body,
@@ -4511,7 +4520,7 @@ fn translate_request_openai_to_claude_preserves_explicit_max_completion_tokens_o
     });
 
     translate_request_with_policy(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3-7-sonnet",
         &mut body,
@@ -4532,7 +4541,7 @@ fn translate_request_openai_to_claude_preserves_explicit_max_tokens_over_policy(
     });
 
     translate_request_with_policy(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3-7-sonnet",
         &mut body,
@@ -4552,7 +4561,7 @@ fn translate_request_openai_to_responses_uses_policy_default_max_output_tokens_w
     });
 
     translate_request_with_policy(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4573,7 +4582,7 @@ fn translate_request_responses_to_openai_uses_policy_default_max_completion_toke
 
     translate_request_with_policy(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         request_translation_policy(Some(128_000)),
@@ -4594,7 +4603,7 @@ fn translate_request_responses_to_chat_maps_max_output_tokens_to_max_completion_
 
     translate_request(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -4626,7 +4635,7 @@ fn translate_request_openai_to_responses_maps_response_format_json_schema() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         "gpt-4o",
         &mut body,
@@ -4665,7 +4674,7 @@ fn translate_request_openai_to_claude_maps_json_schema_output_shape() {
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -4760,7 +4769,7 @@ fn translate_request_responses_to_claude_maps_extra_body_anthropic_cache_control
 fn translate_request_openai_json_object_output_shape_to_claude_rejects() {
     for (client_format, mut body) in [
         (
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             json!({
                 "model": "claude-3",
                 "messages": [{ "role": "user", "content": "Hi" }],
@@ -4802,7 +4811,7 @@ fn assess_request_translation_openai_to_anthropic_reasoning_without_replay_prove
     });
 
     let assessment = assess_request_translation(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     );
@@ -4825,7 +4834,7 @@ fn assess_request_translation_responses_to_openai_warns_for_dropped_reasoning_en
 
     let assessment = assess_request_translation(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
@@ -4863,7 +4872,7 @@ fn assess_request_translation_responses_to_openai_allows_disabled_stateful_contr
     ] {
         let assessment = assess_request_translation(
             UpstreamFormat::OpenAiResponses,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &body,
         );
         assert!(
@@ -4888,7 +4897,7 @@ fn assess_request_translation_responses_to_openai_rejects_enabled_stateful_contr
 
     let assessment = assess_request_translation(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -4942,7 +4951,7 @@ fn assess_request_translation_openai_chat_to_responses_rejects_enabled_store_and
         });
 
         let assessment = assess_request_translation(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
             &body,
         );
@@ -4961,7 +4970,7 @@ fn assess_request_translation_openai_chat_to_responses_rejects_enabled_store_and
         });
 
         let assessment = assess_request_translation(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
             &body,
         );
@@ -4977,7 +4986,7 @@ fn assess_request_translation_openai_chat_to_responses_rejects_enabled_store_and
 fn assess_request_translation_cross_protocol_store_enabled_fails_closed_for_other_surfaces() {
     for (client_format, upstream_format, body) in [
         (
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::Anthropic,
             json!({
                 "model": "claude-3",
@@ -4987,7 +4996,7 @@ fn assess_request_translation_cross_protocol_store_enabled_fails_closed_for_othe
         ),
         (
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             json!({
                 "model": "claude-3",
                 "max_tokens": 32,
@@ -5017,7 +5026,7 @@ fn assess_request_translation_cross_protocol_store_enabled_fails_closed_for_othe
 
     for (client_format, upstream_format, body) in [
         (
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::Anthropic,
             json!({
                 "model": "claude-3",
@@ -5027,7 +5036,7 @@ fn assess_request_translation_cross_protocol_store_enabled_fails_closed_for_othe
         ),
         (
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             json!({
                 "model": "claude-3",
                 "max_tokens": 32,
@@ -5067,7 +5076,7 @@ fn assess_request_translation_openai_to_responses_warns_on_dropped_sampling_cont
     });
 
     let assessment = assess_request_translation(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     );
@@ -5105,7 +5114,7 @@ fn assess_request_translation_openai_to_claude_warns_on_dropped_sampling_and_sha
     });
 
     let assessment = assess_request_translation(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     );
@@ -5148,7 +5157,7 @@ fn assess_request_translation_openai_to_anthropic_warns_on_prediction_and_web_se
     });
 
     let assessment = assess_request_translation(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     );
@@ -5176,8 +5185,8 @@ fn assess_request_translation_openai_chat_same_format_rejects_anthropic_prompt_c
     });
 
     let assessment = assess_request_translation(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -5257,8 +5266,8 @@ fn assess_request_translation_anthropic_same_format_rejects_openai_prompt_cache_
 fn assess_request_translation_same_format_allows_unknown_extra_body_fields() {
     for (client_format, upstream_format, body) in [
         (
-            UpstreamFormat::OpenAiCompletion,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
+            UpstreamFormat::OpenAiChatCompletions,
             json!({
                 "model": "gpt-4o",
                 "messages": [{ "role": "user", "content": "Hi" }],
@@ -5312,7 +5321,7 @@ fn translate_request_openai_to_claude_rejects_invalid_extra_body_anthropic_cache
         });
 
         let err = translate_request(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::Anthropic,
             "claude-3",
             &mut body,
@@ -5331,7 +5340,7 @@ fn translate_request_openai_to_claude_rejects_invalid_extra_body_anthropic_cache
 fn translate_request_openai_family_to_non_anthropic_rejects_extra_body_anthropic_cache_control() {
     for (client_format, upstream_format, mut body) in [
         (
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
             json!({
                 "model": "gpt-4o",
@@ -5345,7 +5354,7 @@ fn translate_request_openai_family_to_non_anthropic_rejects_extra_body_anthropic
         ),
         (
             UpstreamFormat::OpenAiResponses,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             json!({
                 "model": "gpt-4o",
                 "input": "Hi",
@@ -5389,7 +5398,7 @@ fn translate_request_openai_to_claude_rejects_extra_body_google_cached_content()
         });
 
         let err = translate_request(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::Anthropic,
             "claude-3",
             &mut body,
@@ -5419,7 +5428,7 @@ fn translate_request_openai_to_claude_rejects_content_part_cache_control() {
     });
 
     let chat_err = translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut chat_body,
@@ -5505,7 +5514,7 @@ fn translate_request_openai_to_claude_rejects_known_tool_cache_control_positions
         ),
     ] {
         let err = translate_request(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::Anthropic,
             "claude-3",
             &mut body,
@@ -5596,7 +5605,7 @@ fn assess_request_translation_claude_to_openai_family_warns_for_dropped_anthropi
     });
 
     for upstream_format in [
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
     ] {
         let assessment =
@@ -5620,7 +5629,7 @@ fn assess_request_translation_claude_to_openai_family_allows_visible_signed_thin
     let body = anthropic_visible_signed_thinking_history_body();
 
     for upstream_format in [
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
     ] {
         let assessment =
@@ -5664,7 +5673,7 @@ fn assess_request_translation_claude_to_openai_rejects_context_management_native
 
         let assessment = assess_request_translation(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &body,
         );
         let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -5693,7 +5702,7 @@ fn assess_request_translation_claude_to_openai_rejects_unknown_context_managemen
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -5740,7 +5749,7 @@ fn translate_request_claude_to_openai_rejects_unsupported_clear_tool_uses_semant
 
         let err = translate_request(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "gpt-4o",
             &mut body,
             false,
@@ -5764,7 +5773,7 @@ fn assess_request_translation_claude_to_openai_treats_null_or_false_context_mana
 
         let assessment = assess_request_translation(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &body,
         );
         let TranslationDecision::Allow = assessment.decision() else {
@@ -5807,7 +5816,7 @@ fn assess_request_translation_claude_to_openai_rejects_context_controls_without_
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -5849,7 +5858,7 @@ fn assess_request_translation_claude_to_openai_rejects_unpaired_tool_result_with
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -5890,7 +5899,7 @@ fn assess_request_translation_claude_to_openai_rejects_unpaired_assistant_tool_u
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -5951,7 +5960,7 @@ fn assess_request_translation_claude_to_openai_rejects_duplicate_tool_use_id_eve
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -6004,7 +6013,7 @@ fn assess_request_translation_claude_to_openai_rejects_duplicate_tool_use_id_wit
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -6045,7 +6054,7 @@ fn assess_request_translation_claude_to_openai_family_rejects_opaque_thinking_wi
         ),
     ] {
         for upstream_format in [
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
         ] {
             let body = json!({
@@ -6099,7 +6108,7 @@ fn assess_request_translation_claude_to_openai_still_warns_on_dropped_cache_cont
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
@@ -6133,7 +6142,7 @@ fn assess_request_translation_claude_to_openai_still_rejects_container_state_sur
 
         let assessment = assess_request_translation(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             &body,
         );
         let TranslationDecision::Reject(message) = assessment.decision() else {
@@ -6161,7 +6170,7 @@ fn assess_request_translation_claude_to_openai_allows_mappable_tool_choice() {
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     assert_eq!(assessment.decision(), TranslationDecision::Allow);
@@ -6196,7 +6205,7 @@ fn assess_request_translation_responses_to_openai_warns_on_truly_dropped_control
 
     let assessment = assess_request_translation(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
@@ -6616,7 +6625,7 @@ fn translate_request_claude_structured_tool_result_content_round_trips() {
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -6631,7 +6640,7 @@ fn translate_request_claude_structured_tool_result_content_round_trips() {
     );
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -6886,7 +6895,7 @@ fn translate_request_responses_string_grammar_custom_tool_to_openai_default_warn
 
     let assessment = assess_request_translation(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
@@ -6901,7 +6910,7 @@ fn translate_request_responses_string_grammar_custom_tool_to_openai_default_warn
 
     translate_request_with_policy(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         request_translation_policy(None),
@@ -6989,7 +6998,7 @@ eof_line: "*** End of File" LF
 
     translate_request_with_policy(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         request_translation_policy(None),
@@ -7318,7 +7327,7 @@ fn translate_request_openai_bridged_marked_custom_tool_call_to_claude_degrades_t
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -7343,7 +7352,7 @@ fn translate_request_claude_to_openai_omitted_stream_defaults_false() {
     });
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -7368,7 +7377,7 @@ fn translate_request_claude_to_openai_maps_extra_body_openai_prompt_cache_contro
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -7424,7 +7433,7 @@ fn translate_request_claude_to_openai_family_maps_extra_body_openai_reasoning_ef
     });
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut chat_body,
         false,
@@ -7464,7 +7473,7 @@ fn translate_request_claude_to_openai_family_rejects_invalid_extra_body_openai_r
     for (label, upstream_format, reasoning_effort) in [
         (
             "unknown_value",
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             json!("maximum"),
         ),
         ("non_string", UpstreamFormat::OpenAiResponses, json!(5)),
@@ -7528,7 +7537,7 @@ fn translate_request_claude_to_openai_rejects_invalid_extra_body_openai_prompt_c
 
         let err = translate_request(
             UpstreamFormat::Anthropic,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             "gpt-4o",
             &mut body,
             false,
@@ -7566,7 +7575,7 @@ fn translate_request_claude_to_openai_cache_control_still_warns_and_does_not_syn
 
     let assessment = assess_request_translation(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     );
     let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
@@ -7581,7 +7590,7 @@ fn translate_request_claude_to_openai_cache_control_still_warns_and_does_not_syn
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -7855,7 +7864,7 @@ fn translate_request_claude_to_non_anthropic_rejects_user_turn_that_would_reorde
 
     let err = translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -7879,7 +7888,7 @@ fn translate_request_claude_to_openai_default_maps_multiblock_system_without_inj
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -7943,7 +7952,7 @@ fn translate_request_claude_to_openai_drops_anthropic_hint_controls_and_keeps_ch
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         true,
@@ -8075,7 +8084,7 @@ fn translate_request_claude_to_openai_family_applies_clear_thinking_default_befo
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut chat_body,
         false,
@@ -8238,7 +8247,7 @@ fn translate_request_claude_to_openai_family_clear_thinking_keep_all_preserves_v
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -8267,7 +8276,7 @@ fn translate_request_claude_to_openai_family_clear_tool_inputs_prunes_empty_mess
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -8303,7 +8312,7 @@ fn translate_request_claude_to_openai_family_clear_tool_uses_trims_exclude_tools
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -8322,7 +8331,7 @@ fn translate_request_claude_to_openai_family_drops_context_hints_and_preserves_v
     let mut chat_body = anthropic_visible_signed_thinking_history_body();
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut chat_body,
         false,
@@ -8459,7 +8468,7 @@ fn translate_request_claude_to_openai_family_preserves_visible_signed_thinking_t
     });
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut chat_body,
         false,
@@ -8559,7 +8568,7 @@ fn translate_request_claude_to_openai_family_rejects_opaque_thinking_only_carrie
         ),
     ] {
         for upstream_format in [
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
         ] {
             let mut body = json!({
@@ -8605,7 +8614,7 @@ fn translate_request_claude_to_openai_maps_tool_choice_and_parallel_calls() {
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -8638,7 +8647,7 @@ fn translate_request_claude_to_openai_preserves_url_image_source() {
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
@@ -8657,7 +8666,7 @@ fn translate_request_claude_to_openai_preserves_url_image_source() {
 #[test]
 fn translate_request_claude_url_image_source_rejects_non_http_remote_urls_for_openai_targets() {
     for target in [
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
     ] {
         for url in [
@@ -8747,7 +8756,7 @@ fn translate_request_claude_to_openai_rejects_unsupported_document_block() {
 
     let err = translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -8772,7 +8781,7 @@ fn translate_request_claude_to_openai_rejects_future_unknown_block() {
 
     let err = translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -8816,7 +8825,7 @@ fn translate_request_claude_to_openai_allows_business_cache_control_keys() {
 
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -8858,7 +8867,7 @@ fn translate_request_openai_invalid_tool_arguments_to_claude_rejects_instead_of_
     });
 
     let err = translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -8890,7 +8899,7 @@ fn translate_request_openai_marked_invalid_tool_arguments_to_claude_degrade_to_t
     super::tools::mark_tool_call_as_non_replayable(&mut body["messages"][0]["tool_calls"][0]);
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -8926,7 +8935,7 @@ fn translate_request_openai_unsigned_non_replayable_marker_to_claude_still_fails
     });
 
     let err = translate_request(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         "claude-3",
         &mut body,
@@ -8952,7 +8961,7 @@ fn translate_request_claude_to_openai_collapses_text_blocks_to_string() {
     });
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -8970,7 +8979,7 @@ fn translate_request_claude_to_openai_drops_metadata_when_mapping_to_openai() {
     });
     translate_request(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         "claude-3",
         &mut body,
         false,
@@ -8990,8 +8999,8 @@ fn translate_request_openai_streaming_still_coalesces_plain_string_user_messages
     });
 
     translate_request(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         "minimax-openai",
         &mut body,
         true,
@@ -9200,8 +9209,8 @@ fn translate_response_same_format_passthrough() {
         "choices": [{ "message": { "role": "assistant", "content": "Hi" }, "finish_reason": "stop" }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9246,8 +9255,8 @@ fn translate_response_same_format_rejects_reserved_public_tool_names() {
 
     for body in cases {
         let err = translate_response(
-            UpstreamFormat::OpenAiCompletion,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
+            UpstreamFormat::OpenAiChatCompletions,
             &body,
         )
         .expect_err("same-format public egress should reject reserved tool names");
@@ -9312,8 +9321,8 @@ fn translate_response_same_format_rejects_malformed_visible_reserved_tool_call_n
 
     for body in cases {
         let err = translate_response(
-            UpstreamFormat::OpenAiCompletion,
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
+            UpstreamFormat::OpenAiChatCompletions,
             &body,
         )
         .expect_err("same-format public egress should reject visible reserved tool identity");
@@ -9466,7 +9475,7 @@ fn translate_response_claude_to_openai_has_choices() {
     });
     let out = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9485,7 +9494,7 @@ fn translate_response_claude_context_window_stop_maps_to_openai_error_reason() {
     });
     let out = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9505,7 +9514,7 @@ fn translate_response_claude_refusal_maps_to_content_filter() {
     });
     let out = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9523,7 +9532,7 @@ fn translate_response_claude_refusal_sets_openai_refusal_surface() {
 
     let openai = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9569,7 +9578,7 @@ fn translate_response_responses_to_openai_preserves_text_and_refusal_together() 
 
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9593,7 +9602,7 @@ fn translate_response_claude_to_openai_rejects_unsupported_redacted_thinking_blo
 
     let err = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .expect_err("unsupported response blocks should fail closed");
@@ -9615,7 +9624,7 @@ fn translate_response_claude_to_openai_rejects_future_unknown_block() {
 
     let err = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .expect_err("future unknown anthropic response blocks should fail closed");
@@ -9639,7 +9648,7 @@ fn translate_response_claude_server_tool_use_preserved_non_streaming() {
 
     let out = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9664,7 +9673,7 @@ fn translate_response_claude_pause_turn_maps_to_pause_turn_finish() {
     });
     let out = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9679,7 +9688,7 @@ fn translate_response_openai_to_claude_has_content_array() {
         "usage": { "prompt_tokens": 1, "completion_tokens": 2 }
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -9708,7 +9717,7 @@ fn translate_response_openai_to_claude_preserves_unprovenanced_reasoning_as_unsi
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -9750,7 +9759,7 @@ fn translate_response_openai_to_claude_preserves_unsigned_thinking_and_tool_use_
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -9795,7 +9804,7 @@ fn translate_response_openai_to_claude_preserves_reasoning_with_anthropic_replay
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -9818,7 +9827,7 @@ fn translate_response_openai_error_finishes_to_claude_stop_reasons() {
         "choices": [{ "message": { "role": "assistant", "content": "" }, "finish_reason": "context_length_exceeded" }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -9833,7 +9842,7 @@ fn translate_response_openai_error_finish_to_claude_error_body() {
         "choices": [{ "message": { "role": "assistant", "content": "" }, "finish_reason": "error" }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -9850,7 +9859,7 @@ fn translate_response_openai_tool_error_finish_to_claude_error_body() {
         "choices": [{ "message": { "role": "assistant", "content": "" }, "finish_reason": "tool_error" }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -9867,7 +9876,7 @@ fn translate_response_openai_pause_turn_to_claude_stop_reason() {
         "choices": [{ "message": { "role": "assistant", "content": "" }, "finish_reason": "pause_turn" }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -9887,7 +9896,7 @@ fn translate_response_openai_to_responses_maps_pause_turn_to_incomplete() {
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -9916,7 +9925,7 @@ fn translate_response_responses_to_openai_maps_usage_fields() {
     });
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -9950,7 +9959,7 @@ fn translate_response_responses_to_openai_maps_top_level_output_audio_to_message
 
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .expect("Responses output_audio should map to Chat assistant audio");
@@ -9987,7 +9996,7 @@ fn translate_response_responses_to_openai_preserves_output_text_logprobs() {
 
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .expect("Responses output_text.logprobs should map to Chat choice.logprobs");
@@ -10016,7 +10025,7 @@ fn translate_response_responses_to_openai_accepts_legacy_nested_output_audio_sha
 
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .expect("legacy nested output_audio should still parse");
@@ -10049,7 +10058,7 @@ fn translate_response_responses_incomplete_to_openai_preserves_terminal_and_usag
     });
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -10095,7 +10104,7 @@ fn translate_response_responses_to_openai_preserves_audio_prediction_and_unknown
 
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -10144,7 +10153,7 @@ fn translate_response_responses_failed_to_openai_maps_context_failure() {
     });
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -10172,7 +10181,7 @@ fn translate_response_responses_failed_unknown_code_maps_to_error() {
     });
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -10198,7 +10207,7 @@ fn translate_response_responses_failed_tool_validation_maps_to_tool_error() {
     });
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -10225,7 +10234,7 @@ fn translate_response_openai_to_responses_maps_usage_fields() {
         }
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10256,7 +10265,7 @@ fn translate_response_openai_assistant_audio_maps_to_responses_output_audio() {
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10300,7 +10309,7 @@ fn translate_response_openai_to_responses_preserves_choice_logprobs_on_output_te
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10336,7 +10345,7 @@ fn translate_response_openai_assistant_audio_with_id_rejects_for_responses() {
     });
 
     let err = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10367,7 +10376,7 @@ fn translate_response_openai_assistant_audio_with_expires_at_rejects_for_respons
     });
 
     let err = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10409,7 +10418,7 @@ fn translate_response_openai_to_responses_preserves_audio_prediction_and_unknown
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10462,7 +10471,7 @@ fn translate_response_openai_annotations_round_trip_to_responses() {
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10515,7 +10524,7 @@ fn translate_response_responses_to_openai_preserves_interleaved_annotation_order
 
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -10560,7 +10569,7 @@ fn translate_response_responses_to_openai_preserves_custom_and_proxied_tool_kind
 
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -10616,7 +10625,7 @@ fn translate_response_responses_portable_output_subset_stays_valid() {
 
     let out = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .expect("portable Responses output subset should remain translatable");
@@ -10692,7 +10701,7 @@ fn translate_response_openai_to_claude_restores_server_tool_use_from_marker() {
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -10732,7 +10741,7 @@ fn translate_response_openai_to_responses_decodes_request_scoped_function_call_t
     });
 
     let out = translate_response_with_context(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
         response_translation_context("code_exec", "custom_text"),
@@ -10779,7 +10788,7 @@ fn translate_response_openai_to_responses_decodes_request_scoped_custom_bridge_w
     });
 
     let out = translate_response_with_context(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
         response_translation_context("apply_patch", "custom_grammar"),
@@ -10824,7 +10833,7 @@ fn translate_response_ignores_upstream_body_supplied_bridge_context_without_side
     });
 
     let err = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10862,7 +10871,7 @@ fn translate_response_uses_trusted_sidecar_bridge_context_for_custom_tool_restor
         ));
 
     let out = translate_response_with_context(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
         context,
@@ -10907,7 +10916,7 @@ fn translate_response_openai_to_responses_request_scoped_custom_bridge_falls_bac
     });
 
     let out = translate_response_with_context(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
         response_translation_context("apply_patch", "custom_grammar"),
@@ -10951,7 +10960,7 @@ fn translate_response_openai_to_responses_rejects_reserved_prefix_function_call_
     });
 
     let err = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -10983,7 +10992,7 @@ fn translate_response_openai_to_responses_rejects_malformed_visible_reserved_too
     });
 
     let err = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -11025,7 +11034,7 @@ fn translate_response_openai_to_responses_request_scoped_bridge_falls_back_when_
         });
 
         let out = translate_response_with_context(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
             &body,
             response_translation_context("code_exec", "custom_text"),
@@ -11158,7 +11167,7 @@ fn translate_response_openai_to_responses_fails_closed_for_incomplete_or_invalid
         });
 
         let out = translate_response_with_context(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             UpstreamFormat::OpenAiResponses,
             &body,
             ResponseTranslationContext::default()
@@ -11205,7 +11214,7 @@ fn translate_response_openai_to_responses_keeps_unprefixed_apply_patch_as_functi
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -11246,7 +11255,7 @@ fn translate_response_openai_to_claude_preserves_text_annotations_as_citations()
     });
 
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         &body,
     )
@@ -11281,7 +11290,7 @@ fn translate_response_claude_usage_preserves_extra_usage_fields() {
 
     let out = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();
@@ -11310,7 +11319,7 @@ fn translate_response_openai_to_responses_preserves_reasoning_output() {
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -11332,7 +11341,7 @@ fn translate_response_openai_to_responses_maps_length_to_incomplete() {
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -11353,7 +11362,7 @@ fn translate_response_openai_to_responses_maps_content_filter_to_incomplete() {
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -11374,7 +11383,7 @@ fn translate_response_openai_to_responses_maps_context_window_to_failed() {
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -11396,7 +11405,7 @@ fn translate_response_openai_to_responses_maps_error_finish_to_failed() {
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -11417,7 +11426,7 @@ fn translate_response_openai_to_responses_maps_tool_error_finish_to_failed() {
         }]
     });
     let out = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &body,
     )
@@ -11553,7 +11562,7 @@ fn translate_response_claude_plain_thinking_without_provenance_still_translates(
 
     let out = translate_response(
         UpstreamFormat::Anthropic,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &body,
     )
     .unwrap();

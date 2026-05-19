@@ -14,8 +14,8 @@ fn translate_sse_event_passthrough_openai_sends_done() {
     let event = serde_json::json!({ "_done": true });
     let mut state = StreamState::default();
     let out = translate_sse_event(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         &event,
         &mut state,
     );
@@ -46,8 +46,8 @@ fn translate_sse_event_same_format_openai_rejects_reserved_tool_name() {
     });
     let mut state = StreamState::default();
     let out = translate_sse_event(
-        UpstreamFormat::OpenAiCompletion,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
         &event,
         &mut state,
     );
@@ -269,7 +269,7 @@ async fn guarded_sse_stream_sanitizes_parsed_error_message_artifacts() {
     let inner = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
         format_sse_data(&event),
     ))]);
-    let mut stream = GuardedSseStream::new(inner, UpstreamFormat::OpenAiCompletion);
+    let mut stream = GuardedSseStream::new(inner, UpstreamFormat::OpenAiChatCompletions);
     let mut frames = Vec::new();
     while let Some(frame) = stream.next().await {
         let frame = frame.expect("guarded frame");
@@ -345,7 +345,7 @@ fn stream_usage_detail_objects_match_non_stream_translation() {
     let streamed_openai_usage = responses_usage_to_openai_usage_stream(&responses_usage);
     let non_stream_openai = translate_response(
         UpstreamFormat::OpenAiResponses,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         &serde_json::json!({
             "id": "resp_usage",
             "object": "response",
@@ -369,7 +369,7 @@ fn stream_usage_detail_objects_match_non_stream_translation() {
 
     let streamed_responses_usage = openai_usage_to_responses_usage_stream(&openai_usage);
     let non_stream_responses = translate_response(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &serde_json::json!({
             "id": "chatcmpl_usage",
@@ -410,7 +410,7 @@ fn parse_sse_json_frame(bytes: &[u8]) -> Value {
 
 fn translated_sse_matrix_formats() -> [UpstreamFormat; 3] {
     [
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::Anthropic,
         UpstreamFormat::OpenAiResponses,
     ]
@@ -418,7 +418,7 @@ fn translated_sse_matrix_formats() -> [UpstreamFormat; 3] {
 
 fn translated_sse_matrix_valid_frame(upstream_format: UpstreamFormat, sentinel: &str) -> Vec<u8> {
     match upstream_format {
-        UpstreamFormat::OpenAiCompletion => format_sse_data(&serde_json::json!({
+        UpstreamFormat::OpenAiChatCompletions => format_sse_data(&serde_json::json!({
             "id": "chatcmpl-translated-guard",
             "model": "gpt-test",
             "choices": [{
@@ -522,11 +522,11 @@ async fn translated_sse_stream_rejects_oversized_unterminated_frame_and_stops() 
     const SENTINEL: &str = "SAFE_AFTER_OVERSIZED_TRANSLATED_FRAME";
 
     let frames = collect_translated_sse_strings(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         vec![
             oversized_unterminated_sse_frame(),
-            translated_sse_matrix_valid_frame(UpstreamFormat::OpenAiCompletion, SENTINEL),
+            translated_sse_matrix_valid_frame(UpstreamFormat::OpenAiChatCompletions, SENTINEL),
         ],
     )
     .await;
@@ -553,13 +553,13 @@ async fn translated_sse_stream_uses_configured_sse_frame_limit() {
     let inner = futures_util::stream::iter(vec![
         Ok::<Bytes, std::io::Error>(Bytes::from(configured_oversized_frame)),
         Ok::<Bytes, std::io::Error>(Bytes::from(translated_sse_matrix_valid_frame(
-            UpstreamFormat::OpenAiCompletion,
+            UpstreamFormat::OpenAiChatCompletions,
             SENTINEL,
         ))),
     ]);
     let mut stream = TranslateSseStream::new(
         inner,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
     )
     .with_resource_limits(crate::config::ResourceLimits {
@@ -701,7 +701,7 @@ async fn translated_sse_stream_fails_closed_on_accumulated_state_cap() {
     ))]);
     let mut stream = TranslateSseStream::new(
         inner,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
     )
     .with_resource_limits(crate::config::ResourceLimits {
@@ -852,7 +852,7 @@ async fn translate_sse_stream_closes_promptly_after_fatal_rejection() {
     };
     let mut stream = TranslateSseStream::new(
         inner,
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
     );
 

@@ -258,7 +258,7 @@ This works for reversible structured tool-call decoding, but it also changes the
 Historically, for `Codex -> OpenAI Responses -> OpenAI Chat Completions`:
 
 - `run_codex_proxy.sh` launches Codex as a Responses client
-- `responses_to_messages(..., UpstreamFormat::OpenAiCompletion)` enables `bridge_custom_responses_semantics`
+- `responses_to_messages(..., UpstreamFormat::OpenAiChatCompletions)` enables `bridge_custom_responses_semantics`
 - tool definitions are rewritten by `normalized_tool_definition_to_openai_with_custom_bridge(...)`
 - tool choice is also rewritten to the prefixed name
 

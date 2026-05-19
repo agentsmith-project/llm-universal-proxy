@@ -253,13 +253,13 @@ fn translate_sse_event_openai_done_marks_eof_truncated_function_call_for_safe_an
     });
 
     let _ = translate_sse_event(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &tool_chunk,
         &mut state,
     );
     let out = translate_sse_event(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &serde_json::json!({ "_done": true }),
         &mut state,
@@ -328,13 +328,13 @@ fn translate_sse_event_openai_done_keeps_complete_function_call_replayable() {
     });
 
     let _ = translate_sse_event(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &tool_chunk,
         &mut state,
     );
     let out = translate_sse_event(
-        UpstreamFormat::OpenAiCompletion,
+        UpstreamFormat::OpenAiChatCompletions,
         UpstreamFormat::OpenAiResponses,
         &serde_json::json!({ "_done": true }),
         &mut state,

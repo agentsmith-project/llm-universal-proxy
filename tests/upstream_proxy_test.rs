@@ -88,7 +88,7 @@ fn openai_completion_proxy_yaml(
     yaml.push_str("upstreams:\n");
     yaml.push_str("  OPENAI:\n");
     yaml.push_str(&format!("    api_root: \"{api_root}\"\n"));
-    yaml.push_str("    format: openai-completion\n");
+    yaml.push_str("    format: openai-chat-completions\n");
     match upstream_override {
         ProxyLayer::Missing => {}
         ProxyLayer::Direct => yaml.push_str("    proxy: direct\n"),
@@ -140,7 +140,7 @@ async fn missing_proxy_layers_should_inherit_http_proxy_environment() {
     let _env = install_http_proxy_env(&env_proxy_base);
 
     let config = Config::from_yaml_str(&openai_completion_proxy_yaml(
-        &upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion),
+        &upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
         ProxyLayer::Missing,
         ProxyLayer::Missing,
     ))
@@ -171,7 +171,7 @@ async fn namespace_proxy_should_route_requests_when_no_per_upstream_override_is_
     let _env = install_http_proxy_env(&env_proxy_base);
 
     let config = Config::from_yaml_str(&openai_completion_proxy_yaml(
-        &upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion),
+        &upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
         ProxyLayer::Url(&top_level_proxy_base),
         ProxyLayer::Missing,
     ))
@@ -203,7 +203,7 @@ async fn per_upstream_override_should_override_environment_when_namespace_proxy_
     let _env = install_http_proxy_env(&env_proxy_base);
 
     let config = Config::from_yaml_str(&openai_completion_proxy_yaml(
-        &upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion),
+        &upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
         ProxyLayer::Missing,
         ProxyLayer::Url(&override_proxy_base),
     ))
@@ -233,7 +233,7 @@ async fn explicit_namespace_direct_should_cut_environment_proxy() {
     let _env = install_http_proxy_env(&env_proxy_base);
 
     let config = Config::from_yaml_str(&openai_completion_proxy_yaml(
-        &upstream_api_root(&mock_base, UpstreamFormat::OpenAiCompletion),
+        &upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
         ProxyLayer::Direct,
         ProxyLayer::Missing,
     ))

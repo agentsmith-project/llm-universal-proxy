@@ -377,7 +377,7 @@ async fn anthropic_omitted_thinking_responses_round_trip_non_streaming_drops_car
 async fn openai_reasoning_to_anthropic_non_streaming_preserves_unsigned_thinking_without_provenance(
 ) {
     let (mock_base, _mock) = spawn_openai_completion_reasoning_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -398,7 +398,7 @@ async fn openai_reasoning_to_anthropic_non_streaming_preserves_unsigned_thinking
 #[tokio::test]
 async fn openai_reasoning_to_responses_non_streaming() {
     let (mock_base, _mock) = spawn_openai_completion_reasoning_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -590,7 +590,7 @@ async fn anthropic_omitted_thinking_to_openai_chat_streaming_skips_hidden_reason
 #[tokio::test]
 async fn openai_reasoning_to_anthropic_streaming_preserves_unsigned_thinking_without_provenance() {
     let (mock_base, _mock) = spawn_openai_completion_reasoning_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -611,7 +611,7 @@ async fn openai_reasoning_to_anthropic_streaming_preserves_unsigned_thinking_wit
 #[tokio::test]
 async fn openai_reasoning_to_responses_streaming() {
     let (mock_base, _mock) = spawn_openai_completion_reasoning_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -807,7 +807,7 @@ async fn anthropic_thinking_with_tools_to_openai_streaming() {
 async fn multi_turn_anthropic_thinking_preserved_in_history() {
     // Thinking blocks in assistant messages → reasoning_content on OpenAI upstream
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -940,7 +940,7 @@ async fn anthropic_thinking_usage_translated_to_openai() {
 #[tokio::test]
 async fn openai_reasoning_usage_to_anthropic_preserves_unsigned_thinking_without_provenance() {
     let (mock_base, _mock) = spawn_openai_completion_reasoning_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -961,7 +961,7 @@ async fn openai_reasoning_usage_to_anthropic_preserves_unsigned_thinking_without
 #[tokio::test]
 async fn openai_reasoning_with_completion_tokens_details() {
     let (mock_base, _mock) = spawn_openai_completion_reasoning_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -986,7 +986,7 @@ async fn openai_reasoning_with_completion_tokens_details() {
 #[tokio::test]
 async fn empty_thinking_block_no_crash() {
     let (mock_base, _mock) = spawn_openai_completion_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -1010,7 +1010,7 @@ async fn empty_thinking_block_no_crash() {
 #[tokio::test]
 async fn reasoning_and_text_both_present_in_response() {
     let (mock_base, _mock) = spawn_openai_completion_reasoning_mock().await;
-    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiCompletion);
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();

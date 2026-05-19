@@ -722,7 +722,7 @@ pub(super) fn responses_to_messages(
 ) -> Result<(), String> {
     let use_request_scoped_openai_custom_bridge = matches!(
         target_format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::Anthropic
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::Anthropic
     );
     let bridge_custom_responses_semantics = use_request_scoped_openai_custom_bridge;
     let degrade_marked_tool_calls = target_format == UpstreamFormat::Anthropic;
@@ -894,7 +894,7 @@ pub(super) fn responses_to_messages(
                     .and_then(|call_id| tool_kind_by_call_id.get(call_id).copied())
                     .unwrap_or_else(|| semantic_tool_kind_from_value(&item));
                 if tool_kind == SemanticToolKind::OpenAiCustom
-                    && target_format != UpstreamFormat::OpenAiCompletion
+                    && target_format != UpstreamFormat::OpenAiChatCompletions
                 {
                     return Err(custom_tools_not_portable_message(target_format));
                 }
@@ -1588,7 +1588,7 @@ fn responses_tool_choice_to_openai_tool_choice(
 ) -> Result<Option<Value>, String> {
     let use_request_scoped_openai_custom_bridge = matches!(
         target_format,
-        UpstreamFormat::OpenAiCompletion | UpstreamFormat::Anthropic
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::Anthropic
     );
     let bridge_custom_responses_semantics = use_request_scoped_openai_custom_bridge;
     if choice.is_string() {

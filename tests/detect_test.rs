@@ -29,7 +29,7 @@ fn native_gemini_contents_body_no_longer_selects_removed_google_format() {
     });
     assert_eq!(
         detect_request_format("/openai/v1/chat/completions", &body),
-        UpstreamFormat::OpenAiCompletion
+        UpstreamFormat::OpenAiChatCompletions
     );
 }
 
@@ -53,7 +53,7 @@ fn body_response_format_is_openai_completion() {
     });
     assert_eq!(
         detect_request_format("/openai/v1/chat/completions", &body),
-        UpstreamFormat::OpenAiCompletion
+        UpstreamFormat::OpenAiChatCompletions
     );
 }
 
@@ -65,6 +65,6 @@ fn default_messages_only_is_openai_completion() {
     });
     assert_eq!(
         detect_request_format("/openai/v1/chat/completions", &body),
-        UpstreamFormat::OpenAiCompletion
+        UpstreamFormat::OpenAiChatCompletions
     );
 }

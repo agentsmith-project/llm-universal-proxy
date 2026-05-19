@@ -71,7 +71,7 @@ class DefaultMatrixSurfaceContractTests(unittest.TestCase):
         self.assertTrue(targets["preset-openai-compatible"].required)
         self.assertEqual(
             targets["preset-openai-compatible"].upstream_format,
-            "openai-completion",
+            "openai-chat-completions",
         )
         self.assertTrue(targets["preset-openai-responses-compatible"].required)
         self.assertEqual(

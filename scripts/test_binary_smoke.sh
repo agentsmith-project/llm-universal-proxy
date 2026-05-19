@@ -429,7 +429,7 @@ run_empty_start_admin_apply_then_request_smoke() {
 
     admin_payload="$(
         cat <<EOF
-{"if_revision":null,"config":{"listen":"127.0.0.1:0","upstream_timeout_secs":10,"upstreams":[{"name":"default","api_root":"http://${HOST}:${MOCK_PORT}/v1","fixed_upstream_format":"openai-completion"}]}}
+{"if_revision":null,"config":{"listen":"127.0.0.1:0","upstream_timeout_secs":10,"upstreams":[{"name":"default","api_root":"http://${HOST}:${MOCK_PORT}/v1","fixed_upstream_format":"openai-chat-completions"}]}}
 EOF
     )"
 

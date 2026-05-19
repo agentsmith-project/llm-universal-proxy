@@ -26,7 +26,7 @@ upstreams:
 
   PRESET-OPENAI-COMPATIBLE:
     api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: PRESET_ENDPOINT_API_KEY
     limits:
       context_window: 200000

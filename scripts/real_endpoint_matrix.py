@@ -546,7 +546,7 @@ def build_real_provider_matrix_cases(
         "OPENAI_API_KEY",
         openai_model,
         "real-openai-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/chat/completions",
         _openai_chat_payload("real-openai-chat", tool=True),
         markers=("tool_calls", "get_weather"),
@@ -560,7 +560,7 @@ def build_real_provider_matrix_cases(
         "OPENAI_API_KEY",
         openai_model,
         "real-openai-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/responses",
         _responses_high_risk_state_payload("real-openai-chat"),
         status=400,
@@ -635,7 +635,7 @@ def build_real_provider_matrix_cases(
         "MINIMAX_API_KEY",
         minimax_model,
         "real-minimax-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/chat/completions",
         _openai_chat_payload("real-minimax-chat"),
     )
@@ -648,7 +648,7 @@ def build_real_provider_matrix_cases(
         "MINIMAX_API_KEY",
         minimax_model,
         "real-minimax-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/chat/completions",
         _openai_chat_payload("real-minimax-chat", stream=True),
         content_type="text/event-stream",
@@ -663,7 +663,7 @@ def build_real_provider_matrix_cases(
         "MINIMAX_API_KEY",
         minimax_model,
         "real-minimax-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/chat/completions",
         _openai_chat_payload("real-minimax-chat", tool=True),
         markers=("tool_calls", "get_weather"),
@@ -677,7 +677,7 @@ def build_real_provider_matrix_cases(
         "MINIMAX_API_KEY",
         minimax_model,
         "real-minimax-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/responses",
         _responses_high_risk_state_payload("real-minimax-chat"),
         status=400,
@@ -740,7 +740,7 @@ def build_compatible_provider_matrix_cases(
         openai_provider_key_env,
         openai_model,
         "compat-openai-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/chat/completions",
         _openai_chat_payload("compat-openai-chat"),
     )
@@ -752,7 +752,7 @@ def build_compatible_provider_matrix_cases(
         openai_provider_key_env,
         openai_model,
         "compat-openai-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/chat/completions",
         _openai_chat_payload("compat-openai-chat", stream=True),
         content_type="text/event-stream",
@@ -792,7 +792,7 @@ def build_compatible_provider_matrix_cases(
         openai_provider_key_env,
         openai_model,
         "compat-openai-chat",
-        "openai-completion",
+        "openai-chat-completions",
         "/openai/v1/responses",
         _responses_high_risk_state_payload("compat-openai-chat"),
         status=400,
@@ -1052,7 +1052,7 @@ upstream_timeout_secs: 10
 upstreams:
   MOCK_OPENAI_CHAT:
     api_root: {json.dumps(mock_base_url + "/v1")}
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: {MOCK_PROVIDER_KEY_ENV}
   MOCK_OPENAI_RESPONSES:
     api_root: {json.dumps(mock_base_url + "/v1")}
@@ -1315,7 +1315,7 @@ def compatible_provider_surfaces(config: CompatibleProviderConfig) -> list[dict[
     return [
         {
             "name": "openai_chat_completions",
-            "format": "openai-completion",
+            "format": "openai-chat-completions",
             "base_url_env": COMPAT_OPENAI_BASE_URL_ENV,
             "model_env": COMPAT_OPENAI_MODEL_ENV,
             "provider_key_env": config.openai_provider_key_env,
@@ -1372,7 +1372,7 @@ upstream_timeout_secs: 120
 upstreams:
   COMPAT_OPENAI_CHAT:
     api_root: {json.dumps(config.openai_base_url)}
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: {config.openai_provider_key_env}
   COMPAT_ANTHROPIC:
     api_root: {json.dumps(config.anthropic_base_url)}
@@ -1392,7 +1392,7 @@ upstream_timeout_secs: 120
 upstreams:
   REAL_OPENAI_CHAT:
     api_root: {json.dumps(args.openai_base_url)}
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: OPENAI_API_KEY
   REAL_OPENAI_RESPONSES:
     api_root: {json.dumps(args.openai_base_url)}
@@ -1404,7 +1404,7 @@ upstreams:
     provider_key_env: ANTHROPIC_API_KEY
   REAL_MINIMAX_CHAT:
     api_root: {json.dumps(args.minimax_base_url)}
-    format: openai-completion
+    format: openai-chat-completions
     provider_key_env: MINIMAX_API_KEY
 model_aliases:
   real-openai-chat: {json.dumps(f"REAL_OPENAI_CHAT:{args.openai_model}")}

@@ -86,7 +86,7 @@ def fake_request_trace_entry(
         "path": "/anthropic/v1/messages",
         "stream": True,
         "client_format": "anthropic",
-        "upstream_format": "openai-completion",
+        "upstream_format": "openai-chat-completions",
         "client_model": "minimax-anth",
         "upstream_name": "MINIMAX-ANTHROPIC",
         "upstream_model": "MiniMax-M2.7-highspeed",

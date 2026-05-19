@@ -11,13 +11,18 @@ pub enum UpstreamFormat {
     #[serde(alias = "anthropic-messages", alias = "claude-messages")]
     Anthropic,
     /// OpenAI Chat Completions — /v1/chat/completions, messages[].
-    #[serde(rename = "openai-completion", alias = "openai", alias = "chat")]
+    #[serde(
+        rename = "openai-chat-completions",
+        alias = "openai-completion",
+        alias = "openai",
+        alias = "chat"
+    )]
     #[serde(
         alias = "openai-chat",
         alias = "openai-chat-completions",
         alias = "chat-completions"
     )]
-    OpenAiCompletion,
+    OpenAiChatCompletions,
     /// OpenAI Responses API — /v1/responses, input[], instructions.
     #[serde(rename = "openai-responses", alias = "responses")]
     OpenAiResponses,
@@ -31,7 +36,7 @@ impl fmt::Display for UpstreamFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UpstreamFormat::Anthropic => write!(f, "anthropic"),
-            UpstreamFormat::OpenAiCompletion => write!(f, "openai-completion"),
+            UpstreamFormat::OpenAiChatCompletions => write!(f, "openai-chat-completions"),
             UpstreamFormat::OpenAiResponses => write!(f, "openai-responses"),
         }
     }
@@ -51,7 +56,7 @@ impl std::str::FromStr for UpstreamFormat {
             | "openai-chat"
             | "openai-chat-completions"
             | "chat"
-            | "chat-completions" => Ok(UpstreamFormat::OpenAiCompletion),
+            | "chat-completions" => Ok(UpstreamFormat::OpenAiChatCompletions),
             "openai-responses" | "responses" => Ok(UpstreamFormat::OpenAiResponses),
             _ => Err(format!("unknown format: {s}")),
         }
@@ -106,26 +111,26 @@ mod tests {
     }
 
     #[test]
-    fn from_str_openai_completion() {
+    fn from_str_openai_chat_completions() {
         assert_eq!(
             "openai".parse::<UpstreamFormat>().unwrap(),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
         assert_eq!(
             "openai-completion".parse::<UpstreamFormat>().unwrap(),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
         assert_eq!(
             "chat".parse::<UpstreamFormat>().unwrap(),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
         assert_eq!(
             "openai-chat-completions".parse::<UpstreamFormat>().unwrap(),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
         assert_eq!(
             "chat-completions".parse::<UpstreamFormat>().unwrap(),
-            UpstreamFormat::OpenAiCompletion
+            UpstreamFormat::OpenAiChatCompletions
         );
     }
 
@@ -151,8 +156,8 @@ mod tests {
     fn display() {
         assert_eq!(UpstreamFormat::Anthropic.to_string(), "anthropic");
         assert_eq!(
-            UpstreamFormat::OpenAiCompletion.to_string(),
-            "openai-completion"
+            UpstreamFormat::OpenAiChatCompletions.to_string(),
+            "openai-chat-completions"
         );
         assert_eq!(
             UpstreamFormat::OpenAiResponses.to_string(),

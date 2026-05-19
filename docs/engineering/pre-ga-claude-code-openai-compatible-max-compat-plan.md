@@ -13,7 +13,7 @@
 
 ## 目标合同
 
-1. `llmup` MUST 把 Claude Code / Anthropic Messages client -> OpenAI-family provider 视为一等正向路径。OpenAI-family 在本文中同时包含 Chat Completions (`openai-completion`) 与 Responses (`openai-responses`) 两种 target adapter。
+1. `llmup` MUST 把 Claude Code / Anthropic Messages client -> OpenAI-family provider 视为一等正向路径。OpenAI-family 在本文中同时包含 Chat Completions (`openai-chat-completions`) 与 Responses (`openai-responses`) 两种 target adapter。
 2. 该路径 MUST 通过真实 CLI / E2E：普通 `hi`、streaming、结构化 tool use/tool result、workspace edit fixture、usage 汇总和负向拒绝用例都要被验证。
 3. 在请求满足“完整可见 history”时，translation MUST 优先 `map` / `synthesize` / `warn+drop`，MUST NOT 因 Anthropic-only 顶层 hint 直接 fail closed。
 4. `llmup` MAY 合成 provider request 所需的兼容数据，但 MUST NOT 伪造 opaque security carrier、provider-owned resource、provider cache 内容或模型响应。
@@ -211,7 +211,7 @@ Python / script tests MUST 覆盖：
 - `tests/test_real_cli_matrix.py` 不再把 Claude non-Anthropic upstream blanket 标为预期拒绝。
 - Positive usable suite 和 negative fail-closed suite 分开展示；positive 中出现预期拒绝必须失败。
 - Report markdown/json 明确展示真实可用 pass、真实失败、负向拒绝 pass。
-- Real CLI matrix MUST 有 OpenAI-family 双 target 覆盖：一个 `openai-completion` / Chat Completions upstream，一个 `openai-responses` / Responses upstream。若现有 fixture 只有 `preset-openai-compatible`，必须补一个 Responses preset 或等价 fixture。
+- Real CLI matrix MUST 有 OpenAI-family 双 target 覆盖：一个 `openai-chat-completions` / Chat Completions upstream，一个 `openai-responses` / Responses upstream。若现有 fixture 只有 `preset-openai-compatible`，必须补一个 Responses preset 或等价 fixture。
 
 真实 CLI / E2E MUST 覆盖：
 

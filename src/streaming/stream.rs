@@ -288,7 +288,7 @@ fn validate_public_stream_response_event_tool_names(
         return Err(INTERNAL_ARTIFACT_ERROR_MESSAGE.to_string());
     }
     match format {
-        UpstreamFormat::OpenAiCompletion => validate_openai_stream_event_tool_names(event),
+        UpstreamFormat::OpenAiChatCompletions => validate_openai_stream_event_tool_names(event),
         UpstreamFormat::OpenAiResponses => validate_responses_stream_event_tool_names(event),
         UpstreamFormat::Anthropic => validate_anthropic_stream_event_tool_names(event),
     }
@@ -317,7 +317,7 @@ fn openai_chunks_to_client_sse(
     state: &mut StreamState,
 ) -> Vec<Vec<u8>> {
     match client_format {
-        UpstreamFormat::OpenAiCompletion => openai_chunks
+        UpstreamFormat::OpenAiChatCompletions => openai_chunks
             .into_iter()
             .map(|c| format_sse_data(&c))
             .collect(),
@@ -377,7 +377,7 @@ pub fn translate_sse_event(
     if state.fatal_rejection.is_some() {
         return Vec::new();
     }
-    if upstream_format == UpstreamFormat::OpenAiCompletion
+    if upstream_format == UpstreamFormat::OpenAiChatCompletions
         && client_format == UpstreamFormat::OpenAiResponses
         && event.get("_done").and_then(Value::as_bool) == Some(true)
     {
@@ -416,12 +416,12 @@ pub fn translate_sse_event(
         }
     }
     let openai_chunks: Vec<Value> = match upstream_format {
-        UpstreamFormat::OpenAiCompletion => openai_event_as_chunk(event).into_iter().collect(),
+        UpstreamFormat::OpenAiChatCompletions => openai_event_as_chunk(event).into_iter().collect(),
         UpstreamFormat::Anthropic => claude_event_to_openai_chunks(event, state),
         UpstreamFormat::OpenAiResponses => responses_event_to_openai_chunks(event, state),
     };
-    let openai_chunks = if upstream_format == UpstreamFormat::OpenAiCompletion
-        && client_format != UpstreamFormat::OpenAiCompletion
+    let openai_chunks = if upstream_format == UpstreamFormat::OpenAiChatCompletions
+        && client_format != UpstreamFormat::OpenAiChatCompletions
     {
         let mut validated = Vec::with_capacity(openai_chunks.len());
         let mut rejection = None;
@@ -827,7 +827,7 @@ pub(super) fn anthropic_error_event_to_client_sse(
             });
             vec![format_sse_event("response.failed", &failed)]
         }
-        UpstreamFormat::OpenAiCompletion => {
+        UpstreamFormat::OpenAiChatCompletions => {
             let mut chunk = openai_chunk(state, serde_json::json!({}), Some(finish_reason));
             chunk["error"] = serde_json::json!({
                 "type": normalized_type,
