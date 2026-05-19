@@ -74,7 +74,7 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
         llmup_home: llmup_home.clone(),
         codex_home: temp.path().join(".llmup-codex"),
         claude_config_dir: temp.path().join(".llmup-claude"),
-        interface: ProviderInterface::OpenAi,
+        interface: ProviderInterface::OpenAiChatCompletions,
         model_service_url: "https://api.minimaxi.com/v1".to_string(),
         model_name: "MiniMax-M2.7-highspeed".to_string(),
         model_alias: "default".to_string(),
@@ -124,7 +124,7 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
             llmup_home,
             codex_home: result.codex_home.clone(),
             claude_config_dir: result.claude_config_dir.clone(),
-            interface: ProviderInterface::OpenAi,
+            interface: ProviderInterface::OpenAiChatCompletions,
             model_service_url: "https://api.example.com/v1".to_string(),
             model_name: "other".to_string(),
             model_alias: "default".to_string(),
@@ -209,6 +209,41 @@ fn interactive_config_wizard_allows_protocol_format_selection() {
 }
 
 #[test]
+fn interactive_config_wizard_allows_openai_responses_format_selection() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("interactive-responses-format");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+
+    let mut stdin = Cursor::new(
+        b"openai-responses\nhttps://api.responses.example/v1\nresponses-model\nprovider-secret-from-prompt\n"
+            .to_vec(),
+    );
+    let mut stdout = Vec::new();
+
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("interactive config should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("openai-chat-completions"));
+    assert!(output.contains("openai-responses"));
+    assert!(output.contains("anthropic-messages"));
+    assert!(!output.contains("provider-secret-from-prompt"));
+
+    let config_yaml =
+        fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
+    assert!(config_yaml.contains("api_root: https://api.responses.example/v1"));
+    assert!(config_yaml.contains("format: openai-responses"));
+    assert!(config_yaml.contains("default: DEFAULT:responses-model"));
+    assert!(!config_yaml.contains("provider-secret-from-prompt"));
+}
+
+#[test]
 fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
     let _guard = ENV_LOCK
         .get_or_init(|| Mutex::new(()))
@@ -224,7 +259,7 @@ fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
             llmup_home: llmup_home.clone(),
             codex_home: temp.path().join(".llmup-codex"),
             claude_config_dir: temp.path().join(".llmup-claude"),
-            interface: ProviderInterface::OpenAi,
+            interface: ProviderInterface::OpenAiChatCompletions,
             model_service_url: "https://api.minimaxi.com/v1".to_string(),
             model_name: "MiniMax-M2.7-highspeed".to_string(),
             model_alias: "default".to_string(),
@@ -278,7 +313,7 @@ fn config_doctor_warns_missing_clients_but_validates_files() {
             llmup_home,
             codex_home: temp.path().join(".llmup-codex"),
             claude_config_dir: temp.path().join(".llmup-claude"),
-            interface: ProviderInterface::OpenAi,
+            interface: ProviderInterface::OpenAiChatCompletions,
             model_service_url: "https://api.example.com/v1".to_string(),
             model_name: "test-model".to_string(),
             model_alias: "default".to_string(),
@@ -318,7 +353,7 @@ fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
         OsString::from("init"),
         OsString::from("--non-interactive"),
         OsString::from("--interface"),
-        OsString::from("anthropic"),
+        OsString::from("anthropic-messages"),
         OsString::from("--model-service-url"),
         OsString::from("https://api.anthropic.example/v1"),
         OsString::from("--model-name"),
@@ -333,7 +368,7 @@ fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
     let ConfigCommand::Init(init) = parsed else {
         panic!("expected hidden init command");
     };
-    assert_eq!(init.interface, ProviderInterface::Anthropic);
+    assert_eq!(init.interface, ProviderInterface::AnthropicMessages);
     assert_eq!(init.model_alias, "default");
     assert_eq!(
         init.api_key_source,
@@ -350,6 +385,23 @@ fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
     assert!(err.contains("--api-key-stdin"));
     assert!(err.contains("--api-key-env"));
     assert!(!err.contains("plaintext-secret"));
+
+    let err = parse_config_args(vec![
+        OsString::from("init"),
+        OsString::from("--non-interactive"),
+        OsString::from("--interface"),
+        OsString::from("openai-compatible"),
+        OsString::from("--model-service-url"),
+        OsString::from("https://api.example.com/v1"),
+        OsString::from("--model-name"),
+        OsString::from("test-model"),
+        OsString::from("--api-key-env"),
+        OsString::from("TEST_PROVIDER_KEY"),
+    ])
+    .expect_err("ambiguous interface names should be rejected");
+    assert!(err.contains("openai-chat-completions"));
+    assert!(err.contains("openai-responses"));
+    assert!(err.contains("anthropic-messages"));
 }
 
 #[test]

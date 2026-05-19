@@ -13,27 +13,31 @@ use crate::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderInterface {
-    OpenAi,
-    Anthropic,
+    OpenAiChatCompletions,
+    AnthropicMessages,
     OpenAiResponses,
 }
 
 impl ProviderInterface {
     fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "openai" | "openai-completion" => Ok(Self::OpenAi),
-            "anthropic" | "claude" => Ok(Self::Anthropic),
+        let value = value.trim().to_ascii_lowercase();
+        match value.as_str() {
+            "openai" | "openai-completion" | "openai-chat" | "openai-chat-completions"
+            | "chat" | "chat-completions" => Ok(Self::OpenAiChatCompletions),
+            "anthropic" | "claude" | "anthropic-messages" | "claude-messages" => {
+                Ok(Self::AnthropicMessages)
+            }
             "openai-responses" | "responses" => Ok(Self::OpenAiResponses),
             other => Err(format!(
-                "unsupported --interface `{other}`; use openai, anthropic, or openai-responses"
+                "unsupported --interface `{other}`; use openai-chat-completions, openai-responses, or anthropic-messages"
             )),
         }
     }
 
     fn config_format(self) -> &'static str {
         match self {
-            Self::OpenAi => "openai-completion",
-            Self::Anthropic => "anthropic",
+            Self::OpenAiChatCompletions => "openai-completion",
+            Self::AnthropicMessages => "anthropic",
             Self::OpenAiResponses => "openai-responses",
         }
     }
@@ -97,8 +101,10 @@ Usage:
 Configure llmup for local Codex CLI and Claude Code launchers.
 
 Run without arguments to create the local config used by llmup-codex and
-llmup-claude. The default setup is OpenAI-compatible; the prompt also accepts
-anthropic or responses when your model service requires a different API format.
+llmup-claude. The default setup is OpenAI Chat Completions
+(/v1/chat/completions); the prompt also accepts OpenAI Responses
+(/v1/responses) or Anthropic Messages (/v1/messages) when your model service
+requires a different API format.
 Run doctor to validate local config and secrets files without contacting providers.
 ";
 
@@ -196,7 +202,7 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
 
     writeln!(
         stdout,
-        "llmup local setup\n\nThis creates a local proxy config for llmup-codex and llmup-claude.\nThe default is an OpenAI-compatible provider."
+        "llmup local setup\n\nThis creates a local proxy config for llmup-codex and llmup-claude.\nThe default is OpenAI Chat Completions (/v1/chat/completions)."
     )
     .map_err(|error| format!("failed to write prompt: {error}"))?;
 
@@ -284,16 +290,18 @@ fn prompt_provider_interface(
     let value = prompt_optional_line(
         stdin,
         stdout,
-        "\nModel service API format [openai]: openai, anthropic, or responses: ",
+        "\nModel service API format [openai-chat-completions]: openai-chat-completions, openai-responses, or anthropic-messages: ",
     )?;
-    let value = value.trim().to_ascii_lowercase();
-    match value.as_str() {
-        "" | "openai" | "openai-compatible" | "openai-completion" => Ok(ProviderInterface::OpenAi),
-        "anthropic" | "claude" => Ok(ProviderInterface::Anthropic),
-        "responses" | "openai-responses" => Ok(ProviderInterface::OpenAiResponses),
-        other => Err(format!(
-            "unsupported model service API format `{other}`; use openai, anthropic, or responses"
-        )),
+    let value = value.trim();
+    if value.is_empty() {
+        Ok(ProviderInterface::OpenAiChatCompletions)
+    } else {
+        ProviderInterface::parse(value)
+            .map_err(|_| {
+                format!(
+                    "unsupported model service API format `{value}`; use openai-chat-completions, openai-responses, or anthropic-messages"
+                )
+            })
     }
 }
 
@@ -748,7 +756,7 @@ fn command_in_path(command: &str) -> bool {
 
 fn parse_hidden_init_args(args: &[OsString]) -> Result<InitCliOptions, String> {
     let mut non_interactive = false;
-    let mut interface = ProviderInterface::OpenAi;
+    let mut interface = ProviderInterface::OpenAiChatCompletions;
     let mut model_service_url = None;
     let mut model_name = None;
     let mut model_alias = "default".to_string();

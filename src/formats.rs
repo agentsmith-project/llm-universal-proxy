@@ -8,9 +8,15 @@ use std::fmt;
 pub enum UpstreamFormat {
     /// Anthropic (Claude) — e.g. /v1/messages, messages[], content blocks.
     #[serde(rename = "anthropic", alias = "claude")]
+    #[serde(alias = "anthropic-messages", alias = "claude-messages")]
     Anthropic,
     /// OpenAI Chat Completions — /v1/chat/completions, messages[].
     #[serde(rename = "openai-completion", alias = "openai", alias = "chat")]
+    #[serde(
+        alias = "openai-chat",
+        alias = "openai-chat-completions",
+        alias = "chat-completions"
+    )]
     OpenAiCompletion,
     /// OpenAI Responses API — /v1/responses, input[], instructions.
     #[serde(rename = "openai-responses", alias = "responses")]
@@ -37,8 +43,15 @@ impl std::str::FromStr for UpstreamFormat {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "google" | "gemini" => Err(removed_native_gemini_format_message()),
-            "anthropic" | "claude" => Ok(UpstreamFormat::Anthropic),
-            "openai" | "openai-completion" | "chat" => Ok(UpstreamFormat::OpenAiCompletion),
+            "anthropic" | "claude" | "anthropic-messages" | "claude-messages" => {
+                Ok(UpstreamFormat::Anthropic)
+            }
+            "openai"
+            | "openai-completion"
+            | "openai-chat"
+            | "openai-chat-completions"
+            | "chat"
+            | "chat-completions" => Ok(UpstreamFormat::OpenAiCompletion),
             "openai-responses" | "responses" => Ok(UpstreamFormat::OpenAiResponses),
             _ => Err(format!("unknown format: {s}")),
         }
@@ -86,6 +99,10 @@ mod tests {
             "claude".parse::<UpstreamFormat>().unwrap(),
             UpstreamFormat::Anthropic
         );
+        assert_eq!(
+            "anthropic-messages".parse::<UpstreamFormat>().unwrap(),
+            UpstreamFormat::Anthropic
+        );
     }
 
     #[test]
@@ -100,6 +117,14 @@ mod tests {
         );
         assert_eq!(
             "chat".parse::<UpstreamFormat>().unwrap(),
+            UpstreamFormat::OpenAiCompletion
+        );
+        assert_eq!(
+            "openai-chat-completions".parse::<UpstreamFormat>().unwrap(),
+            UpstreamFormat::OpenAiCompletion
+        );
+        assert_eq!(
+            "chat-completions".parse::<UpstreamFormat>().unwrap(),
             UpstreamFormat::OpenAiCompletion
         );
     }

@@ -14,7 +14,7 @@ The proxy listens on the address in that file. Keep it running while manually wi
 
 ## Multi-Endpoint YAML
 
-This example exposes one OpenAI-compatible upstream, one Anthropic Messages-compatible upstream, and Gemini through Google's OpenAI-compatible endpoint. Replace URLs, model names, and environment variable names for your provider.
+This example exposes one OpenAI Chat Completions-compatible upstream, one Anthropic Messages-compatible upstream, and Gemini through Google's OpenAI-compatible endpoint configured as the OpenAI Chat Completions wire format. Replace URLs, model names, and environment variable names for your provider.
 
 ```yaml
 listen: 127.0.0.1:18888
@@ -87,9 +87,9 @@ claude --model claude-like
 
 Claude Code appends its Messages path to the configured base URL, so the proxy receives Anthropic-style Messages traffic.
 
-## Google OpenAI-Compatible Gemini
+## Google Gemini Through OpenAI Chat Completions
 
-Gemini is supported through Google's OpenAI-compatible endpoint. Configure it as an OpenAI-compatible upstream with `format: openai-completion` and the API root `https://generativelanguage.googleapis.com/v1beta/openai`.
+Gemini is supported through Google's OpenAI-compatible endpoint. Configure it as an OpenAI Chat Completions-format upstream with `format: openai-completion` and the API root `https://generativelanguage.googleapis.com/v1beta/openai`.
 
 Native Gemini `generateContent` routing is not the active user surface. If a Gemini request depends on native-only semantics that cannot be safely represented through the configured protocol, the proxy should fail closed instead of inventing behavior.
 

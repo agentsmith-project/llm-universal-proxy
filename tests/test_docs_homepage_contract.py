@@ -284,7 +284,8 @@ class DocsHomepageContractTests(unittest.TestCase):
 
         for snippet in (
             "首次配置示例必须保持 provider-neutral",
-            "MiniMax 只能作为可替换的 OpenAI-compatible 示例",
+            "MiniMax 只能作为可替换的 OpenAI Chat Completions 兼容服务示例",
+            "协议格式，可直接回车使用默认 `openai-chat-completions`",
             "模型服务地址，例如 `https://api.example.com/v1`",
             "模型名，例如 `provider-model-id`",
             "`llmup-codex --llmup-no-proxy -- <native args>`",

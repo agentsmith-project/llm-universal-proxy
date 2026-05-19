@@ -48,4 +48,4 @@ For commands that should not go through the proxy, such as login, native help, n
 
 `llmup-config` stores provider credentials for the proxy. The launchers give Codex or Claude Code only the local proxy credential needed to call the proxy. This keeps the provider key on the proxy side instead of putting it into the client environment.
 
-For manual auth modes, explicit base URLs, direct proxy startup, multi-endpoint YAML, Gemini through Google's OpenAI-compatible endpoint, or container/admin links, use [Advanced Usage](./advanced-usage.md).
+For manual auth modes, explicit base URLs, direct proxy startup, multi-endpoint YAML, Gemini through Google's OpenAI-compatible endpoint as OpenAI Chat Completions format, or container/admin links, use [Advanced Usage](./advanced-usage.md).

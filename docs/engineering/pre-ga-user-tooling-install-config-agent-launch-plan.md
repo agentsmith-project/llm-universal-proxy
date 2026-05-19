@@ -159,25 +159,26 @@ llmup-config
 
 交互流程默认只问最少问题，提示文案面向普通用户：
 
-首次配置示例必须保持 provider-neutral。MiniMax 只能作为可替换的 OpenAI-compatible 示例，不能写得像默认 provider。
+首次配置示例必须保持 provider-neutral。MiniMax 只能作为可替换的 OpenAI Chat Completions 兼容服务示例，不能写得像默认 provider。
 
-1. 模型服务地址，例如 `https://api.example.com/v1`。
-2. 模型名，例如 `provider-model-id`。
-3. API Key，以隐藏输入方式读取。
+1. 协议格式，可直接回车使用默认 `openai-chat-completions`。
+2. 模型服务地址，例如 `https://api.example.com/v1`。
+3. 模型名，例如 `provider-model-id`。
+4. API Key，以隐藏输入方式读取。
 
-默认按 OpenAI-compatible 服务生成配置，本地模型名固定为 `default`，不要在第一版向导里询问。协议格式用一个带默认值的可选问题处理：用户直接回车就是 OpenAI-compatible；只有服务商明确要求 Anthropic 或 OpenAI Responses 时，才输入对应值。
+默认按 OpenAI Chat Completions (`/v1/chat/completions`) 服务生成配置，本地模型名固定为 `default`，不要在第一版向导里询问。协议格式用一个带默认值的可选问题处理：用户直接回车就是 `openai-chat-completions`；只有服务商明确要求 OpenAI Responses 或 Anthropic Messages 时，才输入对应值。
 
-- OpenAI 接口，默认推荐。不确定就直接回车。
-- Claude/Anthropic 接口。
-- OpenAI Responses 接口。仅当服务商明确要求时选择。
+- OpenAI Chat Completions 接口，默认推荐。不确定就直接回车。
+- OpenAI Responses 接口。仅当服务商明确要求 `/v1/responses` 时选择。
+- Anthropic Messages 接口。仅当服务商明确要求 `/v1/messages` 时选择。
 
 工程实现再把用户选择映射到内部格式：
 
 | 用户看到的选择 | 内部格式 |
 | --- | --- |
-| OpenAI 接口 | `openai-completion` |
-| Claude/Anthropic 接口 | `anthropic` |
-| OpenAI Responses 接口 | `openai-responses` |
+| `openai-chat-completions` | `openai-completion` |
+| `openai-responses` | `openai-responses` |
+| `anthropic-messages` | `anthropic` |
 
 生成结果：
 
@@ -625,7 +626,7 @@ Launcher 测试：
 面向用户：
 
 - 全新 macOS/Linux/WSL 环境里，用户可以通过在线脚本安装主二进制和三个友好命令。
-- 用户运行 `llmup-config` 后，可以不手写 YAML、不 export 环境变量完成任意 OpenAI-compatible 服务配置；MiniMax 只能作为可替换示例出现。
+- 用户运行 `llmup-config` 后，可以不手写 YAML、不 export 环境变量完成 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages 服务配置；MiniMax 只能作为可替换示例出现。
 - 用户运行 `llmup-codex` 后，Codex CLI 请求经本地 llmup 到达 mock upstream，认证头是 provider key，模型名由 `default` alias 解析为真实模型，客户端只持有本地 proxy key，退出码透传。
 - 用户运行 `llmup-claude` 后，Claude Code 请求经本地 llmup 到达 mock upstream，认证头是 provider key，模型名由 `default` alias 解析为真实模型，客户端只持有本地 proxy key，退出码透传。
 - `llmup-codex resume --last`、`llmup-codex --yolo`、`llmup-claude --resume`、`llmup-claude --dangerously-skip-permissions` 不被 llmup 拒绝或吞参。
