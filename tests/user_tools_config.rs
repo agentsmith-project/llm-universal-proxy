@@ -108,7 +108,7 @@ fn seed_local_config(llmup_home: &Path, yaml: &str) -> (PathBuf, PathBuf, String
 fn yaml_get<'a>(value: &'a Value, key: &str) -> &'a Value {
     value
         .as_mapping()
-        .and_then(|mapping| mapping.get(&Value::String(key.to_string())))
+        .and_then(|mapping| mapping.get(Value::String(key.to_string())))
         .unwrap_or_else(|| panic!("missing YAML key {key}"))
 }
 
@@ -370,7 +370,7 @@ model_aliases:
     assert_eq!(
         yaml_get(yaml_get(vision, "surface"), "modalities")
             .as_mapping()
-            .and_then(|mapping| mapping.get(&Value::String("input".to_string())))
+            .and_then(|mapping| mapping.get(Value::String("input".to_string())))
             .and_then(Value::as_sequence)
             .map(Vec::len),
         Some(2)

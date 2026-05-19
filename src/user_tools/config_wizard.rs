@@ -932,11 +932,11 @@ fn set_limits_in_config(path: &Path, options: &SetLimitsCliOptions) -> Result<St
 fn update_alias_limits(root: &mut Value, alias: &str, limits: Value) -> Result<(), String> {
     let root = yaml_mapping_mut(root, "config root")?;
     let aliases = root
-        .get_mut(&yaml_key("model_aliases"))
+        .get_mut(yaml_key("model_aliases"))
         .ok_or_else(|| format!("unknown alias `{alias}`"))?;
     let aliases = yaml_mapping_mut(aliases, "model_aliases")?;
     let alias_value = aliases
-        .get_mut(&yaml_key(alias))
+        .get_mut(yaml_key(alias))
         .ok_or_else(|| format!("unknown alias `{alias}`"))?;
 
     match alias_value {
@@ -949,7 +949,7 @@ fn update_alias_limits(root: &mut Value, alias: &str, limits: Value) -> Result<(
             Ok(())
         }
         Value::Mapping(mapping) => {
-            validate_alias_target_value(alias, mapping.get(&yaml_key("target")))?;
+            validate_alias_target_value(alias, mapping.get(yaml_key("target")))?;
             mapping.insert(yaml_key("limits"), limits);
             Ok(())
         }
@@ -962,11 +962,11 @@ fn update_alias_limits(root: &mut Value, alias: &str, limits: Value) -> Result<(
 fn update_upstream_limits(root: &mut Value, upstream: &str, limits: Value) -> Result<(), String> {
     let root = yaml_mapping_mut(root, "config root")?;
     let upstreams = root
-        .get_mut(&yaml_key("upstreams"))
+        .get_mut(yaml_key("upstreams"))
         .ok_or_else(|| format!("unknown upstream `{upstream}`"))?;
     let upstreams = yaml_mapping_mut(upstreams, "upstreams")?;
     let upstream_value = upstreams
-        .get_mut(&yaml_key(upstream))
+        .get_mut(yaml_key(upstream))
         .ok_or_else(|| format!("unknown upstream `{upstream}`"))?;
     let upstream_mapping = yaml_mapping_mut(upstream_value, &format!("upstream `{upstream}`"))?;
     upstream_mapping.insert(yaml_key("limits"), limits);

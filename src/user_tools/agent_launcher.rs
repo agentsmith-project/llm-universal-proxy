@@ -986,7 +986,7 @@ fn should_scrub_claude_profile_env(key: &OsStr) -> bool {
             key == *prefix
                 || key
                     .strip_prefix(prefix)
-                    .map_or(false, |suffix| suffix.starts_with('_'))
+                    .is_some_and(|suffix| suffix.starts_with('_'))
         })
 }
 
