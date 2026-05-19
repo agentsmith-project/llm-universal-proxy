@@ -57,11 +57,9 @@ class DefaultMatrixSurfaceContractTests(unittest.TestCase):
         self.assertIn("PRESET-ANTHROPIC-COMPATIBLE", parsed.upstream_surface_defaults)
         self.assertIn("PRESET-OPENAI-COMPATIBLE", parsed.upstream_surface_defaults)
         self.assertIn("PRESET-OPENAI-RESPONSES-COMPATIBLE", parsed.upstream_surface_defaults)
-        self.assertNotIn("PRESET-ANTHROPIC-COMPATIBLE", parsed.upstream_codex_metadata)
-        self.assertNotIn("PRESET-OPENAI-COMPATIBLE", parsed.upstream_codex_metadata)
         self.assertNotIn(
-            "PRESET-OPENAI-RESPONSES-COMPATIBLE",
-            parsed.upstream_codex_metadata,
+            "codex_metadata",
+            CONFIG_PATH.read_text(encoding="utf-8"),
         )
 
         targets = {

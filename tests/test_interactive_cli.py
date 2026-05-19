@@ -412,6 +412,10 @@ print(json.dumps({
                     "TMPDIR": str(outer_tmp),
                     "LANG": os.environ.get("LANG", "C.UTF-8"),
                     "PYTHONPYCACHEPREFIX": str(bytecode_probe),
+                    "PRESET_ENDPOINT_API_KEY": "proxy-only-secret",
+                    "PRESET_OPENAI_ENDPOINT_BASE_URL": "https://openai-compatible.example/v1",
+                    "PRESET_ANTHROPIC_ENDPOINT_BASE_URL": "https://anthropic-compatible.example/v1",
+                    "PRESET_ENDPOINT_MODEL": "provider-configured-model",
                 }
                 self.assertNotIn("PYTHONDONTWRITEBYTECODE", env)
 
