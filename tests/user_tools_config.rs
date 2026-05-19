@@ -149,7 +149,7 @@ fn interactive_config_wizard_creates_config_instead_of_printing_usage_only() {
     let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
 
     let mut stdin = Cursor::new(
-        b"https://api.minimaxi.com/v1\nMiniMax-M2.7-highspeed\nprovider-secret-from-prompt\n"
+        b"\nhttps://api.minimaxi.com/v1\nMiniMax-M2.7-highspeed\nprovider-secret-from-prompt\n"
             .to_vec(),
     );
     let mut stdout = Vec::new();
@@ -173,6 +173,39 @@ fn interactive_config_wizard_creates_config_instead_of_printing_usage_only() {
 
     let secrets = fs::read_to_string(llmup_home.join("secrets.env")).expect("read secrets");
     assert!(secrets.contains("LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret-from-prompt"));
+}
+
+#[test]
+fn interactive_config_wizard_allows_protocol_format_selection() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("interactive-format");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+
+    let mut stdin = Cursor::new(
+        b"anthropic\nhttps://api.anthropic.example/v1\nclaude-compatible-model\nprovider-secret-from-prompt\n"
+            .to_vec(),
+    );
+    let mut stdout = Vec::new();
+
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("interactive config should succeed");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Model service API format"));
+    assert!(!output.contains("provider-secret-from-prompt"));
+
+    let config_yaml =
+        fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
+    assert!(config_yaml.contains("api_root: https://api.anthropic.example/v1"));
+    assert!(config_yaml.contains("format: anthropic"));
+    assert!(config_yaml.contains("default: DEFAULT:claude-compatible-model"));
+    assert!(!config_yaml.contains("provider-secret-from-prompt"));
 }
 
 #[test]

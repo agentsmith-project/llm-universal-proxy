@@ -97,7 +97,8 @@ Usage:
 Configure llmup for local Codex CLI and Claude Code launchers.
 
 Run without arguments to create the local config used by llmup-codex and
-llmup-claude. The default setup is for OpenAI-compatible providers.
+llmup-claude. The default setup is OpenAI-compatible; the prompt also accepts
+anthropic or responses when your model service requires a different API format.
 Run doctor to validate local config and secrets files without contacting providers.
 ";
 
@@ -235,10 +236,11 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
         }
     }
 
+    let interface = prompt_provider_interface(stdin, stdout)?;
     let model_service_url = prompt_required_line(
         stdin,
         stdout,
-        "\nModel service API root, for example https://api.minimaxi.com/v1: ",
+        "Model service API root, for example https://api.example.com/v1: ",
         "model service API root",
     )?;
     let model_name = prompt_required_line(
@@ -262,7 +264,7 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
                 "LLMUP_CLAUDE_CONFIG_DIR",
                 home.join(".llmup-claude"),
             ),
-            interface: ProviderInterface::OpenAi,
+            interface,
             model_service_url,
             model_name,
             model_alias: "default".to_string(),
@@ -273,6 +275,26 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
     stdout
         .write_all(result.summary.as_bytes())
         .map_err(|error| format!("failed to write summary: {error}"))
+}
+
+fn prompt_provider_interface(
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+) -> Result<ProviderInterface, String> {
+    let value = prompt_optional_line(
+        stdin,
+        stdout,
+        "\nModel service API format [openai]: openai, anthropic, or responses: ",
+    )?;
+    let value = value.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "" | "openai" | "openai-compatible" | "openai-completion" => Ok(ProviderInterface::OpenAi),
+        "anthropic" | "claude" => Ok(ProviderInterface::Anthropic),
+        "responses" | "openai-responses" => Ok(ProviderInterface::OpenAiResponses),
+        other => Err(format!(
+            "unsupported model service API format `{other}`; use openai, anthropic, or responses"
+        )),
+    }
 }
 
 fn prompt_required_line(

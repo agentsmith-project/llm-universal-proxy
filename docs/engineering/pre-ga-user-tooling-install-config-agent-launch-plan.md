@@ -165,7 +165,7 @@ llmup-config
 2. 模型名，例如 `provider-model-id`。
 3. API Key，以隐藏输入方式读取。
 
-默认按 OpenAI-compatible 服务生成配置，本地模型名固定为 `default`，不要在第一版向导里询问。只有用户明确选择“更改服务类型”时，才展示服务类型选择：
+默认按 OpenAI-compatible 服务生成配置，本地模型名固定为 `default`，不要在第一版向导里询问。协议格式用一个带默认值的可选问题处理：用户直接回车就是 OpenAI-compatible；只有服务商明确要求 Anthropic 或 OpenAI Responses 时，才输入对应值。
 
 - OpenAI 接口，默认推荐。不确定就直接回车。
 - Claude/Anthropic 接口。
