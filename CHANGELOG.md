@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.36 - 2026-05-19
+
+- Advanced the main-branch release identity to Cargo package version `0.2.36`, the next patch version after the published, occupied `v0.2.35` tag, without moving, deleting, or reusing the existing tag.
+- Refreshed the checked-in container publication manifest and docs around the actual published `v0.2.35` multi-arch image digest while keeping `0.2.36` / `v0.2.36` as the next release identity, not a published container tag yet.
+- Verified the `v0.2.35` release workflow, tag-triggered CI, GitHub Release, GHCR `v0.2.35`, `0.2.35`, and `latest` image tags, plus the online `install.sh` path after publication.
+
 ## v0.2.35 - 2026-05-19
 
 - Clarified OpenAI-family format naming across config, user tooling, traces, fixtures, and examples: Chat Completions now emits `openai-chat-completions`, Responses remains `openai-responses`, and the old `openai-completion` spelling is kept only as an input alias.
