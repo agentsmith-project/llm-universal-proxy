@@ -63,12 +63,8 @@ That keeps the first-use path small: configure once, then launch the native clie
 
 - [docs/clients.md](./docs/clients.md): launcher-managed Codex and Claude Code behavior
 - [docs/advanced-usage.md](./docs/advanced-usage.md): manual proxy startup, YAML, manual Codex/Claude wiring, and auth modes
-- [docs/max-compat-design.md](./docs/max-compat-design.md): compatibility design notes
-- [docs/protocol-compatibility-matrix.md](./docs/protocol-compatibility-matrix.md): protocol conversion matrix
-- [docs/DESIGN.md](./docs/DESIGN.md): system design
 - [docs/container.md](./docs/container.md): container image usage
 - [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md): admin and dynamic config reference
-- [docs/ga-readiness-review.md](./docs/ga-readiness-review.md): GA scope and compatibility boundaries
 
 ## License
 

@@ -155,27 +155,35 @@ class DocsHomepageContractTests(unittest.TestCase):
         )
 
     def test_readme_new_user_model_name_is_main_not_default(self):
-        text = self.read_text("README.md")
+        expected = {
+            "README.md": (
+                "The default local model name is `main`.",
+                "`llmup-codex` and `llmup-claude` use `main` unless you choose another llmup alias.",
+            ),
+            "README_CN.md": (
+                "默认本地模型名是 `main`。",
+                "`llmup-codex` 和 `llmup-claude` 都会使用 `main`。",
+            ),
+        }
 
-        for snippet in (
-            "The default local model name is `main`.",
-            "`llmup-codex` and `llmup-claude` use `main` unless you choose another llmup alias.",
-        ):
-            with self.subTest(snippet=snippet):
-                self.assertIn(snippet, text)
+        for relative_path, snippets in expected.items():
+            text = self.read_text(relative_path)
+            for snippet in snippets:
+                with self.subTest(path=relative_path, snippet=snippet):
+                    self.assertIn(snippet, text)
 
-        for forbidden in (
-            "`default` as the model",
-            "`default` model",
-            "`default` alias",
-            "--alias default",
-            "--llmup-model default",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, text)
+            for forbidden in (
+                "`default` as the model",
+                "`default` model",
+                "`default` alias",
+                "--alias default",
+                "--llmup-model default",
+            ):
+                with self.subTest(path=relative_path, forbidden=forbidden):
+                    self.assertNotIn(forbidden, text)
 
     def test_readme_and_clients_use_explicit_protocol_names(self):
-        for relative_path in ("README.md", "docs/clients.md"):
+        for relative_path in ("README.md", "README_CN.md", "docs/clients.md"):
             text = self.read_text(relative_path)
             for snippet in (
                 "`openai-chat-completions`",

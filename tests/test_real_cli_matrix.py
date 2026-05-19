@@ -55,9 +55,10 @@ LOCKED_TOOL_CONTRACT_LINES = (
     "`apply_patch` remains a public freeform tool on client-visible surfaces.",
 )
 README_DOC_ENTRY_SNIPPETS = (
-    "[docs/max-compat-design.md](./docs/max-compat-design.md)",
-    "[docs/protocol-compatibility-matrix.md](./docs/protocol-compatibility-matrix.md)",
-    "[docs/DESIGN.md](./docs/DESIGN.md)",
+    "[docs/clients.md](./docs/clients.md)",
+    "[docs/advanced-usage.md](./docs/advanced-usage.md)",
+    "[docs/container.md](./docs/container.md)",
+    "[docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md)",
 )
 README_FORBIDDEN_RESERVED_PREFIX_PUBLIC_CONTRACT_PATTERNS = (
     r"`__llmup_custom__[^`]*`\s+is\s+(?:an?\s+)?public contract",

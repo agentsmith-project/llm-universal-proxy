@@ -155,7 +155,7 @@ llmup-config
 - 第一次运行：创建配置、保存密钥、做一次基础检查，然后打印下一步命令。
 - 已配置过：显示脱敏摘要，并提供“直接完成 / 重新配置 / 运行检查”三个选择。
 
-第一版 README 和普通帮助不展示 `init`、`show`、`doctor` 三套子命令，避免用户产生“到底该运行哪个”的疑问。工程实现可以保留隐藏的非交互入口给 CI 和自动化测试使用，但它不是用户主路径。
+第一版 README 和普通帮助不展示 `init` 或 `show` 这类第二套配置入口，避免用户产生“到底该运行哪个”的疑问。工程实现也不保留隐藏的非交互初始化命令；CI 和自动化测试应喂入真实交互入口，或在 Rust 单元测试里直接调用内部生成函数。
 
 交互流程默认只问最少问题，提示文案面向普通用户：
 
@@ -243,19 +243,7 @@ model_aliases:
 - API Key 是否已配置，永不打印明文。
 - 下一步命令：按用户使用的客户端运行 `llmup-codex` 或 `llmup-claude`。
 
-非交互初始化只用于测试和高级自动化，必须避免把密钥直接写在命令行参数里；README 第一版不展示这条路径：
-
-```bash
-printf '%s\n' "$PROVIDER_API_KEY" | llmup-config init \
-  --non-interactive \
-  --interface openai-chat-completions \
-  --model-service-url https://api.example.com/v1 \
-  --model-name provider-model-id \
-  --model-alias main \
-  --api-key-stdin
-```
-
-也支持 `--api-key-env PROVIDER_API_KEY`。不提供 `--api-key <value>`，避免密钥进入 shell history 或进程列表。
+不提供隐藏的 `llmup-config init --non-interactive`。测试需要生成配置时，优先通过真实交互入口喂入 stdin；Rust 单元测试可以直接调用内部生成函数。这样用户和测试只维护同一条产品路径，避免 hidden command 变成第二套心智。
 
 ## Agent 启动器设计
 
@@ -571,14 +559,14 @@ Rust 单元/集成测试：
 
 - `llm-universal-proxy --config proxy.yaml` 旧行为不变。
 - `llmup-config`、`llmup-codex`、`llmup-claude` 分发正确；用户帮助快照中不得出现独立 `llmup` 入口或 `llmup <subcommand>` 用法。
-- `llmup-config init --non-interactive ...` 生成的 YAML 能被 `Config::from_yaml_str` 解析并 validate。
-- `llmup-config` 不覆盖已有配置，除非显式 `--force`。
+- `llmup-config` 交互式生成的 YAML 能被 `Config::from_yaml_str` 解析并 validate。
+- `llmup-config` 不覆盖已有配置，除非用户在交互式流程里显式选择 reconfigure。
 - `secrets.env` 写入权限为 `0600` 或平台等价。
 - `llmup-config` 的脱敏摘要和检查输出不包含明文 API Key。
 - env file parser 支持安全的 `KEY=value` 子集，拒绝 shell 展开、命令替换和非法 key。
 - `llmup-config` 内置检查对未安装的 Codex/Claude 只给 warning，不把配置生成结果标成失败；对应 launcher 真正启动时再阻塞。
 - runtime YAML 生成保留完整 `data_auth`，覆盖 `listen`，不修改用户原始配置。
-- P0 full-flow E2E：临时 `HOME` 下运行隐藏非交互初始化，生成 `config.yaml` / `secrets.env`；`llmup-codex` 和 `llmup-claude` 分别启动本地 proxy；fake client 使用注入的 base URL 发请求；mock upstream 断言请求到达、model alias 解析为真实模型、provider auth header 正确；fake client 环境断言没有 `secrets.env` 中声明的真实 provider key，只有本地 proxy key；用户原始 `~/.llmup/config.yaml` 未被 launcher 原地改写，只有 runtime YAML 覆盖本次 `listen`。
+- P0 full-flow E2E：临时 `HOME` 下运行真实 `llmup-config` 交互入口并通过 stdin 输入配置，生成 `config.yaml` / `secrets.env`；`llmup-codex` 和 `llmup-claude` 分别启动本地 proxy；fake client 使用注入的 base URL 发请求；mock upstream 断言请求到达、model alias 解析为真实模型、provider auth header 正确；fake client 环境断言没有 `secrets.env` 中声明的真实 provider key，只有本地 proxy key；用户原始 `~/.llmup/config.yaml` 未被 launcher 原地改写，只有 runtime YAML 覆盖本次 `listen`。
 
 Launcher 测试：
 

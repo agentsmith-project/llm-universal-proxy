@@ -39,7 +39,11 @@ llmup-claude
 
 真实模型服务 Key 由 `llmup-config` 保存到本机代理配置里，不需要粘到 Codex CLI 或 Claude Code 里。launcher 只把本地代理密码交给客户端，真实 provider key 留在 proxy 侧。
 
-launcher 也会管理本地代理进程、客户端 base URL、默认模型别名，以及 llmup 专用的 Codex/Claude 状态目录。
+向导问“模型服务类型”时，请按服务商文档里的 API 形态选择：`openai-chat-completions`、`openai-responses` 或 `anthropic-messages`。
+
+默认本地模型名是 `main`。除非你另外选择了 llmup 模型别名，`llmup-codex` 和 `llmup-claude` 都会使用 `main`。
+
+launcher 也会管理本地代理进程、客户端 base URL、选中的模型别名，以及 llmup 专用的 Codex/Claude 状态目录。
 
 ## 为什么没有独立的 `llmup` 命令
 
@@ -61,7 +65,6 @@ launcher 也会管理本地代理进程、客户端 base URL、默认模型别�
 - [docs/advanced-usage.md](./docs/advanced-usage.md)：手动启动 proxy、YAML、手动 Codex/Claude 接线和认证模式
 - [docs/container.md](./docs/container.md)：容器镜像用法
 - [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md)：Admin 和动态配置参考
-- [docs/ga-readiness-review.md](./docs/ga-readiness-review.md)：GA 范围和兼容边界
 
 ## License
 

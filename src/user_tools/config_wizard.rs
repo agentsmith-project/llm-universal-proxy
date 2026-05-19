@@ -49,23 +49,12 @@ pub enum ApiKeySource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InitCliOptions {
-    pub interface: ProviderInterface,
-    pub model_service_url: String,
-    pub model_name: String,
-    pub model_alias: String,
-    pub force: bool,
-    pub api_key_source: ApiKeySource,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigCommand {
     Interactive,
     Doctor,
     List,
     Help,
     Version,
-    Init(InitCliOptions),
     AddModel(AddModelCliOptions),
     SetLimits(SetLimitsCliOptions),
 }
@@ -178,10 +167,7 @@ pub fn parse_config_args(
     if first == "add-model" {
         return parse_add_model_args(&args[1..]).map(ConfigCommand::AddModel);
     }
-    if first != "init" {
-        return Err(format!("unknown llmup-config command `{first}`"));
-    }
-    parse_hidden_init_args(&args[1..]).map(ConfigCommand::Init)
+    Err(format!("unknown llmup-config command `{first}`"))
 }
 
 pub fn run_cli(
@@ -250,34 +236,6 @@ pub fn run_cli(
                 .map_err(|error| format!("failed to write summary: {error}"))?;
             Ok(0)
         }
-        ConfigCommand::Init(init) => {
-            let api_key = match init.api_key_source {
-                ApiKeySource::Stdin => read_api_key_from_stdin(stdin)?,
-                ApiKeySource::Env(name) => std::env::var(&name).map_err(|error| {
-                    format!("failed to read API key from environment variable `{name}`: {error}")
-                })?,
-            };
-            let home = home_dir_from_env()?;
-            let llmup_home = env_path_or_default("LLMUP_HOME", home.join(".llmup"));
-            let options = InitOptions {
-                codex_home: env_path_or_default("LLMUP_CODEX_HOME", home.join(".llmup-codex")),
-                claude_config_dir: env_path_or_default(
-                    "LLMUP_CLAUDE_CONFIG_DIR",
-                    home.join(".llmup-claude"),
-                ),
-                llmup_home,
-                interface: init.interface,
-                model_service_url: init.model_service_url,
-                model_name: init.model_name,
-                model_alias: init.model_alias,
-                force: init.force,
-            };
-            let result = init_non_interactive(options, &api_key)?;
-            stdout
-                .write_all(result.summary.as_bytes())
-                .map_err(|error| format!("failed to write summary: {error}"))?;
-            Ok(0)
-        }
     }
 }
 
@@ -302,12 +260,19 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
             .map(|config| legacy_default_rename_available(&config))
             .unwrap_or(false);
         let prompt = if rename_available {
-            "Press Enter to finish, type add-model, rename-main, reconfigure, or doctor: "
+            "This config uses legacy local model `default`. Press Enter to rename it to `main`, or type reconfigure or doctor: "
         } else {
             "Press Enter to finish, type add-model, reconfigure, or doctor: "
         };
         let answer = prompt_optional_line(stdin, stdout, prompt)?;
         match answer.trim().to_ascii_lowercase().as_str() {
+            "" if rename_available => {
+                let summary = rename_default_alias_to_main(&config_path)?;
+                stdout
+                    .write_all(summary.as_bytes())
+                    .map_err(|error| format!("failed to write summary: {error}"))?;
+                return Ok(());
+            }
             "" => {
                 writeln!(
                     stdout,
@@ -319,15 +284,8 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
             "reconfigure" => {
                 force = true;
             }
-            "add-model" => {
+            "add-model" if !rename_available => {
                 run_interactive_add_model_menu(stdin, stdout, &config_path, &secrets_path)?;
-                return Ok(());
-            }
-            "rename-main" => {
-                let summary = rename_default_alias_to_main(&config_path)?;
-                stdout
-                    .write_all(summary.as_bytes())
-                    .map_err(|error| format!("failed to write summary: {error}"))?;
                 return Ok(());
             }
             "doctor" => {
@@ -338,8 +296,13 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
                 return Err("doctor found problems in the local llmup config".to_string());
             }
             other => {
+                let expected = if rename_available {
+                    "press Enter to rename it to `main`, or type reconfigure or doctor"
+                } else {
+                    "press Enter, type add-model, reconfigure, or doctor"
+                };
                 return Err(format!(
-                    "unknown choice `{other}`; rerun llmup-config and press Enter, type add-model, reconfigure, or doctor"
+                    "unknown choice `{other}`; rerun llmup-config and {expected}"
                 ));
             }
         }
@@ -576,13 +539,13 @@ pub fn init_non_interactive(options: InitOptions, api_key: &str) -> Result<InitR
     if !options.force {
         if config_path.exists() {
             return Err(format!(
-                "{} already exists; rerun hidden init with --force to replace it",
+                "{} already exists; run llmup-config and choose reconfigure to replace it",
                 config_path.display()
             ));
         }
         if secrets_path.exists() {
             return Err(format!(
-                "{} already exists; rerun hidden init with --force to replace it",
+                "{} already exists; run llmup-config and choose reconfigure to replace it",
                 secrets_path.display()
             ));
         }
@@ -890,7 +853,7 @@ fn append_secret_summary(summary: &mut String, config: &Config, secrets: Option<
 fn append_legacy_default_hint(summary: &mut String, config: &Config) {
     if legacy_default_rename_available(config) {
         summary.push_str(
-            "\nSuggestion: alias `default` can be confused with Claude Code's default model; type `rename-main` to rename it to `main` when ready. llmup-config will not migrate it automatically.\n",
+            "\nAction needed: this config uses legacy local model `default`, but llmup launchers use `main` by default. Run `llmup-config` and press Enter to rename `default` to `main`.\n",
         );
     }
 }
@@ -975,7 +938,9 @@ fn rename_default_alias_to_main(config_path: &Path) -> Result<String, String> {
         .validate()
         .map_err(|error| format!("invalid config {}: {error}", config_path.display()))?;
     if config.model_aliases.contains_key("main") {
-        return Err("alias `main` already exists; rename-main will not overwrite it".to_string());
+        return Err(
+            "alias `main` already exists; cannot rename legacy alias `default`".to_string(),
+        );
     }
     if !config.model_aliases.contains_key("default") {
         return Err("alias `default` was not found; nothing to rename".to_string());
@@ -989,7 +954,9 @@ fn rename_default_alias_to_main(config_path: &Path) -> Result<String, String> {
         .ok_or_else(|| "model_aliases must exist to rename alias `default`".to_string())?;
     let aliases = yaml_mapping_mut(aliases_value, "model_aliases")?;
     if aliases.contains_key(yaml_key("main")) {
-        return Err("alias `main` already exists; rename-main will not overwrite it".to_string());
+        return Err(
+            "alias `main` already exists; cannot rename legacy alias `default`".to_string(),
+        );
     }
     let default_value = aliases
         .remove(yaml_key("default"))
@@ -1783,97 +1750,6 @@ fn write_config_file_atomic(path: &Path, contents: &str) -> Result<(), String> {
         let _ = fs::remove_file(&temp_path);
     }
     result
-}
-
-fn parse_hidden_init_args(args: &[OsString]) -> Result<InitCliOptions, String> {
-    let mut non_interactive = false;
-    let mut interface = ProviderInterface::OpenAiChatCompletions;
-    let mut model_service_url = None;
-    let mut model_name = None;
-    let mut model_alias = "main".to_string();
-    let mut force = false;
-    let mut api_key_source = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        let arg = args[index]
-            .to_str()
-            .ok_or_else(|| "llmup-config init arguments must be valid UTF-8".to_string())?;
-        match arg {
-            "--non-interactive" => {
-                non_interactive = true;
-                index += 1;
-            }
-            "--force" => {
-                force = true;
-                index += 1;
-            }
-            "--api-key-stdin" => {
-                set_api_key_source(&mut api_key_source, ApiKeySource::Stdin)?;
-                index += 1;
-            }
-            "--api-key" => {
-                return Err(
-                    "--api-key <value> is not supported; use --api-key-stdin or --api-key-env"
-                        .to_string(),
-                );
-            }
-            value if value.starts_with("--api-key=") => {
-                return Err(
-                    "--api-key=<value> is not supported; use --api-key-stdin or --api-key-env"
-                        .to_string(),
-                );
-            }
-            _ => {
-                if let Some(value) = inline_value(arg, "--interface") {
-                    interface = ProviderInterface::parse(value)?;
-                    index += 1;
-                } else if arg == "--interface" {
-                    let value = take_utf8_value(args, &mut index, "--interface")?;
-                    interface = ProviderInterface::parse(&value)?;
-                } else if let Some(value) = inline_value(arg, "--model-service-url") {
-                    model_service_url = Some(value.to_string());
-                    index += 1;
-                } else if arg == "--model-service-url" {
-                    model_service_url =
-                        Some(take_utf8_value(args, &mut index, "--model-service-url")?);
-                } else if let Some(value) = inline_value(arg, "--model-name") {
-                    model_name = Some(value.to_string());
-                    index += 1;
-                } else if arg == "--model-name" {
-                    model_name = Some(take_utf8_value(args, &mut index, "--model-name")?);
-                } else if let Some(value) = inline_value(arg, "--model-alias") {
-                    model_alias = value.to_string();
-                    index += 1;
-                } else if arg == "--model-alias" {
-                    model_alias = take_utf8_value(args, &mut index, "--model-alias")?;
-                } else if let Some(value) = inline_value(arg, "--api-key-env") {
-                    set_api_key_source(&mut api_key_source, ApiKeySource::Env(value.to_string()))?;
-                    index += 1;
-                } else if arg == "--api-key-env" {
-                    let value = take_utf8_value(args, &mut index, "--api-key-env")?;
-                    set_api_key_source(&mut api_key_source, ApiKeySource::Env(value))?;
-                } else {
-                    return Err(format!("unknown llmup-config init argument `{arg}`"));
-                }
-            }
-        }
-    }
-
-    if !non_interactive {
-        return Err("hidden init requires --non-interactive".to_string());
-    }
-
-    Ok(InitCliOptions {
-        interface,
-        model_service_url: model_service_url
-            .ok_or_else(|| "--model-service-url is required".to_string())?,
-        model_name: model_name.ok_or_else(|| "--model-name is required".to_string())?,
-        model_alias,
-        force,
-        api_key_source: api_key_source
-            .ok_or_else(|| "--api-key-stdin or --api-key-env is required".to_string())?,
-    })
 }
 
 fn set_api_key_source(

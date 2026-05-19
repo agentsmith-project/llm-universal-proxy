@@ -69,36 +69,26 @@ fn init_llmup_config(
     model_name: &str,
     provider_key: &str,
 ) {
-    let mut init = Command::new(llmup_config)
-        .args([
-            "init",
-            "--non-interactive",
-            "--interface",
-            interface,
-            "--model-service-url",
-            model_service_url,
-            "--model-name",
-            model_name,
-            "--model-alias",
-            "main",
-            "--api-key-stdin",
-        ])
+    let mut config = Command::new(llmup_config)
         .env("LLMUP_HOME", llmup_home)
         .env("HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn llmup-config init");
-    init.stdin
+        .expect("spawn llmup-config");
+    config
+        .stdin
         .as_mut()
-        .expect("init stdin")
-        .write_all(format!("{provider_key}\n").as_bytes())
-        .expect("write api key");
-    let init_output = init.wait_with_output().expect("wait init");
+        .expect("config stdin")
+        .write_all(
+            format!("{interface}\n{model_service_url}\n{model_name}\n{provider_key}\n").as_bytes(),
+        )
+        .expect("write interactive config input");
+    let init_output = config.wait_with_output().expect("wait config");
     assert!(
         init_output.status.success(),
-        "init failed stdout={} stderr={}",
+        "config failed stdout={} stderr={}",
         String::from_utf8_lossy(&init_output.stdout),
         String::from_utf8_lossy(&init_output.stderr)
     );
@@ -710,38 +700,14 @@ exit 7
     fs::set_permissions(&fake_codex, perms).expect("chmod fake codex");
 
     let llmup_home = temp.path().join(".llmup");
-    let mut init = Command::new(&llmup_config)
-        .args([
-            "init",
-            "--non-interactive",
-            "--interface",
-            "openai-chat-completions",
-            "--model-service-url",
-            "https://api.example.com/v1",
-            "--model-name",
-            "test-upstream-model",
-            "--model-alias",
-            "main",
-            "--api-key-stdin",
-        ])
-        .env("LLMUP_HOME", &llmup_home)
-        .env("HOME", temp.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn llmup-config init");
-    init.stdin
-        .as_mut()
-        .expect("init stdin")
-        .write_all(b"provider-secret-from-stdin\n")
-        .expect("write api key");
-    let init_output = init.wait_with_output().expect("wait init");
-    assert!(
-        init_output.status.success(),
-        "init failed stdout={} stderr={}",
-        String::from_utf8_lossy(&init_output.stdout),
-        String::from_utf8_lossy(&init_output.stderr)
+    init_llmup_config(
+        &llmup_config,
+        &llmup_home,
+        temp.path(),
+        "openai-chat-completions",
+        "https://api.example.com/v1",
+        "test-upstream-model",
+        "provider-secret-from-stdin",
     );
 
     let output = Command::new(&llmup_codex)

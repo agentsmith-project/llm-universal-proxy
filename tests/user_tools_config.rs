@@ -6,8 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use llm_universal_proxy::user_tools::config_wizard::{
-    init_non_interactive, parse_config_args, run_cli, ApiKeySource, ConfigCommand, InitOptions,
-    ProviderInterface,
+    init_non_interactive, parse_config_args, run_cli, ConfigCommand, InitOptions, ProviderInterface,
 };
 use llm_universal_proxy::user_tools::env_file::parse_env_file_str;
 use llm_universal_proxy::Config;
@@ -213,8 +212,8 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
         },
         "new-secret",
     )
-    .expect_err("existing config should not be overwritten without --force");
-    assert!(overwrite.contains("--force"));
+    .expect_err("existing config should not be overwritten without reconfigure");
+    assert!(overwrite.contains("choose reconfigure"));
     assert!(!overwrite.contains("new-secret"));
 }
 
@@ -1683,9 +1682,10 @@ model_aliases:
     assert_eq!(code, 0);
     let output = String::from_utf8(stdout).expect("stdout should be utf-8");
     assert!(output.contains("default -> DEFAULT:test-model"));
+    assert!(output.contains("Action needed"));
     assert!(output.contains("rename"));
     assert!(output.contains("main"));
-    assert!(output.contains("Claude Code"));
+    assert!(output.contains("llmup launchers use `main`"));
 
     let mut stdin = Cursor::new(Vec::new());
     let mut stdout = Vec::new();
@@ -1693,6 +1693,7 @@ model_aliases:
         .expect("legacy config should still doctor");
     assert_eq!(code, 0);
     let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Action needed"));
     assert!(output.contains("rename"));
     assert!(output.contains("main"));
     assert_eq!(
@@ -1702,7 +1703,56 @@ model_aliases:
 }
 
 #[test]
-fn legacy_default_alias_can_be_explicitly_renamed_to_main_without_touching_secrets() {
+fn legacy_default_alias_pressing_enter_renames_to_main() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("legacy-default-enter-renames");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    env: LLM_UNIVERSAL_PROXY_KEY
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:test-model
+"#,
+    );
+
+    let mut stdin = Cursor::new(b"\n".to_vec());
+    let mut stdout = Vec::new();
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("pressing enter should take the recommended legacy rename path");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Press Enter to rename it to `main`"));
+    assert!(output.contains("Renamed local model default -> main"));
+    assert!(!output.contains("Next: run llmup-codex or llmup-claude"));
+
+    let rendered = fs::read_to_string(&config_path).expect("read renamed config");
+    assert!(rendered.contains("main: DEFAULT:test-model"));
+    assert!(!rendered.contains("default: DEFAULT:test-model"));
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after enter rename"),
+        original_secrets
+    );
+}
+
+#[test]
+fn legacy_default_alias_default_action_renames_to_main_without_touching_secrets() {
     let _guard = ENV_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
@@ -1730,14 +1780,14 @@ model_aliases:
 "#,
     );
 
-    let mut stdin = Cursor::new(b"rename-main\n".to_vec());
+    let mut stdin = Cursor::new(b"\n".to_vec());
     let mut stdout = Vec::new();
     let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
-        .expect("explicit legacy rename should succeed");
+        .expect("default legacy rename should succeed");
     assert_eq!(code, 0);
 
     let output = String::from_utf8(stdout).expect("stdout should be utf-8");
-    assert!(output.contains("rename-main"));
+    assert!(output.contains("Press Enter to rename it to `main`"));
     assert!(output.contains("Renamed local model default -> main"));
 
     let rendered = fs::read_to_string(&config_path).expect("read renamed config");
@@ -1790,10 +1840,10 @@ model_aliases:
 "#,
     );
 
-    let mut stdin = Cursor::new(b"rename-main\n".to_vec());
+    let mut stdin = Cursor::new(b"\n".to_vec());
     let mut stdout = Vec::new();
     let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
-        .expect("explicit structured legacy rename should succeed");
+        .expect("default structured legacy rename should succeed");
     assert_eq!(code, 0);
 
     let rendered = fs::read_to_string(&config_path).expect("read renamed config");
@@ -1832,7 +1882,7 @@ model_aliases:
 }
 
 #[test]
-fn legacy_default_alias_rename_fails_fast_when_main_exists() {
+fn legacy_default_alias_is_left_alone_when_main_exists() {
     let _guard = ENV_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
@@ -1862,12 +1912,14 @@ model_aliases:
     );
     let original_config = fs::read_to_string(&config_path).expect("read original config");
 
-    let mut stdin = Cursor::new(b"rename-main\n".to_vec());
+    let mut stdin = Cursor::new(b"\n".to_vec());
     let mut stdout = Vec::new();
-    let err = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
-        .expect_err("rename-main must not overwrite an existing main alias");
-    assert!(err.contains("main"));
-    assert!(err.contains("already exists"));
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("main config should keep existing aliases");
+    assert_eq!(code, 0);
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("Keeping existing config."));
+    assert!(!output.contains("Renamed local model default -> main"));
     assert_eq!(
         fs::read_to_string(&config_path).expect("read config after failed rename"),
         original_config
@@ -1982,11 +2034,18 @@ model_aliases:
 }
 
 #[test]
-fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
+fn config_cli_rejects_hidden_init_surface() {
     let help = parse_config_args(vec![OsString::from("--help")]).expect("help parses");
     assert_eq!(help, ConfigCommand::Help);
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(vec![OsString::from("--help")], &mut stdin, &mut stdout)
+        .expect("help should render");
+    assert_eq!(code, 0);
+    let output = String::from_utf8(stdout).expect("help should be utf-8");
+    assert!(!output.contains("llmup-config init"));
 
-    let parsed = parse_config_args(vec![
+    let err = parse_config_args(vec![
         OsString::from("init"),
         OsString::from("--non-interactive"),
         OsString::from("--interface"),
@@ -2000,28 +2059,8 @@ fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
         OsString::from("--api-key-env"),
         OsString::from("TEST_PROVIDER_KEY"),
     ])
-    .expect("hidden init should parse for automation");
-
-    let ConfigCommand::Init(init) = parsed else {
-        panic!("expected hidden init command");
-    };
-    assert_eq!(init.interface, ProviderInterface::AnthropicMessages);
-    assert_eq!(init.model_alias, "main");
-    assert_eq!(
-        init.api_key_source,
-        ApiKeySource::Env("TEST_PROVIDER_KEY".to_string())
-    );
-
-    let err = parse_config_args(vec![
-        OsString::from("init"),
-        OsString::from("--non-interactive"),
-        OsString::from("--api-key"),
-        OsString::from("plaintext-secret"),
-    ])
-    .expect_err("--api-key value must stay unsupported");
-    assert!(err.contains("--api-key-stdin"));
-    assert!(err.contains("--api-key-env"));
-    assert!(!err.contains("plaintext-secret"));
+    .expect_err("hidden init must not parse");
+    assert!(err.contains("unknown llmup-config command `init`"));
 
     let err = parse_config_args(vec![
         OsString::from("init"),
@@ -2035,10 +2074,9 @@ fn config_cli_hides_init_from_help_but_parses_hidden_noninteractive_sources() {
         OsString::from("--api-key-env"),
         OsString::from("TEST_PROVIDER_KEY"),
     ])
-    .expect_err("ambiguous interface names should be rejected");
-    assert!(err.contains("openai-chat-completions"));
-    assert!(err.contains("openai-responses"));
-    assert!(err.contains("anthropic-messages"));
+    .expect_err("init must fail before parsing hidden arguments");
+    assert!(err.contains("unknown llmup-config command `init`"));
+    assert!(!err.contains("openai-compatible"));
 }
 
 #[test]
