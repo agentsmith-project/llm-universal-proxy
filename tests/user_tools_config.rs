@@ -11,6 +11,7 @@ use llm_universal_proxy::user_tools::config_wizard::{
 };
 use llm_universal_proxy::user_tools::env_file::parse_env_file_str;
 use llm_universal_proxy::Config;
+use serde_yaml::Value;
 
 struct TempDir {
     path: PathBuf,
@@ -43,6 +44,33 @@ impl Drop for TempDir {
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+#[cfg(unix)]
+unsafe extern "C" {
+    fn umask(mask: std::os::raw::c_uint) -> std::os::raw::c_uint;
+}
+
+#[cfg(unix)]
+struct UmaskGuard {
+    previous: std::os::raw::c_uint,
+}
+
+#[cfg(unix)]
+impl UmaskGuard {
+    fn set(mask: u32) -> Self {
+        let previous = unsafe { umask(mask as std::os::raw::c_uint) };
+        Self { previous }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UmaskGuard {
+    fn drop(&mut self) {
+        unsafe {
+            umask(self.previous);
+        }
+    }
+}
+
 struct EnvGuard {
     key: &'static str,
     previous: Option<OsString>,
@@ -64,6 +92,46 @@ impl Drop for EnvGuard {
             std::env::remove_var(self.key);
         }
     }
+}
+
+fn seed_local_config(llmup_home: &Path, yaml: &str) -> (PathBuf, PathBuf, String) {
+    fs::create_dir_all(llmup_home).expect("create llmup home");
+    let config_path = llmup_home.join("config.yaml");
+    let secrets_path = llmup_home.join("secrets.env");
+    let secrets =
+        "LLM_UNIVERSAL_PROXY_KEY=local-proxy-key\nLLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret\n";
+    fs::write(&config_path, yaml).expect("write config");
+    fs::write(&secrets_path, secrets).expect("write secrets");
+    (config_path, secrets_path, secrets.to_string())
+}
+
+fn yaml_get<'a>(value: &'a Value, key: &str) -> &'a Value {
+    value
+        .as_mapping()
+        .and_then(|mapping| mapping.get(&Value::String(key.to_string())))
+        .unwrap_or_else(|| panic!("missing YAML key {key}"))
+}
+
+#[cfg(unix)]
+fn config_temp_file_modes(dir: &Path) -> Vec<(PathBuf, u32)> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if !name.starts_with(".config.yaml.tmp-") {
+                        return None;
+                    }
+                    let mode = entry.metadata().ok()?.permissions().mode() & 0o777;
+                    Some((entry.path(), mode))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[test]
@@ -135,6 +203,572 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
     .expect_err("existing config should not be overwritten without --force");
     assert!(overwrite.contains("--force"));
     assert!(!overwrite.contains("new-secret"));
+}
+
+#[test]
+fn set_limits_for_string_alias_upgrades_alias_without_touching_secrets() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("set-limits-alias");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, secrets_path, original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:test-model
+"#,
+    );
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(
+        vec![
+            OsString::from("set-limits"),
+            OsString::from("--alias"),
+            OsString::from("default"),
+            OsString::from("--context-window"),
+            OsString::from("200000"),
+            OsString::from("--max-output-tokens"),
+            OsString::from("128000"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    )
+    .expect("set-limits should update an existing string alias");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("alias default"));
+    assert!(output.contains("200000"));
+    assert!(output.contains("128000"));
+
+    let rendered = fs::read_to_string(&config_path).expect("read updated config");
+    let value: Value = serde_yaml::from_str(&rendered).expect("updated config should be YAML");
+    let alias = yaml_get(
+        yaml_get(yaml_get(&value, "model_aliases"), "default"),
+        "target",
+    );
+    assert_eq!(alias.as_str(), Some("DEFAULT:test-model"));
+    let limits = yaml_get(
+        yaml_get(yaml_get(&value, "model_aliases"), "default"),
+        "limits",
+    );
+    assert_eq!(yaml_get(limits, "context_window").as_u64(), Some(200_000));
+    assert_eq!(
+        yaml_get(limits, "max_output_tokens").as_u64(),
+        Some(128_000)
+    );
+    let parsed = Config::from_yaml_str(&rendered).expect("updated YAML should parse");
+    parsed.validate().expect("updated YAML should validate");
+    assert_eq!(
+        parsed.model_aliases["default"]
+            .limits
+            .as_ref()
+            .and_then(|limits| limits.context_window),
+        Some(200_000)
+    );
+    assert_eq!(
+        fs::read_to_string(secrets_path).expect("read secrets after set-limits"),
+        original_secrets
+    );
+}
+
+#[test]
+fn set_limits_for_structured_alias_preserves_target_and_surface_and_reports_unchanged() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("set-limits-structured-alias");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, _secrets_path, _original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  vision:
+    target: DEFAULT:vision-model
+    limits:
+      context_window: 100000
+      max_output_tokens: 8000
+    surface:
+      modalities:
+        input: ["text", "image"]
+        output: ["text"]
+      tools:
+        supports_search: true
+        supports_view_image: true
+"#,
+    );
+
+    for _ in 0..2 {
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let code = run_cli(
+            vec![
+                OsString::from("set-limits"),
+                OsString::from("--alias"),
+                OsString::from("vision"),
+                OsString::from("--context-window"),
+                OsString::from("200000"),
+                OsString::from("--max-output-tokens"),
+                OsString::from("64000"),
+            ],
+            &mut stdin,
+            &mut stdout,
+        )
+        .expect("set-limits should update an existing structured alias");
+        assert_eq!(code, 0);
+    }
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(
+        vec![
+            OsString::from("set-limits"),
+            OsString::from("--alias"),
+            OsString::from("vision"),
+            OsString::from("--context-window"),
+            OsString::from("200000"),
+            OsString::from("--max-output-tokens"),
+            OsString::from("64000"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    )
+    .expect("idempotent set-limits should succeed");
+    assert_eq!(code, 0);
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("unchanged"));
+
+    let rendered = fs::read_to_string(&config_path).expect("read updated config");
+    let value: Value = serde_yaml::from_str(&rendered).expect("updated config should be YAML");
+    let vision = yaml_get(yaml_get(&value, "model_aliases"), "vision");
+    assert_eq!(
+        yaml_get(vision, "target").as_str(),
+        Some("DEFAULT:vision-model")
+    );
+    assert_eq!(
+        yaml_get(yaml_get(vision, "surface"), "modalities")
+            .as_mapping()
+            .and_then(|mapping| mapping.get(&Value::String("input".to_string())))
+            .and_then(Value::as_sequence)
+            .map(Vec::len),
+        Some(2)
+    );
+    let limits = yaml_get(vision, "limits");
+    assert_eq!(yaml_get(limits, "context_window").as_u64(), Some(200_000));
+    assert_eq!(yaml_get(limits, "max_output_tokens").as_u64(), Some(64_000));
+}
+
+#[test]
+fn set_limits_for_upstream_updates_upstream_without_upgrading_aliases() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("set-limits-upstream");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, _secrets_path, _original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:test-model
+"#,
+    );
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(
+        vec![
+            OsString::from("set-limits"),
+            OsString::from("--upstream"),
+            OsString::from("DEFAULT"),
+            OsString::from("--context-window"),
+            OsString::from("200000"),
+            OsString::from("--max-output-tokens"),
+            OsString::from("128000"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    )
+    .expect("set-limits should update an existing upstream");
+    assert_eq!(code, 0);
+
+    let rendered = fs::read_to_string(&config_path).expect("read updated config");
+    let value: Value = serde_yaml::from_str(&rendered).expect("updated config should be YAML");
+    let default_upstream = yaml_get(yaml_get(&value, "upstreams"), "DEFAULT");
+    let limits = yaml_get(default_upstream, "limits");
+    assert_eq!(yaml_get(limits, "context_window").as_u64(), Some(200_000));
+    assert_eq!(
+        yaml_get(limits, "max_output_tokens").as_u64(),
+        Some(128_000)
+    );
+    assert_eq!(
+        yaml_get(yaml_get(&value, "model_aliases"), "default").as_str(),
+        Some("DEFAULT:test-model")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn set_limits_temp_config_is_private_before_contents_are_written() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("set-limits-temp-permissions");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let padding = "x".repeat(16 * 1024 * 1024);
+    let (config_path, _secrets_path, _original_secrets) = seed_local_config(
+        &llmup_home,
+        &format!(
+            r#"
+listen: 127.0.0.1:8080
+debug_trace:
+  path: "{padding}"
+  max_text_chars: 1
+data_auth:
+  mode: proxy_key
+  proxy_key:
+    inline: local-proxy-secret-in-config
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      inline: provider-secret-in-config
+model_aliases:
+  default: DEFAULT:test-model
+"#
+        ),
+    );
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+        .expect("chmod seeded config");
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let observed_group_or_other_mode = Arc::new(AtomicU32::new(0));
+    let ready = Arc::new(Barrier::new(2));
+    let monitor_dir = llmup_home.clone();
+    let monitor_stop = Arc::clone(&stop);
+    let monitor_bad_mode = Arc::clone(&observed_group_or_other_mode);
+    let monitor_ready = Arc::clone(&ready);
+    let monitor = std::thread::spawn(move || {
+        monitor_ready.wait();
+        while !monitor_stop.load(Ordering::SeqCst) {
+            for (_path, mode) in config_temp_file_modes(&monitor_dir) {
+                if mode & 0o077 != 0 {
+                    monitor_bad_mode.store(mode, Ordering::SeqCst);
+                    monitor_stop.store(true, Ordering::SeqCst);
+                    return;
+                }
+            }
+            std::hint::spin_loop();
+        }
+    });
+    ready.wait();
+
+    let _umask = UmaskGuard::set(0);
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let result = run_cli(
+        vec![
+            OsString::from("set-limits"),
+            OsString::from("--alias"),
+            OsString::from("default"),
+            OsString::from("--context-window"),
+            OsString::from("200000"),
+            OsString::from("--max-output-tokens"),
+            OsString::from("128000"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    );
+
+    stop.store(true, Ordering::SeqCst);
+    monitor
+        .join()
+        .expect("temp permission monitor should finish");
+
+    let code = result.expect("set-limits should update sensitive config");
+    assert_eq!(code, 0);
+
+    let bad_mode = observed_group_or_other_mode.load(Ordering::SeqCst);
+    assert_eq!(
+        bad_mode & 0o077,
+        0,
+        "temporary config exposed group/other permissions: {bad_mode:03o}"
+    );
+    assert_eq!(
+        fs::metadata(&config_path)
+            .expect("updated config metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert!(
+        config_temp_file_modes(&llmup_home).is_empty(),
+        "temporary config files should not be left behind"
+    );
+}
+
+#[test]
+fn set_limits_rejects_bad_inputs_and_unknown_targets_without_writing() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("set-limits-rejects");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, _secrets_path, _original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:test-model
+"#,
+    );
+    let original_config = fs::read_to_string(&config_path).expect("read original config");
+
+    let bad_one_of = parse_config_args(vec![
+        OsString::from("set-limits"),
+        OsString::from("--alias"),
+        OsString::from("default"),
+        OsString::from("--upstream"),
+        OsString::from("DEFAULT"),
+        OsString::from("--context-window"),
+        OsString::from("200000"),
+        OsString::from("--max-output-tokens"),
+        OsString::from("128000"),
+    ])
+    .expect_err("alias and upstream should be mutually exclusive");
+    assert!(bad_one_of.contains("choose exactly one"));
+
+    let bad_limits = parse_config_args(vec![
+        OsString::from("set-limits"),
+        OsString::from("--alias"),
+        OsString::from("default"),
+        OsString::from("--context-window"),
+        OsString::from("1024"),
+        OsString::from("--max-output-tokens"),
+        OsString::from("1024"),
+    ])
+    .expect_err("max output must be lower than context");
+    assert!(bad_limits.contains("less than"));
+
+    let zero_context = parse_config_args(vec![
+        OsString::from("set-limits"),
+        OsString::from("--alias"),
+        OsString::from("default"),
+        OsString::from("--context-window"),
+        OsString::from("0"),
+        OsString::from("--max-output-tokens"),
+        OsString::from("1"),
+    ])
+    .expect_err("zero context should fail");
+    assert!(zero_context.contains("greater than zero"));
+
+    let zero_max_output = parse_config_args(vec![
+        OsString::from("set-limits"),
+        OsString::from("--alias"),
+        OsString::from("default"),
+        OsString::from("--context-window"),
+        OsString::from("1024"),
+        OsString::from("--max-output-tokens"),
+        OsString::from("0"),
+    ])
+    .expect_err("zero max output should fail");
+    assert!(zero_max_output.contains("greater than zero"));
+
+    let missing_target = parse_config_args(vec![
+        OsString::from("set-limits"),
+        OsString::from("--context-window"),
+        OsString::from("1024"),
+        OsString::from("--max-output-tokens"),
+        OsString::from("1"),
+    ])
+    .expect_err("target should be required");
+    assert!(missing_target.contains("choose exactly one"));
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let missing = run_cli(
+        vec![
+            OsString::from("set-limits"),
+            OsString::from("--alias"),
+            OsString::from("missing"),
+            OsString::from("--context-window"),
+            OsString::from("200000"),
+            OsString::from("--max-output-tokens"),
+            OsString::from("128000"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    )
+    .expect_err("unknown alias should fail");
+    assert!(missing.contains("unknown alias"));
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("read config after rejected update"),
+        original_config
+    );
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let missing = run_cli(
+        vec![
+            OsString::from("set-limits"),
+            OsString::from("--upstream"),
+            OsString::from("MISSING"),
+            OsString::from("--context-window"),
+            OsString::from("200000"),
+            OsString::from("--max-output-tokens"),
+            OsString::from("128000"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    )
+    .expect_err("unknown upstream should fail");
+    assert!(missing.contains("unknown upstream"));
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("read config after rejected upstream update"),
+        original_config
+    );
+}
+
+#[test]
+fn set_limits_rejects_list_form_upstreams_without_writing() {
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("set-limits-list-upstreams");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let (config_path, _secrets_path, _original_secrets) = seed_local_config(
+        &llmup_home,
+        r#"
+listen: 127.0.0.1:8080
+upstreams:
+  - name: DEFAULT
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+model_aliases:
+  default: DEFAULT:test-model
+"#,
+    );
+    let original_config = fs::read_to_string(&config_path).expect("read original config");
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let err = run_cli(
+        vec![
+            OsString::from("set-limits"),
+            OsString::from("--upstream"),
+            OsString::from("DEFAULT"),
+            OsString::from("--context-window"),
+            OsString::from("200000"),
+            OsString::from("--max-output-tokens"),
+            OsString::from("128000"),
+        ],
+        &mut stdin,
+        &mut stdout,
+    )
+    .expect_err("list-form upstreams should fail explicitly");
+    assert!(err.contains("upstreams must be a YAML mapping"));
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("read config after rejected list-form update"),
+        original_config
+    );
+}
+
+#[test]
+fn config_help_mentions_set_limits_but_interactive_path_stays_unchanged() {
+    let parsed = parse_config_args(vec![
+        OsString::from("set-limits"),
+        OsString::from("--upstream"),
+        OsString::from("DEFAULT"),
+        OsString::from("--context-window"),
+        OsString::from("200000"),
+        OsString::from("--max-output-tokens"),
+        OsString::from("128000"),
+    ])
+    .expect("set-limits should parse");
+    assert!(matches!(parsed, ConfigCommand::SetLimits(_)));
+
+    let mut stdin = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let code = run_cli(vec![OsString::from("--help")], &mut stdin, &mut stdout)
+        .expect("help should succeed");
+    assert_eq!(code, 0);
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(output.contains("llmup-config set-limits"));
+
+    let _guard = ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock should not be poisoned");
+    let temp = TempDir::new("interactive-prompt-unchanged");
+    let llmup_home = temp.path().join(".llmup");
+    let _home = EnvGuard::set("HOME", temp.path());
+    let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
+    let mut stdin = Cursor::new(
+        b"\nhttps://api.minimaxi.com/v1\nMiniMax-M2.7-highspeed\nprovider-secret-from-prompt\n"
+            .to_vec(),
+    );
+    let mut stdout = Vec::new();
+
+    let code = run_cli(Vec::<OsString>::new(), &mut stdin, &mut stdout)
+        .expect("interactive config should still succeed");
+    assert_eq!(code, 0);
+    let output = String::from_utf8(stdout).expect("stdout should be utf-8");
+    assert!(!output.contains("context-window"));
+    assert!(!output.contains("max-output-tokens"));
 }
 
 #[test]

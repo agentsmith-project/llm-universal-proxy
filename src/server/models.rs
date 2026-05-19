@@ -343,12 +343,23 @@ fn anthropic_model_object(config: &Config, id: &str) -> Option<Value> {
 }
 
 fn anthropic_model_value(config: &Config, id: &str, target: &crate::config::ModelAlias) -> Value {
-    let (_limits, _surface, metadata) = public_model_metadata(config, target);
-    serde_json::json!({
+    let (limits, _surface, metadata) = public_model_metadata(config, target);
+    let mut model = serde_json::json!({
         "id": id,
         "type": "model",
         "display_name": id,
         "created_at": "1970-01-01T00:00:00Z",
         "llmup": metadata
-    })
+    });
+
+    if let Some(limits) = limits {
+        if let Some(context_window) = limits.context_window {
+            model["max_input_tokens"] = serde_json::json!(context_window);
+        }
+        if let Some(max_output_tokens) = limits.max_output_tokens {
+            model["max_tokens"] = serde_json::json!(max_output_tokens);
+        }
+    }
+
+    model
 }

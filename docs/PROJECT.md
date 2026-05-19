@@ -141,6 +141,7 @@ docs/
 | Path | Contributor entrypoint |
 | --- | --- |
 | `src/user_tools/config_wizard.rs` | Product entrypoints for `llmup-config`: interactive setup, hidden automation init, generated config, and checks |
+| `src/user_tools/agent_model_profile.rs` | Shared model alias, limits, surface, Codex catalog, and Claude profile projection helpers for the user launchers |
 | `src/user_tools/agent_launcher.rs` | Product entrypoints for `llmup-codex` and `llmup-claude`: launcher arg routing, no-proxy mode, proxy lifecycle, env isolation, native client execution |
 | `src/user_tools/env_file.rs` | Safe env-file parser/writer shared by the user tools |
 | `src/user_tools/mod.rs` | User-tool module boundary |

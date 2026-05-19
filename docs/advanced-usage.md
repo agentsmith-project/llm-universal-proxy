@@ -57,6 +57,16 @@ The provider key belongs to the proxy, not to the client. In `proxy_key` mode, t
 
 In `client_provider_key` mode, the client SDK key is the real provider key. Use that mode only when you intentionally want clients to hold provider credentials and send them through the proxy for the selected upstream.
 
+## Advanced Model Limits
+
+If the first-run wizard did not collect model limits, add them later with the advanced config entrypoint:
+
+```bash
+llmup-config set-limits --alias default --context-window 200000 --max-output-tokens 128000
+```
+
+Use `--alias <name>` to override one model alias, or `--upstream <name>` to set limits shared by aliases that use the same upstream. The command only updates `~/.llmup/config.yaml`; provider secrets stay in `secrets.env`.
+
 ## Manual Codex Wiring
 
 For a proxy started on `127.0.0.1:18888` in `proxy_key` mode, Codex's SDK key is the local proxy key:
@@ -65,15 +75,15 @@ For a proxy started on `127.0.0.1:18888` in `proxy_key` mode, Codex's SDK key is
 OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY \
 OPENAI_BASE_URL=http://127.0.0.1:18888/openai/v1 \
 codex \
-  -c model_provider=proxy \
-  -c model_providers.proxy.name=Proxy \
-  -c model_providers.proxy.env_key=OPENAI_API_KEY \
-  -c model_providers.proxy.base_url=http://127.0.0.1:18888/openai/v1 \
-  -c model_providers.proxy.wire_api=responses \
-  --model default
+  -c 'model_provider="proxy"' \
+  -c 'model_providers.proxy.name="Proxy"' \
+  -c 'model_providers.proxy.env_key="OPENAI_API_KEY"' \
+  -c 'model_providers.proxy.base_url="http://127.0.0.1:18888/openai/v1"' \
+  -c 'model_providers.proxy.wire_api="responses"' \
+  --model <llmup-alias>
 ```
 
-Codex appends its Responses path to the configured base URL, so the proxy receives OpenAI-style Responses traffic.
+Use a configured `model_aliases` key as `<llmup-alias>`. Codex appends its Responses path to the configured base URL, so the proxy receives OpenAI-style Responses traffic.
 
 ## Manual Claude Wiring
 

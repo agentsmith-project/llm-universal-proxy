@@ -19,8 +19,8 @@ ghcr.io/agentsmith-project/llm-universal-proxy:latest
 ghcr.io/agentsmith-project/llm-universal-proxy@sha256:0ecec81d77b4fc7c6bcffea0f51efae861eb011260e97b3bdfdba2a99aa60d3a
 ```
 
-Cargo package version `0.2.36` is the next release identity; it is not a published container tag yet.
-Do not bind `v0.2.36` to the digest above until a release workflow has pushed
+Cargo package version `0.2.37` is the next release identity; it is not a published container tag yet.
+Do not bind `v0.2.37` to the digest above until a release workflow has pushed
 that tag and refreshed the manifest with the new digest.
 
 `latest` is a convenience tag for quick trials and local experiments. It moves

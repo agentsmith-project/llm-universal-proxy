@@ -227,23 +227,30 @@ class DocsHomepageContractTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
 
-    def test_clients_guide_keeps_codex_launcher_injection_fixed_not_live_surface_driven(
+    def test_clients_guide_documents_managed_profile_projection(
         self,
     ):
         text = self.read_text("docs/clients.md")
 
         for snippet in (
-            "fixed minimal provider injection",
-            "does not read live `llmup.surface` metadata",
-            "native Codex client does not see live surface metadata",
-            "Model identity, capability truth, and protocol shaping stay in the proxy configuration and server-side conversion path.",
+            "managed profile projection",
+            "`--llmup-model <alias>` selects the llmup alias",
+            "generates a Codex model catalog and supported tool hints",
+            "`llmup.surface` metadata",
+            "does not append an automatic native `--model default` argument",
+            "`ANTHROPIC_CUSTOM_MODEL_OPTION`",
+            "`ANTHROPIC_MODEL`",
+            "`--llmup-no-profile-projection`",
+            "Protocol shaping and request enforcement stay in the proxy configuration and server-side conversion path.",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
 
         for forbidden in (
-            "launcher-generated provider hints use live `llmup.surface` metadata",
-            "native client sees the capability shape",
+            "fixed minimal provider injection",
+            "does not read live `llmup.surface` metadata",
+            "native Codex client does not see live surface metadata",
+            "one-off model overrides stay native client behavior",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
@@ -291,10 +298,7 @@ class DocsHomepageContractTests(unittest.TestCase):
             "`llmup-codex --llmup-no-proxy -- <native args>`",
             "`llmup-claude --llmup-no-proxy -- <native args>`",
             "不要让 launcher 自动识别子命令",
-            "不读取 live `llmup.surface` metadata",
-            "模型、能力和协议转换真相仍由 proxy 配置和服务端转换承担",
-            "Codex 和 Claude Code 的固定 `InjectionPrelude + NativeArgv` 都必须由真实 CLI smoke 保护",
-            "如果不可行，优先改用位置无关的配置注入方式，不维护子命令表",
+            "不维护子命令表",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, text)
@@ -314,6 +318,9 @@ class DocsHomepageContractTests(unittest.TestCase):
             "llm-universal-proxy --config",
             "Manual Proxy Startup",
             "Multi-Endpoint YAML",
+            "Advanced Model Limits",
+            "llmup-config set-limits --alias default --context-window 200000 --max-output-tokens 128000",
+            "The command only updates `~/.llmup/config.yaml`",
             "Manual Codex Wiring",
             "Manual Claude Wiring",
             "The provider key belongs to the proxy, not to the client.",

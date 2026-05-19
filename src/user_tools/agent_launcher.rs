@@ -8,12 +8,16 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_yaml::Value;
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use serde_yaml::Value as YamlValue;
 use uuid::Uuid;
 
+use super::agent_model_profile::{write_codex_model_catalog, AgentModelProfile};
 use super::env_file::{read_env_file, EnvFile};
 use super::{env_path_or_default, home_dir_from_env};
 use crate::Config;
+
+const INTERNAL_LAUNCH_PLAN_ENV: &str = "LLMUP_INTERNAL_LAUNCH_PLAN";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentKind {
@@ -26,9 +30,15 @@ pub struct LauncherControl {
     pub help: bool,
     pub version: bool,
     pub no_proxy: bool,
+    pub no_profile_projection: bool,
+    pub model_alias: Option<String>,
     pub port: Option<u16>,
     pub config_path: Option<PathBuf>,
     pub env_file_path: Option<PathBuf>,
+    pub internal_launch_plan_json: bool,
+    pub internal_proxy_base: Option<String>,
+    pub internal_proxy_key: Option<String>,
+    pub internal_artifact_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +61,21 @@ pub enum ProxyMode {
         proxy_key: String,
         secrets: EnvFile,
     },
+    ManagedExternal {
+        proxy_base_url: String,
+        proxy_key: String,
+        secrets: EnvFile,
+    },
     NoProxy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileProjection {
+    Enabled {
+        profile: AgentModelProfile,
+        codex_catalog_path: Option<PathBuf>,
+    },
+    Disabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,9 +91,15 @@ pub fn parse_launcher_args(
         help: false,
         version: false,
         no_proxy: false,
+        no_profile_projection: false,
+        model_alias: None,
         port: None,
         config_path: None,
         env_file_path: None,
+        internal_launch_plan_json: false,
+        internal_proxy_base: None,
+        internal_proxy_key: None,
+        internal_artifact_dir: None,
     };
     let args = args.into_iter().collect::<Vec<_>>();
     let mut native_argv = Vec::new();
@@ -106,6 +136,14 @@ pub fn parse_launcher_args(
                 control.no_proxy = true;
                 index += 1;
             }
+            "--llmup-no-profile-projection" => {
+                control.no_profile_projection = true;
+                index += 1;
+            }
+            "--llmup-model" => {
+                let value = take_nonempty_utf8_value(&args, &mut index, "--llmup-model")?;
+                control.model_alias = Some(value);
+            }
             "--llmup-port" => {
                 let value = take_os_value(&args, &mut index, "--llmup-port")?;
                 control.port = Some(parse_port(&value, "--llmup-port")?);
@@ -124,15 +162,59 @@ pub fn parse_launcher_args(
                     "--llmup-env-file",
                 )?));
             }
+            "--llmup-internal-launch-plan-json" => {
+                control.internal_launch_plan_json = true;
+                index += 1;
+            }
+            "--llmup-internal-proxy-base" => {
+                let value =
+                    take_nonempty_utf8_value(&args, &mut index, "--llmup-internal-proxy-base")?;
+                control.internal_proxy_base = Some(value);
+            }
+            "--llmup-internal-proxy-key" => {
+                let value =
+                    take_nonempty_utf8_value(&args, &mut index, "--llmup-internal-proxy-key")?;
+                control.internal_proxy_key = Some(value);
+            }
+            "--llmup-internal-artifact-dir" => {
+                let value = take_os_value(&args, &mut index, "--llmup-internal-artifact-dir")?;
+                if value.is_empty() {
+                    return Err("--llmup-internal-artifact-dir value must not be empty".to_string());
+                }
+                control.internal_artifact_dir = Some(PathBuf::from(value));
+            }
             _ => {
                 if let Some(value) = text.strip_prefix("--llmup-port=") {
                     control.port = Some(parse_port(OsStr::new(value), "--llmup-port")?);
+                    index += 1;
+                } else if let Some(value) = text.strip_prefix("--llmup-model=") {
+                    control.model_alias = Some(parse_nonempty_utf8_value(value, "--llmup-model")?);
                     index += 1;
                 } else if let Some(value) = text.strip_prefix("--llmup-config=") {
                     control.config_path = Some(PathBuf::from(value));
                     index += 1;
                 } else if let Some(value) = text.strip_prefix("--llmup-env-file=") {
                     control.env_file_path = Some(PathBuf::from(value));
+                    index += 1;
+                } else if let Some(value) = text.strip_prefix("--llmup-internal-proxy-base=") {
+                    control.internal_proxy_base = Some(parse_nonempty_utf8_value(
+                        value,
+                        "--llmup-internal-proxy-base",
+                    )?);
+                    index += 1;
+                } else if let Some(value) = text.strip_prefix("--llmup-internal-proxy-key=") {
+                    control.internal_proxy_key = Some(parse_nonempty_utf8_value(
+                        value,
+                        "--llmup-internal-proxy-key",
+                    )?);
+                    index += 1;
+                } else if let Some(value) = text.strip_prefix("--llmup-internal-artifact-dir=") {
+                    if value.is_empty() {
+                        return Err(
+                            "--llmup-internal-artifact-dir value must not be empty".to_string()
+                        );
+                    }
+                    control.internal_artifact_dir = Some(PathBuf::from(value));
                     index += 1;
                 } else if text.starts_with("--llmup-") {
                     return Err(format!("unknown llmup launcher option `{text}`"));
@@ -144,6 +226,15 @@ pub fn parse_launcher_args(
         }
     }
 
+    if control.model_alias.is_some() && control.no_profile_projection {
+        return Err(
+            "--llmup-model and --llmup-no-profile-projection cannot be used together".to_string(),
+        );
+    }
+    if control.model_alias.is_some() && control.no_proxy {
+        return Err("--llmup-model cannot be used with --llmup-no-proxy".to_string());
+    }
+
     Ok(ParsedLauncherArgs {
         control,
         native_argv,
@@ -152,51 +243,150 @@ pub fn parse_launcher_args(
 
 pub fn build_client_argv(
     kind: AgentKind,
-    mode: ProxyMode,
+    mode: &ProxyMode,
+    projection: &ProfileProjection,
     native_argv: &[OsString],
 ) -> Vec<OsString> {
-    let mut argv = match (kind, mode) {
-        (AgentKind::Codex, ProxyMode::Managed { port, .. }) => vec![
+    let mut argv = match kind {
+        AgentKind::Codex if mode.is_managed() => vec![
             "-c".into(),
             "model_provider=\"proxy\"".into(),
             "-c".into(),
             "model_providers.proxy.name=\"llmup\"".into(),
             "-c".into(),
-            format!("model_providers.proxy.base_url=\"http://127.0.0.1:{port}/openai/v1\"").into(),
+            format!(
+                "model_providers.proxy.base_url=\"{}\"",
+                openai_proxy_base_url(mode).expect("managed proxy mode should have a base URL")
+            )
+            .into(),
             "-c".into(),
             "model_providers.proxy.env_key=\"OPENAI_API_KEY\"".into(),
             "-c".into(),
             "model_providers.proxy.wire_api=\"responses\"".into(),
             "-c".into(),
             "model_providers.proxy.supports_websockets=false".into(),
-            "-m".into(),
-            "default".into(),
         ],
-        (AgentKind::Claude, ProxyMode::Managed { .. }) => {
-            vec!["--model".into(), "default".into()]
-        }
-        (_, ProxyMode::NoProxy) => Vec::new(),
+        AgentKind::Claude if mode.is_managed() => Vec::new(),
+        _ => Vec::new(),
     };
+    if mode.is_managed() {
+        if let ProfileProjection::Enabled {
+            profile,
+            codex_catalog_path,
+        } = projection
+        {
+            match kind {
+                AgentKind::Codex => {
+                    if let Some(catalog_path) = codex_catalog_path {
+                        argv.push("-c".into());
+                        argv.push(
+                            format!("model_catalog_json=\"{}\"", catalog_path.display()).into(),
+                        );
+                    }
+                    if profile
+                        .surface
+                        .tools
+                        .as_ref()
+                        .and_then(|tools| tools.supports_search)
+                        == Some(false)
+                    {
+                        argv.push("-c".into());
+                        argv.push("tools.web_search=false".into());
+                    }
+                    argv.push("-m".into());
+                    argv.push(profile.alias.clone().into());
+                }
+                AgentKind::Claude => {}
+            }
+        }
+    }
     argv.extend(native_argv.iter().cloned());
     argv
+}
+
+pub fn prepare_profile_projection(
+    kind: AgentKind,
+    profile: AgentModelProfile,
+    run_dir: impl AsRef<Path>,
+) -> Result<ProfileProjection, String> {
+    let codex_catalog_path = match kind {
+        AgentKind::Codex => Some(write_codex_model_catalog(&profile, run_dir)?),
+        AgentKind::Claude => None,
+    };
+    Ok(ProfileProjection::Enabled {
+        profile,
+        codex_catalog_path,
+    })
+}
+
+impl ProxyMode {
+    fn is_managed(&self) -> bool {
+        !matches!(self, ProxyMode::NoProxy)
+    }
+}
+
+fn managed_proxy_material(mode: &ProxyMode) -> Option<(&str, &EnvFile)> {
+    match mode {
+        ProxyMode::Managed {
+            proxy_key, secrets, ..
+        }
+        | ProxyMode::ManagedExternal {
+            proxy_key, secrets, ..
+        } => Some((proxy_key.as_str(), secrets)),
+        ProxyMode::NoProxy => None,
+    }
+}
+
+fn managed_proxy_origin(mode: &ProxyMode) -> Option<String> {
+    match mode {
+        ProxyMode::Managed { port, .. } => Some(format!("http://127.0.0.1:{port}")),
+        ProxyMode::ManagedExternal { proxy_base_url, .. } => {
+            Some(proxy_base_url.trim_end_matches('/').to_string())
+        }
+        ProxyMode::NoProxy => None,
+    }
+}
+
+fn append_proxy_path(origin: String, path: &str) -> String {
+    format!(
+        "{}/{}",
+        origin.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn openai_proxy_base_url(mode: &ProxyMode) -> Option<String> {
+    managed_proxy_origin(mode).map(|origin| append_proxy_path(origin, "openai/v1"))
+}
+
+fn anthropic_proxy_base_url(mode: &ProxyMode) -> Option<String> {
+    managed_proxy_origin(mode).map(|origin| append_proxy_path(origin, "anthropic"))
+}
+
+pub fn validate_native_model_flags(
+    kind: AgentKind,
+    projection: &ProfileProjection,
+    native_argv: &[OsString],
+) -> Result<(), String> {
+    if !matches!(projection, ProfileProjection::Enabled { .. }) {
+        return Ok(());
+    }
+    let Some(flag) = native_projection_override_flag(kind, native_argv) else {
+        return Ok(());
+    };
+    Err(native_model_flag_error(kind, &flag))
 }
 
 pub fn build_client_environment(
     kind: AgentKind,
     parent: BTreeMap<OsString, OsString>,
-    mode: ProxyMode,
+    mode: &ProxyMode,
     homes: &LauncherHomes,
+    projection: &ProfileProjection,
 ) -> Result<BTreeMap<OsString, OsString>, String> {
-    let managed = match &mode {
-        ProxyMode::Managed {
-            port,
-            proxy_key,
-            secrets,
-        } => Some((*port, proxy_key.as_str(), secrets)),
-        ProxyMode::NoProxy => None,
-    };
+    let managed = managed_proxy_material(mode);
     let secret_names = managed
-        .map(|(_, _, secrets)| {
+        .map(|(_, secrets)| {
             secrets
                 .names()
                 .map(|name| OsString::from(name.as_str()))
@@ -204,7 +394,7 @@ pub fn build_client_environment(
         })
         .unwrap_or_default();
     let secret_values = managed
-        .map(|(_, _, secrets)| {
+        .map(|(_, secrets)| {
             secrets
                 .secret_values()
                 .map(|value| OsString::from(value.as_str()))
@@ -220,35 +410,78 @@ pub fn build_client_environment(
         if managed.is_some() && kind == AgentKind::Claude && should_scrub_claude_env(&key) {
             continue;
         }
+        if managed.is_some()
+            && kind == AgentKind::Claude
+            && matches!(projection, ProfileProjection::Enabled { .. })
+            && should_scrub_claude_profile_env(&key)
+        {
+            continue;
+        }
         env.insert(key, value);
     }
 
     match kind {
         AgentKind::Codex => {
-            env.insert(
-                "CODEX_HOME".into(),
-                homes.codex_home.clone().into_os_string(),
-            );
-            if let Some((port, proxy_key, _)) = managed {
+            if let Some((proxy_key, _)) = managed {
+                env.insert(
+                    "CODEX_HOME".into(),
+                    homes.codex_home.clone().into_os_string(),
+                );
                 env.insert("OPENAI_API_KEY".into(), OsString::from(proxy_key));
                 env.insert(
                     "OPENAI_BASE_URL".into(),
-                    OsString::from(format!("http://127.0.0.1:{port}/openai/v1")),
+                    OsString::from(
+                        openai_proxy_base_url(mode)
+                            .expect("managed proxy mode should have a base URL"),
+                    ),
                 );
             }
         }
         AgentKind::Claude => {
-            env.insert(
-                "CLAUDE_CONFIG_DIR".into(),
-                homes.claude_config_dir.clone().into_os_string(),
-            );
-            if let Some((port, proxy_key, _)) = managed {
+            if let Some((proxy_key, _)) = managed {
+                env.insert(
+                    "CLAUDE_CONFIG_DIR".into(),
+                    homes.claude_config_dir.clone().into_os_string(),
+                );
                 env.insert("ANTHROPIC_API_KEY".into(), OsString::from(proxy_key));
                 env.insert(
                     "ANTHROPIC_BASE_URL".into(),
-                    OsString::from(format!("http://127.0.0.1:{port}/anthropic")),
+                    OsString::from(
+                        anthropic_proxy_base_url(mode)
+                            .expect("managed proxy mode should have a base URL"),
+                    ),
                 );
                 env.insert("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB".into(), "1".into());
+                if let ProfileProjection::Enabled { profile, .. } = projection {
+                    env.insert(
+                        "ANTHROPIC_CUSTOM_MODEL_OPTION".into(),
+                        OsString::from(profile.alias.as_str()),
+                    );
+                    env.insert(
+                        "ANTHROPIC_MODEL".into(),
+                        OsString::from(profile.alias.as_str()),
+                    );
+                    env.insert(
+                        "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME".into(),
+                        OsString::from(profile.alias.as_str()),
+                    );
+                    env.insert(
+                        "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION".into(),
+                        OsString::from(format!("llmup proxy model {}", profile.alias)),
+                    );
+                    if let Some(max_output_tokens) = profile.claude_max_output_tokens() {
+                        env.insert(
+                            "CLAUDE_CODE_MAX_OUTPUT_TOKENS".into(),
+                            OsString::from(max_output_tokens.to_string()),
+                        );
+                    }
+                    if let Some(auto_compact_window) = profile.claude_auto_compact_window() {
+                        env.insert(
+                            "CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(),
+                            OsString::from(auto_compact_window.to_string()),
+                        );
+                    }
+                }
             }
         }
     }
@@ -270,14 +503,14 @@ pub fn write_runtime_config_for_port(
     let parsed = Config::from_yaml_str(&raw)?;
     parsed.validate()?;
 
-    let mut value: Value = serde_yaml::from_str(&raw)
+    let mut value: YamlValue = serde_yaml::from_str(&raw)
         .map_err(|error| format!("failed to parse config YAML as runtime document: {error}"))?;
     let mapping = value
         .as_mapping_mut()
         .ok_or_else(|| "config YAML must be a mapping".to_string())?;
     mapping.insert(
-        Value::String("listen".to_string()),
-        Value::String(format!("127.0.0.1:{port}")),
+        YamlValue::String("listen".to_string()),
+        YamlValue::String(format!("127.0.0.1:{port}")),
     );
     let yaml = serde_yaml::to_string(&value)
         .map_err(|error| format!("failed to serialize runtime config YAML: {error}"))?;
@@ -299,6 +532,7 @@ pub fn run_cli(
     stdout: &mut dyn Write,
 ) -> Result<i32, String> {
     let parsed = parse_launcher_args(args)?;
+    validate_internal_launch_plan_control(&parsed.control)?;
     if parsed.control.help {
         stdout
             .write_all(launcher_help(kind).as_bytes())
@@ -315,7 +549,19 @@ pub fn run_cli(
         return Ok(0);
     }
 
+    if parsed.control.no_proxy {
+        let mode = ProxyMode::NoProxy;
+        let projection = ProfileProjection::Disabled;
+        let argv = build_client_argv(kind, &mode, &projection, &parsed.native_argv);
+        return run_client(kind, &argv, std::env::vars_os().collect());
+    }
+
     let homes = resolve_launcher_homes()?;
+
+    if parsed.control.internal_launch_plan_json {
+        return write_internal_launch_plan(kind, parsed, &homes, stdout);
+    }
+
     fs::create_dir_all(&homes.codex_home).map_err(|error| {
         format!(
             "failed to create Codex home {}: {error}",
@@ -329,16 +575,10 @@ pub fn run_cli(
         )
     })?;
 
-    if parsed.control.no_proxy {
-        let mode = ProxyMode::NoProxy;
-        let argv = build_client_argv(kind, mode.clone(), &parsed.native_argv);
-        let env = build_client_environment(kind, std::env::vars_os().collect(), mode, &homes)?;
-        return run_client(kind, &argv, env);
-    }
-
     let config_path = parsed
         .control
         .config_path
+        .clone()
         .unwrap_or_else(|| homes.llmup_home.join("config.yaml"));
     if !config_path.exists() {
         return Err(format!(
@@ -346,6 +586,11 @@ pub fn run_cli(
             config_path.display()
         ));
     }
+    let user_config = Config::from_yaml_path(&config_path)?;
+    user_config.validate()?;
+    let base_projection = build_base_projection(&parsed.control, &user_config)?;
+    validate_native_model_flags(kind, &base_projection, &parsed.native_argv)?;
+
     let env_file_path = parsed
         .control
         .env_file_path
@@ -363,6 +608,12 @@ pub fn run_cli(
             session_dir.display()
         )
     })?;
+    let projection = match &base_projection {
+        ProfileProjection::Enabled { profile, .. } => {
+            prepare_profile_projection(kind, profile.clone(), &session_dir)?
+        }
+        ProfileProjection::Disabled => ProfileProjection::Disabled,
+    };
     let explicit_port = parsed.control.port;
     let attempts = if explicit_port.is_some() { 1 } else { 5 };
     let mut last_proxy_error = None;
@@ -380,9 +631,14 @@ pub fn run_cli(
                     proxy_key,
                     secrets,
                 };
-                let argv = build_client_argv(kind, mode.clone(), &parsed.native_argv);
-                let env =
-                    build_client_environment(kind, std::env::vars_os().collect(), mode, &homes)?;
+                let argv = build_client_argv(kind, &mode, &projection, &parsed.native_argv);
+                let env = build_client_environment(
+                    kind,
+                    std::env::vars_os().collect(),
+                    &mode,
+                    &homes,
+                    &projection,
+                )?;
                 return run_client(kind, &argv, env);
             }
             Err(error) => {
@@ -398,6 +654,193 @@ pub fn run_cli(
     } else {
         Err(error)
     }
+}
+
+fn validate_internal_launch_plan_control(control: &LauncherControl) -> Result<(), String> {
+    let uses_internal_flags = control.internal_launch_plan_json
+        || control.internal_proxy_base.is_some()
+        || control.internal_proxy_key.is_some()
+        || control.internal_artifact_dir.is_some();
+    if !uses_internal_flags {
+        return Ok(());
+    }
+    if !matches!(std::env::var(INTERNAL_LAUNCH_PLAN_ENV).as_deref(), Ok("1")) {
+        return Err(format!(
+            "internal launch-plan flags require {INTERNAL_LAUNCH_PLAN_ENV}=1"
+        ));
+    }
+    if !control.internal_launch_plan_json {
+        return Err(
+            "internal proxy launch-plan flags require --llmup-internal-launch-plan-json"
+                .to_string(),
+        );
+    }
+    if control.no_proxy {
+        return Err(
+            "--llmup-internal-launch-plan-json cannot be used with --llmup-no-proxy".to_string(),
+        );
+    }
+    if control.internal_proxy_base.is_none() {
+        return Err("missing --llmup-internal-proxy-base for launch plan".to_string());
+    }
+    if control.internal_proxy_key.is_none() {
+        return Err("missing --llmup-internal-proxy-key for launch plan".to_string());
+    }
+    if control.internal_artifact_dir.is_none() {
+        return Err("missing --llmup-internal-artifact-dir for launch plan".to_string());
+    }
+    Ok(())
+}
+
+fn build_base_projection(
+    control: &LauncherControl,
+    user_config: &Config,
+) -> Result<ProfileProjection, String> {
+    if control.no_profile_projection {
+        return Ok(ProfileProjection::Disabled);
+    }
+    let alias = control.model_alias.as_deref().unwrap_or("default");
+    let profile = AgentModelProfile::from_config(user_config, alias)?;
+    Ok(ProfileProjection::Enabled {
+        profile,
+        codex_catalog_path: None,
+    })
+}
+
+fn write_internal_launch_plan(
+    kind: AgentKind,
+    parsed: ParsedLauncherArgs,
+    homes: &LauncherHomes,
+    stdout: &mut dyn Write,
+) -> Result<i32, String> {
+    let proxy_base_url = parsed
+        .control
+        .internal_proxy_base
+        .clone()
+        .expect("internal launch plan validation should require proxy base");
+    let proxy_key = parsed
+        .control
+        .internal_proxy_key
+        .clone()
+        .expect("internal launch plan validation should require proxy key");
+    let artifact_dir = parsed
+        .control
+        .internal_artifact_dir
+        .clone()
+        .expect("internal launch plan validation should require artifact dir");
+
+    let config_path = parsed
+        .control
+        .config_path
+        .clone()
+        .unwrap_or_else(|| homes.llmup_home.join("config.yaml"));
+    if !config_path.exists() {
+        return Err(format!(
+            "llmup config not found at {}; run llmup-config first",
+            config_path.display()
+        ));
+    }
+    let user_config = Config::from_yaml_path(&config_path)?;
+    user_config.validate()?;
+    let base_projection = build_base_projection(&parsed.control, &user_config)?;
+    validate_native_model_flags(kind, &base_projection, &parsed.native_argv)?;
+
+    let env_file_path = parsed
+        .control
+        .env_file_path
+        .clone()
+        .unwrap_or_else(|| homes.llmup_home.join("secrets.env"));
+    let secrets = read_env_file(&env_file_path)?;
+    let projection = match &base_projection {
+        ProfileProjection::Enabled { profile, .. } => {
+            prepare_profile_projection(kind, profile.clone(), &artifact_dir)?
+        }
+        ProfileProjection::Disabled => ProfileProjection::Disabled,
+    };
+    let mode = ProxyMode::ManagedExternal {
+        proxy_base_url,
+        proxy_key,
+        secrets,
+    };
+    let argv = build_client_argv(kind, &mode, &projection, &parsed.native_argv);
+    let env = build_client_environment(kind, BTreeMap::new(), &mode, homes, &projection)?;
+    let program = client_binary(kind);
+    let plan = launch_plan_json(kind, &program, &argv, &env, &projection)?;
+    serde_json::to_writer_pretty(&mut *stdout, &plan)
+        .map_err(|error| format!("failed to serialize launch plan JSON: {error}"))?;
+    stdout
+        .write_all(b"\n")
+        .map_err(|error| format!("failed to write launch plan JSON: {error}"))?;
+    Ok(0)
+}
+
+fn launch_plan_json(
+    kind: AgentKind,
+    program: &OsStr,
+    argv: &[OsString],
+    env: &BTreeMap<OsString, OsString>,
+    projection: &ProfileProjection,
+) -> Result<JsonValue, String> {
+    let program = os_to_json_string(program, "client program")?;
+    let argv = argv
+        .iter()
+        .map(|arg| os_to_json_string(arg.as_os_str(), "client argv"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut env_json = JsonMap::new();
+    for (key, value) in env {
+        let key = os_to_json_string(key.as_os_str(), "client env key")?;
+        let value = os_to_json_string(value.as_os_str(), "client env value")?;
+        env_json.insert(key, JsonValue::String(value));
+    }
+    let (projection_json, codex_model_catalog) = match projection {
+        ProfileProjection::Enabled {
+            profile,
+            codex_catalog_path,
+        } => {
+            let catalog = codex_catalog_path
+                .as_ref()
+                .map(|path| path.display().to_string());
+            (
+                json!({
+                    "enabled": true,
+                    "profile": {
+                        "alias": profile.alias.as_str(),
+                    },
+                    "codex_catalog_path": catalog.as_deref(),
+                }),
+                catalog,
+            )
+        }
+        ProfileProjection::Disabled => (
+            json!({
+                "enabled": false,
+                "profile": null,
+                "codex_catalog_path": null,
+            }),
+            None,
+        ),
+    };
+    Ok(json!({
+        "schema_version": 1,
+        "agent": match kind {
+            AgentKind::Codex => "codex",
+            AgentKind::Claude => "claude",
+        },
+        "program": program,
+        "argv": argv,
+        "env": JsonValue::Object(env_json),
+        "projection": projection_json,
+        "artifacts": {
+            "codex_model_catalog": codex_model_catalog,
+        },
+    }))
+}
+
+fn os_to_json_string(value: &OsStr, context: &str) -> Result<String, String> {
+    value
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("{context} contains non-UTF-8 data and cannot be emitted as JSON"))
 }
 
 pub fn resolve_launcher_homes() -> Result<LauncherHomes, String> {
@@ -421,6 +864,28 @@ fn take_os_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<OsS
         .clone();
     *index += 1;
     Ok(value)
+}
+
+fn take_nonempty_utf8_value(
+    args: &[OsString],
+    index: &mut usize,
+    flag: &str,
+) -> Result<String, String> {
+    let value = take_os_value(args, index, flag)?;
+    let text = value
+        .to_str()
+        .ok_or_else(|| format!("{flag} value must be valid UTF-8"))?;
+    parse_nonempty_utf8_value(text, flag)
+}
+
+fn parse_nonempty_utf8_value(value: &str, flag: &str) -> Result<String, String> {
+    if value.trim().is_empty() {
+        return Err(format!("{flag} value must not be empty"));
+    }
+    if value == "--" || value.starts_with('-') {
+        return Err(format!("missing value for {flag}"));
+    }
+    Ok(value.to_string())
 }
 
 fn parse_port(value: &OsStr, flag: &str) -> Result<u16, String> {
@@ -450,13 +915,15 @@ fn launcher_help(kind: AgentKind) -> String {
 {command}
 
 Usage:
-  {command} [--llmup-help] [--llmup-version] [--llmup-no-proxy] [--] [native args...]
+  {command} [--llmup-help] [--llmup-version] [--llmup-no-proxy] [--llmup-model <alias>] [--llmup-no-profile-projection] [--] [native args...]
 
 Runs {native} with llmup's local proxy and passes native args through unchanged.
 
 Advanced / troubleshooting:
-  --llmup-no-proxy   Open the original {native} command without the llmup proxy.
-  --                 Stop parsing llmup options; following args go to {native}.
+  --llmup-model <alias>           Select the llmup model alias for managed projection.
+  --llmup-no-profile-projection   Keep only proxy plumbing and manage native model flags yourself.
+  --llmup-no-proxy                Open the original {native} command without the llmup proxy.
+  --                              Stop parsing llmup options; following args go to {native}.
 "
     )
 }
@@ -490,6 +957,105 @@ fn should_scrub_claude_env(key: &OsStr) -> bool {
         "AWS_",
     ];
     EXACT.contains(&key) || PREFIXES.iter().any(|prefix| key.starts_with(prefix))
+}
+
+fn should_scrub_claude_profile_env(key: &OsStr) -> bool {
+    let Some(key) = key.to_str() else {
+        return false;
+    };
+    const EXACT: &[&str] = &[
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+    ];
+    const MODEL_PREFIXES: &[&str] = &[
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+    ];
+    EXACT.contains(&key)
+        || MODEL_PREFIXES.iter().any(|prefix| {
+            key == *prefix
+                || key
+                    .strip_prefix(prefix)
+                    .map_or(false, |suffix| suffix.starts_with('_'))
+        })
+}
+
+fn native_projection_override_flag(kind: AgentKind, native_argv: &[OsString]) -> Option<String> {
+    let mut args = native_argv.iter();
+    while let Some(arg) = args.next() {
+        let Some(text) = arg.to_str() else {
+            continue;
+        };
+        match kind {
+            AgentKind::Codex => {
+                if codex_projection_override_arg(text) {
+                    return Some(text.to_string());
+                }
+                if text == "-c" || text == "--config" {
+                    let Some(value) = args.next().and_then(|value| value.to_str()) else {
+                        continue;
+                    };
+                    if codex_projection_config_override(value) {
+                        return Some(format!("{text} {value}"));
+                    }
+                    continue;
+                }
+                if let Some(value) = text.strip_prefix("-c") {
+                    if !value.is_empty() && codex_projection_config_override(value) {
+                        return Some(text.to_string());
+                    }
+                }
+                if let Some(value) = text.strip_prefix("--config=") {
+                    if codex_projection_config_override(value) {
+                        return Some(text.to_string());
+                    }
+                }
+            }
+            AgentKind::Claude => {
+                if text == "--model" || text.starts_with("--model=") {
+                    return Some(text.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn codex_projection_override_arg(text: &str) -> bool {
+    matches!(
+        text,
+        "-m" | "--model" | "--oss" | "--local-provider" | "--profile"
+    ) || text.starts_with("--model=")
+        || text.starts_with("--local-provider=")
+        || text.starts_with("--profile=")
+}
+
+fn codex_projection_config_override(value: &str) -> bool {
+    let value = value.strip_prefix('=').unwrap_or(value);
+    let key = value
+        .split_once('=')
+        .map(|(key, _)| key)
+        .unwrap_or(value)
+        .trim();
+    matches!(key, "model" | "model_provider" | "model_catalog_json")
+        || key.starts_with("model_providers.")
+}
+
+fn native_model_flag_error(kind: AgentKind, flag: &str) -> String {
+    format!(
+        "native {native} model flag `{flag}` conflicts with llmup managed model projection; use --llmup-model <alias> or add --llmup-no-profile-projection to manage the native model yourself",
+        native = native_name(kind),
+    )
 }
 
 fn choose_available_port() -> Result<u16, String> {

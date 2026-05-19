@@ -24,14 +24,13 @@ from real_cli_matrix import (  # noqa: E402
     DEFAULT_PROXY_KEY,
     ModelLimits,
     PROXY_KEY_ENV,
+    ClientLaunchPlan,
     add_timeout_policy_args,
     build_client_env,
-    build_codex_catalog_args,
-    build_codex_proxy_provider_args,
+    build_client_launch_plan,
     build_runtime_config_text,
     default_proxy_binary_path,
     ensure_no_public_internal_tool_artifacts,
-    fetch_live_model_profile,
     load_dotenv_file,
     merge_preset_endpoint_env,
     parse_proxy_source,
@@ -100,6 +99,34 @@ def ensure_proxy_binary(proxy_binary: pathlib.Path) -> None:
         raise RuntimeError(f"missing prerequisite: {proxy_binary}")
 
 
+def build_interactive_native_args(
+    client_name: str,
+    workspace: pathlib.Path,
+    *,
+    dangerous_harness: bool = False,
+) -> list[str]:
+    workspace = pathlib.Path(workspace).resolve()
+    if client_name == "codex":
+        args = ["-C", str(workspace)]
+        if dangerous_harness:
+            args.append("--dangerously-bypass-approvals-and-sandbox")
+        else:
+            args.extend(["--sandbox", "workspace-write"])
+        return args
+    if client_name == "claude":
+        args = [
+            "--bare",
+            "--setting-sources",
+            "user",
+            "--add-dir",
+            str(workspace),
+        ]
+        if dangerous_harness:
+            args.append("--dangerously-skip-permissions")
+        return args
+    raise ValueError(f"unknown client: {client_name}")
+
+
 def build_interactive_command(
     client_name: str,
     workspace: pathlib.Path,
@@ -110,51 +137,23 @@ def build_interactive_command(
     model_limits: ModelLimits | None = None,
     codex_metadata: CodexModelMetadata | None = None,
     dangerous_harness: bool = False,
+    launch_plan: ClientLaunchPlan | None = None,
 ) -> list[str]:
-    workspace = pathlib.Path(workspace).resolve()
-    proxy_base = normalize_proxy_base(proxy_base)
-
-    if client_name == "codex":
+    if launch_plan is not None:
+        command = [launch_plan.program, *launch_plan.argv]
+    else:
         command = [
-            "codex",
-            "-C",
-            str(workspace),
-            "-m",
-            model,
+            client_name,
+            *build_interactive_native_args(
+                client_name,
+                workspace,
+                dangerous_harness=dangerous_harness,
+            ),
         ]
-        if dangerous_harness:
-            command.append("--dangerously-bypass-approvals-and-sandbox")
-        else:
-            command.extend(["--sandbox", "workspace-write"])
-        command.extend(build_codex_proxy_provider_args(proxy_base))
-        command.extend(
-            build_codex_catalog_args(
-                client_home, model, model_limits, codex_metadata
-            )
-        )
-        ensure_no_public_internal_tool_artifacts(
-            command, context="interactive CLI command"
-        )
-        return command
-
-    if client_name == "claude":
-        command = [
-            "claude",
-            "--bare",
-            "--setting-sources",
-            "user",
-            "--model",
-            model,
-        ]
-        if dangerous_harness:
-            command.append("--dangerously-skip-permissions")
-        command.extend(["--add-dir", str(workspace)])
-        ensure_no_public_internal_tool_artifacts(
-            command, context="interactive CLI command"
-        )
-        return command
-
-    raise ValueError(f"unknown client: {client_name}")
+    ensure_no_public_internal_tool_artifacts(
+        command, context="interactive CLI command"
+    )
+    return command
 
 
 def launch_interactive_client(
@@ -170,6 +169,45 @@ def launch_interactive_client(
     return int(process.wait())
 
 
+def build_hydrated_runtime_config_for_args(
+    args: argparse.Namespace,
+    base_env: dict[str, str],
+    runtime_root: pathlib.Path,
+    runtime_subdir: str,
+) -> tuple[str, dict[str, str], pathlib.Path]:
+    config_source = pathlib.Path(args.config_source)
+    dotenv_env = load_dotenv_file(pathlib.Path(args.env_file))
+    parsed_source = parse_proxy_source(config_source.read_text(encoding="utf-8"))
+    dotenv_env = merge_preset_endpoint_env(parsed_source, dotenv_env, base_env)
+    runtime_dir = runtime_root / runtime_subdir
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = runtime_dir / "debug-trace.jsonl"
+    runtime_config_text = build_runtime_config_text(
+        parsed_source,
+        dotenv_env,
+        listen_host=args.proxy_host,
+        listen_port=args.proxy_port,
+        trace_path=trace_path,
+    )
+    return runtime_config_text, dotenv_env, runtime_dir
+
+
+def write_hydrated_runtime_config_for_launch_plan(
+    args: argparse.Namespace,
+    base_env: dict[str, str],
+    runtime_root: pathlib.Path,
+) -> tuple[pathlib.Path, dict[str, str]]:
+    runtime_config_text, dotenv_env, runtime_dir = build_hydrated_runtime_config_for_args(
+        args,
+        base_env,
+        runtime_root,
+        "external-proxy",
+    )
+    runtime_config_path = runtime_dir / "runtime-config.yaml"
+    runtime_config_path.write_text(runtime_config_text, encoding="utf-8")
+    return runtime_config_path, dotenv_env
+
+
 def start_managed_proxy(
     args: argparse.Namespace,
     base_env: dict[str, str],
@@ -180,30 +218,23 @@ def start_managed_proxy(
     pathlib.Path | None,
     pathlib.Path | None,
 ]:
-    config_source = pathlib.Path(args.config_source)
-    dotenv_env = load_dotenv_file(pathlib.Path(args.env_file))
     proxy_binary = pathlib.Path(args.binary)
     ensure_proxy_binary(proxy_binary)
 
-    parsed_source = parse_proxy_source(config_source.read_text(encoding="utf-8"))
-    dotenv_env = merge_preset_endpoint_env(parsed_source, dotenv_env, base_env)
-    report_dir = runtime_root / "proxy"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    trace_path = report_dir / "debug-trace.jsonl"
-    runtime_config_text = build_runtime_config_text(
-        parsed_source,
-        dotenv_env,
-        listen_host=args.proxy_host,
-        listen_port=args.proxy_port,
-        trace_path=trace_path,
+    runtime_config_text, dotenv_env, report_dir = build_hydrated_runtime_config_for_args(
+        args,
+        base_env,
+        runtime_root,
+        "proxy",
     )
     proxy_env = prepare_proxy_env(base_env, dotenv_env, runtime_root)
-    process, _config_path, stdout_path, stderr_path = start_proxy(
+    process, runtime_config_path, stdout_path, stderr_path = start_proxy(
         proxy_binary,
         runtime_config_text,
         report_dir,
         proxy_env,
     )
+    args.runtime_config_path = runtime_config_path
     return (
         f"http://{args.proxy_host}:{args.proxy_port}",
         process,
@@ -211,14 +242,12 @@ def start_managed_proxy(
         stderr_path,
     )
 
-
 def run(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     timeout_policy = timeout_policy_from_args(args)
     ensure_client_binary(args.client)
 
     workspace = pathlib.Path(args.workspace).resolve()
-    config_source = pathlib.Path(args.config_source)
     base_env = dict(os.environ)
 
     with tempfile.TemporaryDirectory(prefix=f"interactive-cli-{args.client}-") as temp_dir:
@@ -230,7 +259,15 @@ def run(argv: list[str] | None = None) -> int:
         try:
             if args.proxy_base:
                 proxy_base = normalize_proxy_base(args.proxy_base)
-                proxy_key = resolve_proxy_key(base_env)
+                launch_config_path, dotenv_env = (
+                    write_hydrated_runtime_config_for_launch_plan(
+                        args,
+                        base_env,
+                        runtime_root,
+                    )
+                )
+                args.runtime_config_path = launch_config_path
+                proxy_key = resolve_proxy_key(base_env, dotenv_env)
             else:
                 (
                     proxy_base,
@@ -246,6 +283,7 @@ def run(argv: list[str] | None = None) -> int:
                     base_env,
                     load_dotenv_file(pathlib.Path(args.env_file)),
                 )
+                launch_config_path = pathlib.Path(args.runtime_config_path)
 
             if proxy_process is None:
                 wait_for_health(
@@ -260,22 +298,34 @@ def run(argv: list[str] | None = None) -> int:
                     stdout_path=proxy_stdout_path,
                     stderr_path=proxy_stderr_path,
                 )
-            live_profile = fetch_live_model_profile(
-                proxy_base,
-                args.model,
-                proxy_key=proxy_key,
-            )
-
             client_home = runtime_root / "homes" / args.client
             client_base_env = dict(base_env)
             client_base_env[PROXY_KEY_ENV] = proxy_key
+            native_args = build_interactive_native_args(
+                args.client,
+                workspace,
+                dangerous_harness=args.dangerous_harness,
+            )
+            launch_plan = build_client_launch_plan(
+                client_name=args.client,
+                proxy_binary=pathlib.Path(args.binary),
+                config_path=launch_config_path,
+                env_file_path=pathlib.Path(args.env_file),
+                proxy_base=proxy_base,
+                proxy_key=proxy_key,
+                artifact_dir=runtime_root / "artifacts" / args.client,
+                client_home=client_home,
+                model=args.model,
+                native_args=native_args,
+                base_env=client_base_env,
+            )
             client_env = build_client_env(
                 args.client,
                 client_base_env,
                 proxy_base,
                 client_home,
                 model_name=args.model,
-                model_limits=live_profile.limits,
+                launch_plan=launch_plan,
             )
             command = build_interactive_command(
                 args.client,
@@ -283,9 +333,8 @@ def run(argv: list[str] | None = None) -> int:
                 args.model,
                 proxy_base,
                 client_home=client_home,
-                model_limits=live_profile.limits,
-                codex_metadata=live_profile.codex_metadata,
                 dangerous_harness=args.dangerous_harness,
+                launch_plan=launch_plan,
             )
             return launch_interactive_client(command, workspace, client_env)
         finally:

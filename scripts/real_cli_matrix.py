@@ -92,13 +92,10 @@ DEFAULT_CASE_TIMEOUT_FLOOR_SECS = 240
 DEFAULT_LONG_HORIZON_TIMEOUT_FLOOR_SECS = 420
 DEFAULT_PROCESS_TERMINATE_GRACE_SECS = 15
 DEFAULT_POST_KILL_WAIT_SECS = 2
-DEFAULT_AUTO_COMPACT_RATIO = 0.85
-DEFAULT_CODEX_TRUNCATION_LIMIT_BYTES = 10000
 RESERVED_INTERNAL_TOOL_NAME_PREFIX = "__llmup_custom__"
 INTERNAL_TOOL_ARTIFACT_PATTERN = re.compile(r"__llmup_custom__[A-Za-z0-9_:-]*")
 PUBLIC_APPLY_PATCH_TOOL_NAME = "apply_patch"
 PUBLIC_APPLY_PATCH_TOOL_TYPE = "freeform"
-DEFAULT_CODEX_APPLY_PATCH_TOOL_TYPE = PUBLIC_APPLY_PATCH_TOOL_TYPE
 PRESET_ENDPOINT_MODEL_ENV = "PRESET_ENDPOINT_MODEL"
 PRESET_ENDPOINT_API_KEY_ENV = "PRESET_ENDPOINT_API_KEY"
 PRESET_OPENAI_ENDPOINT_BASE_URL_ENV = "PRESET_OPENAI_ENDPOINT_BASE_URL"
@@ -111,7 +108,6 @@ PRESET_OPENAI_RESPONSES_COMPATIBLE_UPSTREAM = "PRESET-OPENAI-RESPONSES-COMPATIBL
 PRESET_ANTHROPIC_COMPATIBLE_UPSTREAM = "PRESET-ANTHROPIC-COMPATIBLE"
 AUTH_MODE_ENV = "LLM_UNIVERSAL_PROXY_AUTH_MODE"
 PROXY_KEY_ENV = "LLM_UNIVERSAL_PROXY_KEY"
-CODEX_PROXY_PROVIDER_AUTH_ENV = "OPENAI_API_KEY"
 DEFAULT_PROXY_KEY = "llmup-proxy-key"
 SUPPORTED_PROMPT_TEMPLATE_FIELDS = frozenset({"client_name"})
 REPLAY_MARKER_KEY_ENV = "LLMUP_INTERNAL_REPLAY_MARKER_KEY"
@@ -293,11 +289,14 @@ class LiveModelProfile:
     limits: ModelLimits | None = None
     codex_metadata: CodexModelMetadata | None = None
 
-DEFAULT_CODEX_BASE_INSTRUCTIONS = (
-    "You are Codex, a coding agent based on GPT-5. "
-    "You and the user share the same workspace and collaborate "
-    "to achieve the user's goals."
-)
+
+@dataclasses.dataclass(frozen=True)
+class ClientLaunchPlan:
+    program: str
+    argv: list[str]
+    env: dict[str, str]
+    projection: dict[str, object]
+    artifacts: dict[str, object]
 
 
 def normalize_proxy_base(proxy_base: str) -> str:
@@ -350,45 +349,6 @@ def _parse_surface_metadata_value(
         surface.supports_parallel_calls = bool(parsed_value)
 
 
-def _parse_codex_metadata_value(
-    codex_metadata: CodexModelMetadata,
-    key: str,
-    value: str,
-    parsed_value: object,
-) -> None:
-    if key == "supports_search_tool":
-        codex_metadata.supports_search_tool = bool(parsed_value)
-    elif key == "input_modalities":
-        codex_metadata.input_modalities = parse_string_list(value)
-    elif key == "supports_view_image":
-        codex_metadata.supports_view_image = bool(parsed_value)
-    elif key == "apply_patch_tool_type" and isinstance(parsed_value, str):
-        codex_metadata.apply_patch_tool_type = parsed_value
-    elif key == "supports_parallel_tool_calls":
-        codex_metadata.supports_parallel_tool_calls = bool(parsed_value)
-
-
-def default_codex_supported_reasoning_levels() -> list[dict[str, str]]:
-    return [
-        {
-            "effort": "low",
-            "description": "Fast responses with lighter reasoning",
-        },
-        {
-            "effort": "medium",
-            "description": "Balanced reasoning depth for everyday work",
-        },
-        {
-            "effort": "high",
-            "description": "Greater reasoning depth for harder problems",
-        },
-        {
-            "effort": "xhigh",
-            "description": "Maximum reasoning depth for complex problems",
-        },
-    ]
-
-
 def find_internal_tool_artifact(value: object) -> str | None:
     if isinstance(value, str):
         text = value
@@ -407,10 +367,6 @@ def ensure_locked_apply_patch_public_contract() -> None:
             "apply_patch public contract must not expose reserved internal tool artifact "
             f"{artifact}"
         )
-    if DEFAULT_CODEX_APPLY_PATCH_TOOL_TYPE != PUBLIC_APPLY_PATCH_TOOL_TYPE:
-        raise ValueError(
-            "apply_patch public contract must remain freeform on client-visible surfaces"
-        )
 
 
 def ensure_no_public_internal_tool_artifacts(
@@ -425,45 +381,11 @@ def ensure_no_public_internal_tool_artifacts(
     )
 
 
-def default_codex_catalog_entry(model_name: str) -> dict[str, object]:
-    ensure_locked_apply_patch_public_contract()
-    return {
-        "slug": model_name,
-        "display_name": model_name,
-        "supported_reasoning_levels": default_codex_supported_reasoning_levels(),
-        "shell_type": "shell_command",
-        "visibility": "list",
-        "supported_in_api": True,
-        "priority": 0,
-        "base_instructions": DEFAULT_CODEX_BASE_INSTRUCTIONS,
-        "supports_reasoning_summaries": False,
-        "support_verbosity": False,
-        "truncation_policy": {
-            "mode": "bytes",
-            "limit": DEFAULT_CODEX_TRUNCATION_LIMIT_BYTES,
-        },
-        "apply_patch_tool_type": DEFAULT_CODEX_APPLY_PATCH_TOOL_TYPE,
-        "supports_parallel_tool_calls": False,
-        "experimental_supported_tools": [],
-    }
-
-
-def validate_public_apply_patch_tool_type(value: str | None) -> str | None:
-    if value is None:
-        return None
-    if value != PUBLIC_APPLY_PATCH_TOOL_TYPE:
-        raise ValueError(
-            "apply_patch public contract must remain freeform on client-visible surfaces"
-        )
-    return value
-
-
 @dataclasses.dataclass
 class ParsedModelAlias:
     target: str
     limits: ModelLimits | None = None
     surface: SurfaceMetadata | None = None
-    codex_metadata: CodexModelMetadata | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -491,7 +413,6 @@ class ProxySourceConfig:
     upstreams: collections.OrderedDict[str, collections.OrderedDict[str, object]]
     upstream_limits: collections.OrderedDict[str, ModelLimits]
     upstream_surface_defaults: collections.OrderedDict[str, SurfaceMetadata]
-    upstream_codex_metadata: collections.OrderedDict[str, CodexModelMetadata]
     model_aliases: collections.OrderedDict[str, str]
     model_alias_configs: collections.OrderedDict[str, ParsedModelAlias]
     debug_trace: collections.OrderedDict[str, object]
@@ -655,9 +576,6 @@ def parse_proxy_source(text: str) -> ProxySourceConfig:
     upstream_surface_defaults: collections.OrderedDict[str, SurfaceMetadata] = (
         collections.OrderedDict()
     )
-    upstream_codex_metadata: collections.OrderedDict[str, CodexModelMetadata] = (
-        collections.OrderedDict()
-    )
     model_aliases: collections.OrderedDict[str, str] = collections.OrderedDict()
     model_alias_configs: collections.OrderedDict[str, ParsedModelAlias] = (
         collections.OrderedDict()
@@ -744,11 +662,11 @@ def parse_proxy_source(text: str) -> ProxySourceConfig:
                 upstream_surface_defaults[current_upstream] = SurfaceMetadata()
                 continue
             if indent == 4 and current_upstream is not None and stripped == "codex:":
-                current_upstream_subsection = "codex"
-                current_upstream_nested_key = None
-                current_upstream_surface_section = None
-                upstream_codex_metadata[current_upstream] = CodexModelMetadata()
-                continue
+                raise ValueError(
+                    "legacy codex: schema at "
+                    f"upstreams.{current_upstream} is no longer supported; "
+                    "use limits/surface"
+                )
             if (
                 indent == 6
                 and current_upstream is not None
@@ -785,20 +703,6 @@ def parse_proxy_source(text: str) -> ProxySourceConfig:
                     upstream_limits[current_upstream].context_window = int(parsed_value)
                 elif key == "max_output_tokens":
                     upstream_limits[current_upstream].max_output_tokens = int(parsed_value)
-                continue
-            if (
-                indent == 6
-                and current_upstream is not None
-                and current_upstream_subsection == "codex"
-            ):
-                key, value = stripped.split(":", 1)
-                parsed_value = parse_scalar(value)
-                _parse_codex_metadata_value(
-                    upstream_codex_metadata[current_upstream],
-                    key,
-                    value,
-                    parsed_value,
-                )
                 continue
             if (
                 indent == 6
@@ -857,12 +761,11 @@ def parse_proxy_source(text: str) -> ProxySourceConfig:
                         alias_config.surface = SurfaceMetadata()
                     continue
                 if stripped == "codex:":
-                    current_alias_subsection = "codex"
-                    current_alias_surface_section = None
-                    alias_config = model_alias_configs[current_alias]
-                    if alias_config.codex_metadata is None:
-                        alias_config.codex_metadata = CodexModelMetadata()
-                    continue
+                    raise ValueError(
+                        "legacy codex: schema at "
+                        f"model_aliases.{current_alias} is no longer supported; "
+                        "use limits/surface"
+                    )
                 current_alias_subsection = None
                 current_alias_surface_section = None
                 key, value = stripped.split(":", 1)
@@ -916,25 +819,6 @@ def parse_proxy_source(text: str) -> ProxySourceConfig:
                 elif key == "max_output_tokens":
                     limits.max_output_tokens = int(parsed_value)
                 continue
-            if (
-                indent == 6
-                and current_alias is not None
-                and current_alias_subsection == "codex"
-            ):
-                key, value = stripped.split(":", 1)
-                codex_metadata = model_alias_configs[current_alias].codex_metadata
-                if codex_metadata is None:
-                    codex_metadata = CodexModelMetadata()
-                    model_alias_configs[current_alias].codex_metadata = codex_metadata
-                parsed_value = parse_scalar(value)
-                _parse_codex_metadata_value(
-                    codex_metadata,
-                    key,
-                    value,
-                    parsed_value,
-                )
-                continue
-
         if section == "debug_trace" and indent == 2:
             key, value = stripped.split(":", 1)
             debug_trace[key] = parse_scalar(value)
@@ -946,7 +830,6 @@ def parse_proxy_source(text: str) -> ProxySourceConfig:
         upstreams=upstreams,
         upstream_limits=upstream_limits,
         upstream_surface_defaults=upstream_surface_defaults,
-        upstream_codex_metadata=upstream_codex_metadata,
         model_aliases=model_aliases,
         model_alias_configs=model_alias_configs,
         debug_trace=debug_trace,
@@ -1275,57 +1158,11 @@ def _render_surface_metadata(
         )
 
 
-def _render_codex_metadata(
-    lines: list[str],
-    indent: str,
-    codex_metadata: CodexModelMetadata | None,
-) -> None:
-    if codex_metadata is None:
-        return
-    if (
-        codex_metadata.input_modalities is None
-        and codex_metadata.supports_search_tool is None
-        and codex_metadata.supports_view_image is None
-        and codex_metadata.apply_patch_tool_type is None
-        and codex_metadata.supports_parallel_tool_calls is None
-    ):
-        return
-    lines.append(f"{indent}codex:")
-    if codex_metadata.input_modalities is not None:
-        lines.append(
-            f"{indent}  input_modalities: {render_scalar(list(codex_metadata.input_modalities))}"
-        )
-    if codex_metadata.supports_search_tool is not None:
-        lines.append(
-            f"{indent}  supports_search_tool: {render_scalar(codex_metadata.supports_search_tool)}"
-        )
-    if codex_metadata.supports_view_image is not None:
-        lines.append(
-            f"{indent}  supports_view_image: {render_scalar(codex_metadata.supports_view_image)}"
-        )
-    if codex_metadata.apply_patch_tool_type is not None:
-        lines.append(
-            f"{indent}  apply_patch_tool_type: {render_scalar(codex_metadata.apply_patch_tool_type)}"
-        )
-    if codex_metadata.supports_parallel_tool_calls is not None:
-        lines.append(
-            f"{indent}  supports_parallel_tool_calls: {render_scalar(codex_metadata.supports_parallel_tool_calls)}"
-        )
-
-
 def _target_upstream_name(target: str) -> str | None:
     if ":" not in target:
         return None
     upstream_name, _ = target.split(":", 1)
     return upstream_name or None
-
-
-def _merged_codex_metadata(
-    base: CodexModelMetadata | None, override: CodexModelMetadata | None
-) -> CodexModelMetadata | None:
-    if base is None:
-        return override
-    return base.merged_with(override)
 
 
 def _effective_surface_metadata(
@@ -1380,15 +1217,10 @@ def resolve_codex_model_metadata(
         upstream_name = _target_upstream_name(model_name)
         if upstream_name is None:
             return None
-        legacy_metadata = config.upstream_codex_metadata.get(upstream_name)
         surface_metadata = _codex_metadata_from_surface(
             _effective_surface_metadata(config.upstream_surface_defaults.get(upstream_name))
         )
-        metadata = _merged_codex_metadata(
-            legacy_metadata,
-            surface_metadata,
-        )
-        return metadata if metadata is not None else DEFAULT_PROXY_CODEX_METADATA
+        return surface_metadata if surface_metadata is not None else DEFAULT_PROXY_CODEX_METADATA
 
     upstream_name = _target_upstream_name(alias_config.target)
     surface_metadata = _codex_metadata_from_surface(
@@ -1399,17 +1231,7 @@ def resolve_codex_model_metadata(
             alias_config.surface,
         )
     )
-    legacy_metadata = _merged_codex_metadata(
-        config.upstream_codex_metadata.get(upstream_name)
-        if upstream_name is not None
-        else None,
-        alias_config.codex_metadata,
-    )
-    metadata = _merged_codex_metadata(
-        legacy_metadata,
-        surface_metadata,
-    )
-    return metadata if metadata is not None else DEFAULT_PROXY_CODEX_METADATA
+    return surface_metadata if surface_metadata is not None else DEFAULT_PROXY_CODEX_METADATA
 
 
 def _runtime_alias_configs(
@@ -1428,14 +1250,12 @@ def _runtime_alias_configs(
                 target=f"LOCAL-QWEN:{qwen_model}",
                 limits=alias_config.limits,
                 surface=alias_config.surface,
-                codex_metadata=alias_config.codex_metadata,
             )
             continue
         aliases[alias_name] = ParsedModelAlias(
             target=target,
             limits=alias_config.limits,
             surface=alias_config.surface,
-            codex_metadata=alias_config.codex_metadata,
         )
 
     if qwen_enabled:
@@ -1504,11 +1324,6 @@ def _render_runtime_upstreams_section(
             "surface_defaults",
             runtime_surface_defaults.get(upstream_name),
         )
-        _render_codex_metadata(
-            lines,
-            "    ",
-            config.upstream_codex_metadata.get(upstream_name),
-        )
     return lines
 
 
@@ -1520,7 +1335,6 @@ def _render_runtime_aliases_section(
         if (
             alias_config.limits is None
             and alias_config.surface is None
-            and alias_config.codex_metadata is None
         ):
             lines.append(f"  {alias_name}: {json.dumps(alias_config.target)}")
             continue
@@ -1528,7 +1342,6 @@ def _render_runtime_aliases_section(
         lines.append(f"    target: {json.dumps(alias_config.target)}")
         _render_model_limits(lines, "    ", alias_config.limits)
         _render_surface_metadata(lines, "    ", "surface", alias_config.surface)
-        _render_codex_metadata(lines, "    ", alias_config.codex_metadata)
     return lines
 
 
@@ -1901,160 +1714,8 @@ def _resolve_host_rust_toolchain_env(base_env: dict[str, str]) -> dict[str, str]
     return resolved
 
 
-def codex_available_input_budget(
-    context_window: int, max_output_tokens: int | None = None
-) -> int:
-    if max_output_tokens is None:
-        return context_window
-    if max_output_tokens >= context_window:
-        raise ValueError(
-            "max_output_tokens must be less than context_window for Codex auto compact budgeting"
-        )
-    return context_window - max_output_tokens
-
-
-def default_auto_compact_token_limit(
-    context_window: int, max_output_tokens: int | None = None
-) -> int:
-    return int(
-        codex_available_input_budget(context_window, max_output_tokens)
-        * DEFAULT_AUTO_COMPACT_RATIO
-    )
-
-
-def codex_model_catalog_path(home_dir: pathlib.Path) -> pathlib.Path:
-    return pathlib.Path(home_dir) / ".codex" / "catalog.json"
-
-
 def replay_marker_key_path(runtime_root: pathlib.Path) -> pathlib.Path:
     return pathlib.Path(runtime_root) / REPLAY_MARKER_KEY_FILENAME
-
-
-def build_codex_model_catalog(
-    model_name: str,
-    model_limits: ModelLimits | None,
-    codex_metadata: CodexModelMetadata | None = None,
-) -> dict[str, object] | None:
-    has_catalog_fields = (
-        codex_metadata is not None
-        or (model_limits is not None and model_limits.context_window is not None)
-    )
-    if not has_catalog_fields:
-        return None
-
-    model_entry = default_codex_catalog_entry(model_name)
-    if model_limits is not None and model_limits.context_window is not None:
-        context_window = model_limits.context_window
-        model_entry["context_window"] = context_window
-        model_entry["auto_compact_token_limit"] = default_auto_compact_token_limit(
-            context_window,
-            model_limits.max_output_tokens,
-        )
-    if codex_metadata is not None:
-        if codex_metadata.input_modalities is not None:
-            model_entry["input_modalities"] = list(codex_metadata.input_modalities)
-        if codex_metadata.supports_search_tool is not None:
-            model_entry["supports_search_tool"] = codex_metadata.supports_search_tool
-        public_apply_patch_tool_type = validate_public_apply_patch_tool_type(
-            codex_metadata.apply_patch_tool_type
-        )
-        if public_apply_patch_tool_type is not None:
-            model_entry["apply_patch_tool_type"] = public_apply_patch_tool_type
-        if codex_metadata.supports_parallel_tool_calls is not None:
-            model_entry["supports_parallel_tool_calls"] = (
-                codex_metadata.supports_parallel_tool_calls
-            )
-    payload = {
-        "models": [
-            model_entry
-        ]
-    }
-    ensure_no_public_internal_tool_artifacts(payload, context="codex model catalog")
-    return payload
-
-
-def codex_should_disable_view_image(
-    codex_metadata: CodexModelMetadata | None,
-) -> bool:
-    if codex_metadata is None:
-        return False
-    if codex_metadata.supports_view_image is not None:
-        return not codex_metadata.supports_view_image
-    if codex_metadata.input_modalities is None:
-        return False
-    return "image" not in {
-        modality.strip().lower() for modality in codex_metadata.input_modalities
-    }
-
-
-def ensure_codex_model_catalog(
-    home_dir: pathlib.Path,
-    model_name: str,
-    model_limits: ModelLimits | None,
-    codex_metadata: CodexModelMetadata | None = None,
-) -> pathlib.Path | None:
-    payload = build_codex_model_catalog(model_name, model_limits, codex_metadata)
-    if payload is None:
-        return None
-    catalog_path = codex_model_catalog_path(home_dir)
-    catalog_path.parent.mkdir(parents=True, exist_ok=True)
-    catalog_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return catalog_path
-
-
-def build_codex_catalog_args(
-    home_dir: pathlib.Path | None,
-    model_name: str,
-    model_limits: ModelLimits | None,
-    codex_metadata: CodexModelMetadata | None = None,
-) -> list[str]:
-    if home_dir is None:
-        return []
-    catalog_path = ensure_codex_model_catalog(
-        home_dir,
-        model_name,
-        model_limits,
-        codex_metadata,
-    )
-    if catalog_path is None:
-        return []
-    args = [
-        "-c",
-        f'model_catalog_json="{catalog_path}"',
-    ]
-    if codex_metadata is not None and codex_metadata.supports_search_tool is False:
-        args.extend(
-            [
-                "-c",
-                'web_search="disabled"',
-            ]
-        )
-    if codex_should_disable_view_image(codex_metadata):
-        args.extend(
-            [
-                "-c",
-                "tools.view_image=false",
-            ]
-        )
-    ensure_no_public_internal_tool_artifacts(args, context="codex catalog args")
-    return args
-
-
-def build_codex_proxy_provider_args(proxy_base: str) -> list[str]:
-    return [
-        "-c",
-        'model_provider="proxy"',
-        "-c",
-        'model_providers.proxy.name="Proxy"',
-        "-c",
-        f'model_providers.proxy.env_key="{CODEX_PROXY_PROVIDER_AUTH_ENV}"',
-        "-c",
-        f'model_providers.proxy.base_url="{proxy_base}/openai/v1"',
-        "-c",
-        'model_providers.proxy.wire_api="responses"',
-        "-c",
-        "model_providers.proxy.supports_websockets=false",
-    ]
 
 
 def ensure_replay_marker_key(runtime_root: pathlib.Path) -> str:
@@ -2111,6 +1772,197 @@ def timeout_policy_from_args(args: argparse.Namespace) -> TimeoutPolicy:
     )
 
 
+def client_launcher_name(client_name: str) -> str:
+    if client_name not in CLIENT_NAMES:
+        raise ValueError(f"unknown client: {client_name}")
+    return f"llmup-{client_name}"
+
+
+def _client_home_roots(client_home: pathlib.Path) -> dict[str, pathlib.Path]:
+    client_home = pathlib.Path(client_home)
+    return {
+        "LLMUP_HOME": client_home / ".llmup",
+        "LLMUP_CODEX_HOME": client_home / ".codex",
+        "LLMUP_CLAUDE_CONFIG_DIR": client_home / ".claude",
+    }
+
+
+def _launch_plan_env(
+    base_env: dict[str, str],
+    client_home: pathlib.Path,
+) -> dict[str, str]:
+    env = _safe_base_env(base_env)
+    env.update(_resolve_host_rust_toolchain_env(base_env))
+    env["HOME"] = str(pathlib.Path(client_home))
+    env["LLMUP_INTERNAL_LAUNCH_PLAN"] = "1"
+    for key, path in _client_home_roots(client_home).items():
+        path.mkdir(parents=True, exist_ok=True)
+        env[key] = str(path)
+    return env
+
+
+def _launcher_path_for_binary(
+    proxy_binary: pathlib.Path,
+    launcher_name: str,
+    temp_dir: pathlib.Path,
+) -> pathlib.Path:
+    proxy_binary = pathlib.Path(proxy_binary)
+    if proxy_binary.name == launcher_name:
+        return proxy_binary
+    launcher_path = temp_dir / launcher_name
+    launcher_path.symlink_to(proxy_binary.resolve())
+    return launcher_path
+
+
+def _coerce_string_list(value: object, field: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise RuntimeError(f"launch plan field {field!r} must be a string array")
+    return list(value)
+
+
+def _coerce_string_map(value: object, field: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"launch plan field {field!r} must be an object")
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            raise RuntimeError(f"launch plan field {field!r} must map strings to strings")
+        result[key] = item
+    return result
+
+
+def build_client_launch_plan(
+    *,
+    client_name: str,
+    proxy_binary: pathlib.Path,
+    config_path: pathlib.Path,
+    env_file_path: pathlib.Path,
+    proxy_base: str,
+    proxy_key: str,
+    artifact_dir: pathlib.Path,
+    client_home: pathlib.Path,
+    model: str,
+    native_args: Sequence[str],
+    base_env: dict[str, str],
+) -> ClientLaunchPlan:
+    launcher_name = client_launcher_name(client_name)
+    proxy_base = normalize_proxy_base(proxy_base)
+    artifact_dir = pathlib.Path(artifact_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    env = _launch_plan_env(base_env, pathlib.Path(client_home))
+
+    with tempfile.TemporaryDirectory(prefix=f"{launcher_name}-plan-") as temp_dir:
+        launcher_path = _launcher_path_for_binary(
+            pathlib.Path(proxy_binary),
+            launcher_name,
+            pathlib.Path(temp_dir),
+        )
+        command = [
+            str(launcher_path),
+            "--llmup-internal-launch-plan-json",
+            "--llmup-internal-proxy-base",
+            proxy_base,
+            "--llmup-internal-proxy-key",
+            proxy_key,
+            "--llmup-internal-artifact-dir",
+            str(artifact_dir),
+            "--llmup-config",
+            str(config_path),
+            "--llmup-env-file",
+            str(env_file_path),
+            "--llmup-model",
+            model,
+            "--",
+            *native_args,
+        ]
+        completed = subprocess.run(
+            command,
+            cwd=str(REPO_ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+    if completed.returncode != 0:
+        details = "\n".join(
+            part
+            for part in (
+                f"exit code {completed.returncode}",
+                f"stdout: {completed.stdout.strip()}" if completed.stdout.strip() else "",
+                f"stderr: {completed.stderr.strip()}" if completed.stderr.strip() else "",
+            )
+            if part
+        )
+        raise RuntimeError(f"failed to build {client_name} launch plan: {details}")
+
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"failed to parse {client_name} launch plan JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise RuntimeError("launch plan JSON must be an object")
+
+    program = payload.get("program")
+    if not isinstance(program, str):
+        raise RuntimeError("launch plan field 'program' must be a string")
+    projection = payload.get("projection")
+    if not isinstance(projection, dict):
+        raise RuntimeError("launch plan field 'projection' must be an object")
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise RuntimeError("launch plan field 'artifacts' must be an object")
+
+    return ClientLaunchPlan(
+        program=program,
+        argv=_coerce_string_list(payload.get("argv"), "argv"),
+        env=_coerce_string_map(payload.get("env"), "env"),
+        projection=dict(projection),
+        artifacts=dict(artifacts),
+    )
+
+
+def build_matrix_native_args(
+    client_name: str,
+    fixture: TaskFixture,
+    workspace_dir: pathlib.Path,
+    *,
+    dangerous_harness: bool = False,
+) -> list[str]:
+    workspace_dir = pathlib.Path(workspace_dir)
+    prompt_text = render_fixture_prompt(fixture, client_name)
+    if client_name == "codex":
+        args = [
+            "exec",
+            prompt_text,
+            "--ephemeral",
+            "--json",
+            "--skip-git-repo-check",
+            "-C",
+            str(workspace_dir),
+        ]
+        if dangerous_harness:
+            args.append("--dangerously-bypass-approvals-and-sandbox")
+        return args
+    if client_name == "claude":
+        args = [
+            "--bare",
+            "--print",
+            "--output-format",
+            "text",
+            "--setting-sources",
+            "user",
+            "--no-session-persistence",
+            "--add-dir",
+            str(workspace_dir),
+        ]
+        if dangerous_harness:
+            args.append("--dangerously-skip-permissions")
+        return args
+    raise ValueError(f"unknown client: {client_name}")
+
+
 def build_client_env(
     client_name: str,
     base_env: dict[str, str],
@@ -2118,7 +1970,10 @@ def build_client_env(
     home_dir: pathlib.Path,
     model_name: str | None = None,
     model_limits: ModelLimits | None = None,
+    launch_plan: ClientLaunchPlan | None = None,
 ) -> dict[str, str]:
+    if client_name not in CLIENT_NAMES:
+        raise ValueError(f"unknown client: {client_name}")
     home_dir = pathlib.Path(home_dir)
     xdg_config = home_dir / ".config"
     xdg_cache = home_dir / ".cache"
@@ -2148,30 +2003,8 @@ def build_client_env(
         }
     )
     env.update(_resolve_host_rust_toolchain_env(base_env))
-    proxy_key = resolve_proxy_key(base_env)
-
-    if client_name == "codex":
-        codex_home = home_dir / ".codex"
-        codex_home.mkdir(parents=True, exist_ok=True)
-        env.update(
-            {
-                "CODEX_HOME": str(codex_home),
-                "OPENAI_API_KEY": proxy_key,
-                "OPENAI_BASE_URL": f"{proxy_base}/openai/v1",
-            }
-        )
-    elif client_name == "claude":
-        claude_dir = home_dir / ".claude"
-        claude_dir.mkdir(parents=True, exist_ok=True)
-        env.update(
-            {
-                "CLAUDE_CONFIG_DIR": str(claude_dir),
-                "ANTHROPIC_API_KEY": proxy_key,
-                "ANTHROPIC_BASE_URL": f"{proxy_base}/anthropic",
-            }
-        )
-    else:
-        raise ValueError(f"unknown client: {client_name}")
+    if launch_plan is not None:
+        env.update(launch_plan.env)
     return env
 
 
@@ -5811,63 +5644,22 @@ def build_client_command(
     workspace_dir: pathlib.Path,
     client_home: pathlib.Path | None = None,
     dangerous_harness: bool = False,
+    launch_plan: ClientLaunchPlan | None = None,
 ) -> list[str]:
-    prompt_text = render_fixture_prompt(fixture, client_name)
-    if client_name == "codex":
+    if launch_plan is not None:
+        command = [launch_plan.program, *launch_plan.argv]
+    else:
         command = [
-            "codex",
-            "exec",
-            prompt_text,
-            "--model",
-            target.proxy_model,
-            "--ephemeral",
-            "--json",
-            "--skip-git-repo-check",
+            client_name,
+            *build_matrix_native_args(
+                client_name,
+                fixture,
+                workspace_dir,
+                dangerous_harness=dangerous_harness,
+            ),
         ]
-        if dangerous_harness:
-            command.append("--dangerously-bypass-approvals-and-sandbox")
-        else:
-            command.extend(["--sandbox", "workspace-write"])
-        command.extend(
-            [
-                "-C",
-                str(workspace_dir),
-            ]
-        )
-        command.extend(build_codex_proxy_provider_args(proxy_base))
-        command.extend(
-            build_codex_catalog_args(
-                client_home,
-                target.proxy_model,
-                target.limits,
-                target.codex_metadata,
-            )
-        )
-        ensure_no_public_internal_tool_artifacts(
-            command, context="real CLI command"
-        )
-        return command
-    if client_name == "claude":
-        command = [
-            "claude",
-            "--bare",
-            "--print",
-            "--output-format",
-            "text",
-            "--setting-sources",
-            "user",
-            "--model",
-            target.proxy_model,
-            "--no-session-persistence",
-        ]
-        if dangerous_harness:
-            command.append("--dangerously-skip-permissions")
-        command.extend(["--add-dir", str(workspace_dir)])
-        ensure_no_public_internal_tool_artifacts(
-            command, context="real CLI command"
-        )
-        return command
-    raise ValueError(f"unknown client: {client_name}")
+    ensure_no_public_internal_tool_artifacts(command, context="real CLI command")
+    return command
 
 
 def run_matrix_case(
@@ -5877,6 +5669,10 @@ def run_matrix_case(
     base_env: dict[str, str],
     timeout_policy: TimeoutPolicy = DEFAULT_TIMEOUT_POLICY,
     dangerous_harness: bool = False,
+    proxy_binary: pathlib.Path | None = None,
+    config_path: pathlib.Path | None = None,
+    env_file_path: pathlib.Path | None = None,
+    proxy_key: str | None = None,
 ) -> dict[str, object]:
     report_dir = report_dir.resolve()
     cases_dir = report_dir / "cases"
@@ -5885,6 +5681,25 @@ def run_matrix_case(
     runtime_root = prepare_client_runtime_root(report_dir).resolve()
     workspace_dir = prepare_workspace(case, runtime_root).resolve()
     home_dir = resolve_client_home_dir(case, runtime_root).resolve()
+    native_args = build_matrix_native_args(
+        case.client_name,
+        case.fixture,
+        workspace_dir,
+        dangerous_harness=dangerous_harness,
+    )
+    launch_plan = build_client_launch_plan(
+        client_name=case.client_name,
+        proxy_binary=proxy_binary or DEFAULT_PROXY_BINARY,
+        config_path=config_path or DEFAULT_CONFIG_SOURCE,
+        env_file_path=env_file_path or DEFAULT_ENV_FILE,
+        proxy_base=proxy_base,
+        proxy_key=proxy_key or resolve_proxy_key(base_env),
+        artifact_dir=home_dir / "artifacts",
+        client_home=home_dir,
+        model=case.target.proxy_model,
+        native_args=native_args,
+        base_env=base_env,
+    )
     env = build_client_env(
         case.client_name,
         base_env,
@@ -5892,6 +5707,7 @@ def run_matrix_case(
         home_dir,
         model_name=case.target.proxy_model,
         model_limits=case.target.limits,
+        launch_plan=launch_plan,
     )
     command = build_client_command(
         case.client_name,
@@ -5901,6 +5717,7 @@ def run_matrix_case(
         workspace_dir,
         client_home=home_dir,
         dangerous_harness=dangerous_harness,
+        launch_plan=launch_plan,
     )
     stdin_text = client_stdin_text(case.client_name, case.fixture)
     timeout_secs = resolve_case_timeout_secs(case, home_dir, timeout_policy)
@@ -6264,7 +6081,7 @@ def run(argv: list[str] | None = None) -> int:
     results: list[dict[str, object]] = []
 
     try:
-        process, _runtime_config_path, _stdout_path, _stderr_path = start_proxy(
+        process, runtime_config_path, _stdout_path, _stderr_path = start_proxy(
             proxy_binary, runtime_config_text, report_dir, proxy_env
         )
         proxy_base = f"http://{args.proxy_host}:{proxy_port}"
@@ -6317,6 +6134,10 @@ def run(argv: list[str] | None = None) -> int:
                     client_base_env,
                     timeout_policy=timeout_policy,
                     dangerous_harness=args.dangerous_harness,
+                    proxy_binary=proxy_binary,
+                    config_path=runtime_config_path,
+                    env_file_path=pathlib.Path(args.env_file),
+                    proxy_key=proxy_key,
                 )
             )
     finally:

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.2.37 - 2026-05-19
+
+- Added launcher-managed model capability projection for Codex CLI and Claude Code, including configured context windows, maximum output tokens, Codex auto-compact thresholds, web-search capability, and Claude custom model metadata.
+- Added `llmup-config set-limits` so users can update alias or upstream model limits without hand-editing YAML, while preserving existing targets and surface metadata.
+- Moved CLI matrix and interactive harness setup onto the Rust launcher launch-plan path, keeping tests aligned with real `llmup-codex` / `llmup-claude` behavior instead of duplicating projection logic in Python.
+- Hardened launcher behavior around native model/profile conflicts, true `--llmup-no-proxy` passthrough, generated Codex model catalogs, Anthropic model limit exposure, and focused regression coverage for the new agent metadata path.
+- Advanced the main-branch release identity to Cargo package version `0.2.37`, the next patch version after the unpublished `0.2.36` development identity and the published, occupied `v0.2.35` tag, without moving, deleting, or reusing the existing tag.
+
 ## v0.2.36 - 2026-05-19
 
 - Advanced the main-branch release identity to Cargo package version `0.2.36`, the next patch version after the published, occupied `v0.2.35` tag, without moving, deleting, or reusing the existing tag.

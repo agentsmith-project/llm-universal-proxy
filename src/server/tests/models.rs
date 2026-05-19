@@ -69,6 +69,96 @@ fn models_catalog_config(
     }
 }
 
+fn models_catalog_metadata_config(
+    alias: &str,
+    format: crate::formats::UpstreamFormat,
+) -> crate::config::Config {
+    let mut config = models_catalog_config(alias, "primary", "upstream-model", format, None);
+    config.upstreams[0].limits = Some(crate::config::ModelLimits {
+        context_window: Some(200_000),
+        max_output_tokens: Some(128_000),
+    });
+    config.upstreams[0].surface_defaults = Some(crate::config::ModelSurfacePatch {
+        modalities: Some(crate::config::ModelModalities {
+            input: Some(vec![crate::config::ModelModality::Text]),
+            output: Some(vec![crate::config::ModelModality::Text]),
+        }),
+        tools: Some(crate::config::ModelToolSurface {
+            supports_search: Some(true),
+            supports_view_image: Some(true),
+            apply_patch_transport: Some(crate::config::ApplyPatchTransport::Function),
+            supports_parallel_calls: Some(true),
+        }),
+    });
+
+    let alias_config = config
+        .model_aliases
+        .get_mut(alias)
+        .expect("metadata model alias");
+    alias_config.limits = Some(crate::config::ModelLimits {
+        context_window: None,
+        max_output_tokens: Some(64_000),
+    });
+    alias_config.surface = Some(crate::config::ModelSurfacePatch {
+        modalities: Some(crate::config::ModelModalities {
+            input: Some(vec![
+                crate::config::ModelModality::Text,
+                crate::config::ModelModality::Image,
+            ]),
+            output: None,
+        }),
+        tools: Some(crate::config::ModelToolSurface {
+            supports_search: Some(false),
+            supports_view_image: None,
+            apply_patch_transport: Some(crate::config::ApplyPatchTransport::Freeform),
+            supports_parallel_calls: Some(false),
+        }),
+    });
+    config
+}
+
+fn models_partial_limits_config(format: crate::formats::UpstreamFormat) -> crate::config::Config {
+    let upstream =
+        redaction_upstream_config("primary", "http://127.0.0.1:9/v1", format, None, None);
+    crate::config::Config {
+        listen: "127.0.0.1:0".to_string(),
+        upstream_timeout: std::time::Duration::from_secs(30),
+        proxy: Some(crate::config::ProxyConfig::Direct),
+        upstreams: vec![upstream],
+        model_aliases: BTreeMap::from([
+            (
+                "context-only".to_string(),
+                crate::config::ModelAlias {
+                    upstream_name: "primary".to_string(),
+                    upstream_model: "context-upstream".to_string(),
+                    limits: Some(crate::config::ModelLimits {
+                        context_window: Some(101_000),
+                        max_output_tokens: None,
+                    }),
+                    surface: None,
+                },
+            ),
+            (
+                "output-only".to_string(),
+                crate::config::ModelAlias {
+                    upstream_name: "primary".to_string(),
+                    upstream_model: "output-upstream".to_string(),
+                    limits: Some(crate::config::ModelLimits {
+                        context_window: None,
+                        max_output_tokens: Some(8_192),
+                    }),
+                    surface: None,
+                },
+            ),
+        ]),
+        hooks: Default::default(),
+        debug_trace: crate::config::DebugTraceConfig::default(),
+        resource_limits: Default::default(),
+        conversation_state_bridge: Default::default(),
+        data_auth: None,
+    }
+}
+
 fn models_not_found_config(
     format: crate::formats::UpstreamFormat,
     provider_key: Option<&str>,
@@ -144,6 +234,41 @@ async fn models_response_text(response: Response<Body>) -> String {
         .expect("models response body")
 }
 
+async fn models_response_json(response: Response<Body>) -> Value {
+    let body_text = models_response_text(response).await;
+    serde_json::from_str(&body_text).expect("models response JSON")
+}
+
+fn model_by_id<'a>(body: &'a Value, id: &str) -> &'a Value {
+    body["data"]
+        .as_array()
+        .expect("models data array")
+        .iter()
+        .find(|model| model.get("id").and_then(Value::as_str) == Some(id))
+        .expect("model by id")
+}
+
+fn assert_anthropic_top_level_limits_match_llmup_limits(model: &Value) {
+    assert_eq!(
+        model["max_input_tokens"], model["llmup"]["limits"]["context_window"],
+        "model = {model:?}"
+    );
+    assert_eq!(
+        model["max_tokens"], model["llmup"]["limits"]["max_output_tokens"],
+        "model = {model:?}"
+    );
+    assert_eq!(model["max_input_tokens"], 200_000, "model = {model:?}");
+    assert_eq!(model["max_tokens"], 64_000, "model = {model:?}");
+    assert_eq!(
+        model["llmup"]["surface"]["limits"]["context_window"], 200_000,
+        "model = {model:?}"
+    );
+    assert_eq!(
+        model["llmup"]["surface"]["limits"]["max_output_tokens"], 64_000,
+        "model = {model:?}"
+    );
+}
+
 fn assert_models_response_redacted(body_text: &str, secrets: &[&str], context: &str) {
     for secret in secrets {
         assert!(
@@ -177,6 +302,181 @@ async fn client_mode_models_auth_context(state: &Arc<AppState>) -> data_auth::Re
             provider_key: CLIENT_PROVIDER_REDACTION_SECRET.to_string(),
         },
     )
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_models_list_and_object_promote_effective_limits_from_llmup_limits() {
+    let state = state_for_models_config(
+        models_catalog_metadata_config("haiku", crate::formats::UpstreamFormat::Anthropic),
+        data_auth::DataAccess::ClientProviderKey,
+    )
+    .await;
+    let auth_context = client_mode_models_auth_context(&state).await;
+
+    let response = crate::server::models::handle_anthropic_models(
+        State(state.clone()),
+        Some(axum::Extension(auth_context)),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = models_response_json(response).await;
+    let model = model_by_id(&body, "haiku");
+    assert_anthropic_top_level_limits_match_llmup_limits(model);
+    assert!(model.get("capabilities").is_none(), "model = {model:?}");
+    assert_eq!(
+        model["llmup"]["surface"]["tools"]["apply_patch_transport"],
+        "freeform"
+    );
+
+    let auth_context = client_mode_models_auth_context(&state).await;
+    let response = crate::server::models::handle_anthropic_model(
+        State(state),
+        Path("haiku".to_string()),
+        Some(axum::Extension(auth_context)),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let model = models_response_json(response).await;
+    assert_anthropic_top_level_limits_match_llmup_limits(&model);
+    assert!(model.get("capabilities").is_none(), "model = {model:?}");
+    assert_eq!(
+        model["llmup"]["surface"]["tools"]["apply_patch_transport"],
+        "freeform"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_models_omit_top_level_limit_fields_without_effective_values() {
+    let state = state_for_models_config(
+        models_partial_limits_config(crate::formats::UpstreamFormat::Anthropic),
+        data_auth::DataAccess::ClientProviderKey,
+    )
+    .await;
+    let auth_context = client_mode_models_auth_context(&state).await;
+
+    let response = crate::server::models::handle_anthropic_models(
+        State(state),
+        Some(axum::Extension(auth_context)),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = models_response_json(response).await;
+    let context_only = model_by_id(&body, "context-only");
+    assert_eq!(context_only["max_input_tokens"], 101_000);
+    assert!(
+        context_only.get("max_tokens").is_none(),
+        "model = {context_only:?}"
+    );
+    assert_eq!(context_only["llmup"]["limits"]["context_window"], 101_000);
+    assert!(
+        context_only["llmup"]["limits"]
+            .get("max_output_tokens")
+            .is_none(),
+        "model = {context_only:?}"
+    );
+
+    let output_only = model_by_id(&body, "output-only");
+    assert!(
+        output_only.get("max_input_tokens").is_none(),
+        "model = {output_only:?}"
+    );
+    assert_eq!(output_only["max_tokens"], 8_192);
+    assert!(
+        output_only["llmup"]["limits"]
+            .get("context_window")
+            .is_none(),
+        "model = {output_only:?}"
+    );
+    assert_eq!(output_only["llmup"]["limits"]["max_output_tokens"], 8_192);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_models_do_not_synthesize_capabilities_from_surface_metadata() {
+    let state = state_for_models_config(
+        models_catalog_metadata_config("haiku", crate::formats::UpstreamFormat::Anthropic),
+        data_auth::DataAccess::ClientProviderKey,
+    )
+    .await;
+    let auth_context = client_mode_models_auth_context(&state).await;
+
+    let response = crate::server::models::handle_anthropic_model(
+        State(state),
+        Path("haiku".to_string()),
+        Some(axum::Extension(auth_context)),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let model = models_response_json(response).await;
+    assert_eq!(
+        model["llmup"]["surface"]["tools"]["apply_patch_transport"],
+        "freeform"
+    );
+    assert_eq!(model["llmup"]["surface"]["tools"]["supports_search"], false);
+    assert_eq!(
+        model["llmup"]["surface"]["tools"]["supports_view_image"],
+        true
+    );
+    assert_eq!(
+        model["llmup"]["surface"]["tools"]["supports_parallel_calls"],
+        false
+    );
+    assert_eq!(model["llmup"]["surface"]["modalities"]["input"][1], "image");
+    assert!(
+        !model.to_string().contains("capabilities"),
+        "model = {model:?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn openai_models_do_not_expose_anthropic_top_level_limit_fields() {
+    let state = state_for_models_config(
+        models_catalog_metadata_config(
+            "sonnet",
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        ),
+        data_auth::DataAccess::ClientProviderKey,
+    )
+    .await;
+    let auth_context = client_mode_models_auth_context(&state).await;
+
+    let response = crate::server::models::handle_openai_models(
+        State(state.clone()),
+        Some(axum::Extension(auth_context)),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = models_response_json(response).await;
+    let model = model_by_id(&body, "sonnet");
+    assert!(model.get("max_input_tokens").is_none(), "model = {model:?}");
+    assert!(model.get("max_tokens").is_none(), "model = {model:?}");
+    assert_eq!(model["llmup"]["limits"]["context_window"], 200_000);
+    assert_eq!(model["llmup"]["limits"]["max_output_tokens"], 64_000);
+
+    let auth_context = client_mode_models_auth_context(&state).await;
+    let response = crate::server::models::handle_openai_model(
+        State(state),
+        Path("sonnet".to_string()),
+        Some(axum::Extension(auth_context)),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let model = models_response_json(response).await;
+    assert!(model.get("max_input_tokens").is_none(), "model = {model:?}");
+    assert!(model.get("max_tokens").is_none(), "model = {model:?}");
+    assert_eq!(model["llmup"]["limits"]["context_window"], 200_000);
+    assert_eq!(model["llmup"]["limits"]["max_output_tokens"], 64_000);
 }
 
 #[tokio::test(flavor = "current_thread")]

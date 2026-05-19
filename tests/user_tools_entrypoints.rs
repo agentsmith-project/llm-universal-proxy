@@ -167,6 +167,13 @@ with open(log_path, "w", encoding="utf-8") as log:
     for name in [
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
         "CLAUDE_CONFIG_DIR",
         "LLMUP_PROVIDER_DEFAULT_API_KEY",
         "UNRELATED_SECRET_COPY",
@@ -174,13 +181,9 @@ with open(log_path, "w", encoding="utf-8") as log:
     ]:
         log.write(f"{name}={os.environ.get(name, 'unset')}\n")
 
-model = None
-for index, arg in enumerate(args):
-    if arg == "--model" and index + 1 < len(args):
-        model = args[index + 1]
-        break
-if model is None:
-    print("missing --model from launcher", file=sys.stderr)
+model = os.environ.get("ANTHROPIC_MODEL")
+if not model:
+    print("missing ANTHROPIC_MODEL from launcher", file=sys.stderr)
     sys.exit(30)
 
 base_url = os.environ["ANTHROPIC_BASE_URL"].rstrip("/")
@@ -351,6 +354,7 @@ fn installed_entrypoint_help_and_version_do_not_require_native_clients() {
         let stdout = String::from_utf8_lossy(&help.stdout);
         assert!(stdout.contains("--llmup-no-proxy"));
         assert!(!stdout.contains("--llmup-port"));
+        assert!(!stdout.contains("llmup-internal"));
 
         let version = Command::new(launcher)
             .arg("--llmup-version")
@@ -400,6 +404,126 @@ fn installed_config_entrypoint_without_args_runs_interactive_setup() {
     assert!(!stdout.contains("provider-secret-from-prompt"));
     assert!(llmup_home.join("config.yaml").exists());
     assert!(llmup_home.join("secrets.env").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn no_proxy_entrypoints_run_native_clients_without_managed_dirs_or_env_injection() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_llm-universal-proxy"));
+    let temp = TempDir::new("entrypoint-no-proxy");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let llmup_codex = bin_dir.join("llmup-codex");
+    let llmup_claude = bin_dir.join("llmup-claude");
+    link_or_copy(&bin, &llmup_codex);
+    link_or_copy(&bin, &llmup_claude);
+
+    let fake_codex_log = temp.path().join("fake-codex-no-proxy.log");
+    let fake_codex = bin_dir.join("codex");
+    fs::write(
+        &fake_codex,
+        r#"#!/bin/sh
+{
+  printf 'ARGV_COUNT=%s\n' "$#"
+  for arg in "$@"; do
+    printf 'ARG=%s\n' "$arg"
+  done
+  printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}"
+  printf 'OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY-unset}"
+  printf 'OPENAI_BASE_URL=%s\n' "${OPENAI_BASE_URL-unset}"
+} > "$LLMUP_FAKE_LOG"
+exit 17
+"#,
+    )
+    .expect("write fake codex");
+    make_executable(&fake_codex);
+
+    let fake_claude_log = temp.path().join("fake-claude-no-proxy.log");
+    let fake_claude = bin_dir.join("claude");
+    fs::write(
+        &fake_claude,
+        r#"#!/bin/sh
+{
+  printf 'ARGV_COUNT=%s\n' "$#"
+  for arg in "$@"; do
+    printf 'ARG=%s\n' "$arg"
+  done
+  printf 'CLAUDE_CONFIG_DIR=%s\n' "${CLAUDE_CONFIG_DIR-unset}"
+  printf 'ANTHROPIC_API_KEY=%s\n' "${ANTHROPIC_API_KEY-unset}"
+  printf 'ANTHROPIC_BASE_URL=%s\n' "${ANTHROPIC_BASE_URL-unset}"
+  printf 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=%s\n' "${CLAUDE_CODE_SUBPROCESS_ENV_SCRUB-unset}"
+} > "$LLMUP_FAKE_LOG"
+exit 19
+"#,
+    )
+    .expect("write fake claude");
+    make_executable(&fake_claude);
+
+    let llmup_home = temp.path().join(".llmup");
+    let llmup_codex_home = temp.path().join(".llmup-codex");
+    let llmup_claude_config_dir = temp.path().join(".llmup-claude");
+
+    let codex = Command::new(&llmup_codex)
+        .args(["--llmup-no-proxy", "--", "resume", "--last"])
+        .env("PATH", &bin_dir)
+        .env("HOME", temp.path())
+        .env("LLMUP_HOME", &llmup_home)
+        .env("LLMUP_CODEX_HOME", &llmup_codex_home)
+        .env("LLMUP_CLAUDE_CONFIG_DIR", &llmup_claude_config_dir)
+        .env("LLMUP_FAKE_LOG", &fake_codex_log)
+        .env("OPENAI_API_KEY", "native-openai-key")
+        .env("OPENAI_BASE_URL", "https://native-openai.example/v1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run no-proxy codex");
+    assert_eq!(
+        codex.status.code(),
+        Some(17),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&codex.stdout),
+        String::from_utf8_lossy(&codex.stderr)
+    );
+    let codex_log = fs::read_to_string(&fake_codex_log).expect("read codex log");
+    assert!(codex_log.contains("ARG=resume"));
+    assert!(codex_log.contains("ARG=--last"));
+    assert!(codex_log.contains("CODEX_HOME=unset"));
+    assert!(codex_log.contains("OPENAI_API_KEY=native-openai-key"));
+    assert!(codex_log.contains("OPENAI_BASE_URL=https://native-openai.example/v1"));
+
+    let claude = Command::new(&llmup_claude)
+        .args(["--llmup-no-proxy", "--", "auth", "status"])
+        .env("PATH", &bin_dir)
+        .env("HOME", temp.path())
+        .env("LLMUP_HOME", &llmup_home)
+        .env("LLMUP_CODEX_HOME", &llmup_codex_home)
+        .env("LLMUP_CLAUDE_CONFIG_DIR", &llmup_claude_config_dir)
+        .env("LLMUP_FAKE_LOG", &fake_claude_log)
+        .env("ANTHROPIC_API_KEY", "native-anthropic-key")
+        .env("ANTHROPIC_BASE_URL", "https://native-anthropic.example")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run no-proxy claude");
+    assert_eq!(
+        claude.status.code(),
+        Some(19),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&claude.stdout),
+        String::from_utf8_lossy(&claude.stderr)
+    );
+    let claude_log = fs::read_to_string(&fake_claude_log).expect("read claude log");
+    assert!(claude_log.contains("ARG=auth"));
+    assert!(claude_log.contains("ARG=status"));
+    assert!(claude_log.contains("CLAUDE_CONFIG_DIR=unset"));
+    assert!(claude_log.contains("ANTHROPIC_API_KEY=native-anthropic-key"));
+    assert!(claude_log.contains("ANTHROPIC_BASE_URL=https://native-anthropic.example"));
+    assert!(claude_log.contains("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=unset"));
+
+    assert!(!llmup_home.exists());
+    assert!(!llmup_codex_home.exists());
+    assert!(!llmup_claude_config_dir.exists());
 }
 
 #[cfg(unix)]
@@ -567,6 +691,13 @@ fn claude_managed_launcher_runs_fake_client_with_injection_isolation_and_proxy_l
   done
   printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY"
   printf 'ANTHROPIC_BASE_URL=%s\n' "$ANTHROPIC_BASE_URL"
+  printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL-unset}"
+  printf 'ANTHROPIC_CUSTOM_MODEL_OPTION=%s\n' "${ANTHROPIC_CUSTOM_MODEL_OPTION-unset}"
+  printf 'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=%s\n' "${ANTHROPIC_CUSTOM_MODEL_OPTION_NAME-unset}"
+  printf 'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION=%s\n' "${ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION-unset}"
+  printf 'ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES=%s\n' "${ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES-unset}"
+  printf 'CLAUDE_CODE_MAX_OUTPUT_TOKENS=%s\n' "${CLAUDE_CODE_MAX_OUTPUT_TOKENS-unset}"
+  printf 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=%s\n' "${CLAUDE_CODE_AUTO_COMPACT_WINDOW-unset}"
   printf 'CLAUDE_CONFIG_DIR=%s\n' "$CLAUDE_CONFIG_DIR"
   printf 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=%s\n' "${CLAUDE_CODE_SUBPROCESS_ENV_SCRUB-unset}"
   printf 'LLMUP_PROVIDER_DEFAULT_API_KEY=%s\n' "${LLMUP_PROVIDER_DEFAULT_API_KEY-unset}"
@@ -607,6 +738,13 @@ exit 9
         .env("LLMUP_PROVIDER_DEFAULT_API_KEY", "parent-provider-key")
         .env("UNRELATED_SECRET_COPY", "provider-secret-from-stdin")
         .env("ANTHROPIC_API_KEY", "parent-anthropic-key")
+        .env("ANTHROPIC_MODEL", "parent-model")
+        .env("ANTHROPIC_CUSTOM_MODEL_OPTION", "parent-option")
+        .env(
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES",
+            "parent-capability",
+        )
+        .env("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "42")
         .env("ANTHROPIC_AUTH_TOKEN", "parent-auth-token")
         .env("ANTHROPIC_BEDROCK_TOKEN", "parent-bedrock-token")
         .env("AWS_ACCESS_KEY_ID", "parent-aws-key")
@@ -624,13 +762,19 @@ exit 9
     );
 
     let fake = fs::read_to_string(&fake_log).expect("read fake client log");
-    assert!(fake.contains("ARG=--model"));
-    assert!(fake.contains("ARG=default"));
+    assert!(!fake.contains("ARG=--model"));
+    assert!(!fake.contains("ARG=default"));
     assert!(fake.contains("ARG=--resume"));
     assert!(fake.contains("ARG=session with spaces"));
     assert!(fake.contains("ARG=--permission-mode"));
     assert!(fake.contains("ARG=bypassPermissions"));
     assert!(fake.contains("ARG=mcp"));
+    assert!(fake.contains("ANTHROPIC_MODEL=default"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION=default"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=default"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION=llmup proxy model default"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES=unset"));
+    assert!(fake.contains("CLAUDE_CODE_MAX_OUTPUT_TOKENS=unset"));
     assert!(fake.contains(&format!(
         "CLAUDE_CONFIG_DIR={}",
         temp.path().join(".llmup-claude").display()
@@ -641,6 +785,9 @@ exit 9
     assert!(!fake.contains("parent-provider-key"));
     assert!(!fake.contains("provider-secret-from-stdin"));
     assert!(!fake.contains("ANTHROPIC_API_KEY=parent-anthropic-key"));
+    assert!(!fake.contains("parent-model"));
+    assert!(!fake.contains("parent-option"));
+    assert!(!fake.contains("parent-capability"));
     assert!(fake.contains("LLMUP_PROVIDER_DEFAULT_API_KEY=unset"));
     assert!(fake.contains("UNRELATED_SECRET_COPY=unset"));
     assert!(fake.contains("ANTHROPIC_AUTH_TOKEN=unset"));
@@ -721,6 +868,8 @@ async fn claude_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
         .env("LLMUP_PROVIDER_DEFAULT_API_KEY", "parent-provider-key")
         .env("UNRELATED_SECRET_COPY", PROVIDER_KEY)
         .env("ANTHROPIC_API_KEY", "parent-anthropic-key")
+        .env("ANTHROPIC_MODEL", "parent-model")
+        .env("ANTHROPIC_CUSTOM_MODEL_OPTION", "parent-option")
         .env("HOME", temp.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -743,8 +892,12 @@ async fn claude_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
     assert!(fake.contains(&format!("ANTHROPIC_API_KEY={local_proxy_key}")));
     assert!(!fake.contains(PROVIDER_KEY));
     assert!(!fake.contains("parent-provider-key"));
-    assert!(fake.contains("ARG=--model"));
-    assert!(fake.contains("ARG=default"));
+    assert!(!fake.contains("parent-model"));
+    assert!(!fake.contains("parent-option"));
+    assert!(!fake.contains("ARG=--model"));
+    assert!(!fake.contains("ARG=default"));
+    assert!(fake.contains("ANTHROPIC_MODEL=default"));
+    assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION=default"));
     assert!(fake.contains("ARG=--dangerously-skip-permissions"));
 
     let user_config = fs::read_to_string(llmup_home.join("config.yaml")).expect("read user config");

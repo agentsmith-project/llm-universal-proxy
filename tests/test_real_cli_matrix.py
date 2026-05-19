@@ -1,4 +1,5 @@
 import importlib.util
+import dataclasses
 import io
 import json
 import os
@@ -139,7 +140,7 @@ def codex_catalog_probe(catalog_payload, timeout_secs=2):
             "-c",
             f'model_catalog_json="{catalog_path}"',
             "-c",
-            'web_search="disabled"',
+            "tools.web_search=false",
         ]
         try:
             completed = subprocess.run(
@@ -250,6 +251,38 @@ def make_case(module, *, client_name, target=None, fixture=None, case_id=None):
 
 
 class RealCliMatrixTests(unittest.TestCase):
+    def fake_launch_plan_side_effect(self, module):
+        def fake_launch_plan(**kwargs):
+            client_name = kwargs["client_name"]
+            env = {}
+            if client_name == "codex":
+                env = {
+                    "CODEX_HOME": str(kwargs["client_home"] / ".codex"),
+                    "OPENAI_API_KEY": kwargs["proxy_key"],
+                    "OPENAI_BASE_URL": f"{kwargs['proxy_base']}/openai/v1",
+                }
+                argv = ["-m", kwargs["model"], *kwargs["native_args"]]
+            elif client_name == "claude":
+                env = {
+                    "CLAUDE_CONFIG_DIR": str(kwargs["client_home"] / ".claude"),
+                    "ANTHROPIC_API_KEY": kwargs["proxy_key"],
+                    "ANTHROPIC_BASE_URL": f"{kwargs['proxy_base']}/anthropic",
+                    "ANTHROPIC_CUSTOM_MODEL_OPTION": kwargs["model"],
+                    "ANTHROPIC_MODEL": kwargs["model"],
+                }
+                argv = [*kwargs["native_args"]]
+            else:
+                raise ValueError(f"unknown client: {client_name}")
+            return module.ClientLaunchPlan(
+                program=client_name,
+                argv=argv,
+                env=env,
+                projection={"enabled": True, "profile": {"alias": kwargs["model"]}},
+                artifacts={"codex_model_catalog": None},
+            )
+
+        return fake_launch_plan
+
     def assert_path_not_within(self, path: pathlib.Path, root: pathlib.Path) -> None:
         resolved_path = pathlib.Path(path).resolve()
         resolved_root = pathlib.Path(root).resolve()
@@ -629,9 +662,6 @@ class RealCliMatrixTests(unittest.TestCase):
                     target: "MINIMAX-OPENAI:MiniMax-M2.7-highspeed"
                     limits:
                       max_output_tokens: 64000
-                    codex:
-                      input_modalities: ["text"]
-                      supports_search_tool: false
                 """
             )
         )
@@ -645,13 +675,6 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertEqual(
             parsed.model_alias_configs["minimax-openai"].limits.max_output_tokens,
             64000,
-        )
-        self.assertEqual(
-            parsed.model_alias_configs["minimax-openai"].codex_metadata.input_modalities,
-            ("text",),
-        )
-        self.assertFalse(
-            parsed.model_alias_configs["minimax-openai"].codex_metadata.supports_search_tool
         )
 
     def test_parse_proxy_source_extracts_upstream_surface_defaults_and_alias_surface(self):
@@ -1206,7 +1229,7 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertIn("apply_patch_transport: freeform", rendered)
         self.assertIn("supports_parallel_calls: false", rendered)
 
-    def test_parse_and_render_round_trip_nested_proxy_objects_and_full_codex_fields(self):
+    def test_parse_and_render_round_trip_nested_proxy_objects_and_surface_fields(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             textwrap.dedent(
@@ -1221,21 +1244,25 @@ class RealCliMatrixTests(unittest.TestCase):
                     provider_key_env: TEST_PROVIDER_API_KEY
                     proxy:
                       url: http://upstream-proxy.example:8080
-                    codex:
-                      input_modalities: ["text"]
-                      supports_search_tool: false
-                      supports_view_image: false
-                      apply_patch_tool_type: freeform
-                      supports_parallel_tool_calls: true
+                    surface_defaults:
+                      modalities:
+                        input: ["text"]
+                      tools:
+                        supports_search: false
+                        supports_view_image: false
+                        apply_patch_transport: freeform
+                        supports_parallel_calls: true
                 model_aliases:
                   vision-openai:
                     target: "MINIMAX-OPENAI:MiniMax-Vision"
-                    codex:
-                      input_modalities: ["text", "image"]
-                      supports_search_tool: true
-                      supports_view_image: true
-                      apply_patch_tool_type: freeform
-                      supports_parallel_tool_calls: false
+                    surface:
+                      modalities:
+                        input: ["text", "image"]
+                      tools:
+                        supports_search: true
+                        supports_view_image: true
+                        apply_patch_transport: freeform
+                        supports_parallel_calls: false
                 debug_trace:
                   path: /tmp/trace.jsonl
                 """
@@ -1248,28 +1275,24 @@ class RealCliMatrixTests(unittest.TestCase):
             "http://upstream-proxy.example:8080",
         )
         self.assertFalse(
-            parsed.upstream_codex_metadata["MINIMAX-OPENAI"].supports_view_image
+            parsed.upstream_surface_defaults["MINIMAX-OPENAI"].supports_view_image
         )
         self.assertEqual(
-            parsed.upstream_codex_metadata["MINIMAX-OPENAI"].apply_patch_tool_type,
+            parsed.upstream_surface_defaults["MINIMAX-OPENAI"].apply_patch_transport,
             "freeform",
         )
         self.assertTrue(
-            parsed.upstream_codex_metadata[
-                "MINIMAX-OPENAI"
-            ].supports_parallel_tool_calls
+            parsed.upstream_surface_defaults["MINIMAX-OPENAI"].supports_parallel_calls
         )
         self.assertTrue(
-            parsed.model_alias_configs["vision-openai"].codex_metadata.supports_view_image
+            parsed.model_alias_configs["vision-openai"].surface.supports_view_image
         )
         self.assertEqual(
-            parsed.model_alias_configs["vision-openai"].codex_metadata.apply_patch_tool_type,
+            parsed.model_alias_configs["vision-openai"].surface.apply_patch_transport,
             "freeform",
         )
         self.assertFalse(
-            parsed.model_alias_configs[
-                "vision-openai"
-            ].codex_metadata.supports_parallel_tool_calls
+            parsed.model_alias_configs["vision-openai"].surface.supports_parallel_calls
         )
 
         rendered = module.build_runtime_config_text(
@@ -1285,15 +1308,16 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertIn("url: http://corp-proxy.example:8080", rendered)
         self.assertIn("url: http://upstream-proxy.example:8080", rendered)
         self.assertIn("supports_view_image: false", rendered)
-        self.assertIn("apply_patch_tool_type: freeform", rendered)
-        self.assertIn("supports_parallel_tool_calls: true", rendered)
+        self.assertIn("apply_patch_transport: freeform", rendered)
+        self.assertIn("supports_parallel_calls: true", rendered)
+        self.assertNotIn("codex:", rendered)
         self.assertEqual(reparsed.proxy["url"], "http://corp-proxy.example:8080")
         self.assertEqual(
             reparsed.upstreams["MINIMAX-OPENAI"]["proxy"]["url"],
             "http://upstream-proxy.example:8080",
         )
         self.assertEqual(
-            reparsed.model_alias_configs["vision-openai"].codex_metadata.input_modalities,
+            reparsed.model_alias_configs["vision-openai"].surface.input_modalities,
             ("text", "image"),
         )
 
@@ -1376,7 +1400,7 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertEqual(metadata.input_modalities, ("text",))
         self.assertFalse(metadata.supports_search_tool)
 
-    def test_resolve_codex_model_metadata_supports_upstream_defaults_and_alias_overrides(self):
+    def test_resolve_codex_model_metadata_supports_surface_defaults_and_alias_surface(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             textwrap.dedent(
@@ -1387,15 +1411,19 @@ class RealCliMatrixTests(unittest.TestCase):
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
                     provider_key_env: TEST_PROVIDER_API_KEY
-                    codex:
-                      input_modalities: ["text"]
-                      supports_search_tool: false
+                    surface_defaults:
+                      modalities:
+                        input: ["text"]
+                      tools:
+                        supports_search: false
                 model_aliases:
                   vision-openai:
                     target: "MINIMAX-OPENAI:MiniMax-Vision"
-                    codex:
-                      input_modalities: ["text", "image"]
-                      supports_search_tool: true
+                    surface:
+                      modalities:
+                        input: ["text", "image"]
+                      tools:
+                        supports_search: true
                 """
             )
         )
@@ -1423,68 +1451,161 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertNotIn('qwen-local: "LOCAL-QWEN:', rendered)
         self.assertNotIn('claude-opus-4-6: "LOCAL-QWEN:', rendered)
 
-    def test_build_codex_model_catalog_includes_capacity_and_structured_metadata(self):
+    def test_python_harness_no_longer_owns_codex_projection_helpers(self):
         module = load_module()
-
-        payload = module.build_codex_model_catalog(
-            "minimax-openai",
-            module.ModelLimits(context_window=200000, max_output_tokens=128000),
-            module.CodexModelMetadata(
-                input_modalities=("text",),
-                supports_search_tool=False,
-                supports_view_image=False,
-                apply_patch_tool_type="freeform",
-                supports_parallel_tool_calls=False,
-            ),
+        forbidden_names = (
+            "default_auto_compact_token_limit",
+            "build_codex_model_catalog",
+            "build_codex_catalog_args",
+            "build_codex_proxy_provider_args",
         )
 
-        model_entry = payload["models"][0]
-        self.assertEqual(model_entry["slug"], "minimax-openai")
-        self.assertEqual(model_entry["display_name"], "minimax-openai")
-        self.assertIn("supported_reasoning_levels", model_entry)
-        self.assertEqual(model_entry["shell_type"], "shell_command")
-        self.assertEqual(model_entry["visibility"], "list")
-        self.assertTrue(model_entry["supported_in_api"])
-        self.assertEqual(model_entry["priority"], 0)
-        self.assertIn("base_instructions", model_entry)
-        self.assertFalse(model_entry["supports_reasoning_summaries"])
-        self.assertFalse(model_entry["support_verbosity"])
+        for script_path in (
+            module.REPO_ROOT / "scripts" / "real_cli_matrix.py",
+            module.REPO_ROOT / "scripts" / "interactive_cli.py",
+        ):
+            source = script_path.read_text(encoding="utf-8")
+            for name in forbidden_names:
+                with self.subTest(script=script_path.name, name=name):
+                    self.assertNotRegex(source, rf"\bdef\s+{name}\b")
+                    self.assertNotRegex(source, rf"\b{name}\(")
+
+    def test_matrix_native_args_leave_model_projection_to_rust_plan(self):
+        module = load_module()
+        fixture = make_fixture(module, prompt="Reply with PONG")
+        workspace = pathlib.Path("/tmp/workspace").resolve()
+
+        codex_args = module.build_matrix_native_args(
+            "codex",
+            fixture,
+            workspace,
+        )
+        claude_args = module.build_matrix_native_args(
+            "claude",
+            fixture,
+            workspace,
+        )
+
         self.assertEqual(
-            model_entry["truncation_policy"],
-            {"mode": "bytes", "limit": 10000},
+            codex_args,
+            [
+                "exec",
+                "Reply with PONG",
+                "--ephemeral",
+                "--json",
+                "--skip-git-repo-check",
+                "-C",
+                str(workspace),
+            ],
         )
-        self.assertEqual(model_entry["apply_patch_tool_type"], "freeform")
-        self.assertFalse(model_entry["supports_parallel_tool_calls"])
-        self.assertEqual(model_entry["experimental_supported_tools"], [])
-        self.assertEqual(model_entry["context_window"], 200000)
-        self.assertEqual(model_entry["auto_compact_token_limit"], 61200)
-        self.assertEqual(model_entry["input_modalities"], ["text"])
-        self.assertFalse(model_entry["supports_search_tool"])
+        self.assertNotIn("--model", codex_args)
+        self.assertNotIn("-m", codex_args)
+        self.assertEqual(
+            claude_args,
+            [
+                "--bare",
+                "--print",
+                "--output-format",
+                "text",
+                "--setting-sources",
+                "user",
+                "--no-session-persistence",
+                "--add-dir",
+                str(workspace),
+            ],
+        )
+        self.assertNotIn("--model", claude_args)
 
-    def test_build_codex_catalog_args_keeps_public_apply_patch_contract_freeform(self):
+    def test_build_client_launch_plan_uses_llmup_alias_for_universal_proxy_binary(self):
         module = load_module()
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            home_dir = pathlib.Path(temp_dir)
-            args = module.build_codex_catalog_args(
-                home_dir,
-                "vision-openai",
-                module.ModelLimits(context_window=200000),
-                module.CodexModelMetadata(
-                    input_modalities=("text", "image"),
-                    supports_search_tool=True,
-                    supports_view_image=False,
-                    apply_patch_tool_type="freeform",
-                    supports_parallel_tool_calls=True,
-                ),
+            root = pathlib.Path(temp_dir)
+            binary = root / "llm-universal-proxy"
+            config_path = root / "config.yaml"
+            env_file_path = root / "secrets.env"
+            artifact_dir = root / "artifacts"
+            client_home = root / "client-home"
+            record_path = root / "launcher-record.json"
+            config_path.write_text("model_aliases: {}\n", encoding="utf-8")
+            env_file_path.write_text(
+                "PROVIDER_API_KEY=provider-secret\n",
+                encoding="utf-8",
             )
-            payload = json.loads(
-                (home_dir / ".codex" / "catalog.json").read_text(encoding="utf-8")
-            )
+            binary.write_text(
+                f"""#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
 
-        self.assertIn("tools.view_image=false", " ".join(args))
-        self.assertEqual(payload["models"][0]["apply_patch_tool_type"], "freeform")
-        self.assertTrue(payload["models"][0]["supports_parallel_tool_calls"])
+record_path = pathlib.Path({json.dumps(str(record_path))})
+record = {{
+    "argv0": pathlib.Path(sys.argv[0]).name,
+    "args": sys.argv[1:],
+    "env": {{
+        key: os.environ.get(key)
+        for key in (
+            "LLMUP_INTERNAL_LAUNCH_PLAN",
+            "LLMUP_HOME",
+            "LLMUP_CODEX_HOME",
+            "LLMUP_CLAUDE_CONFIG_DIR",
+        )
+    }},
+}}
+record_path.write_text(json.dumps(record, indent=2) + "\\n", encoding="utf-8")
+print(json.dumps({{
+    "schema_version": 1,
+    "agent": "codex",
+    "program": "codex",
+    "argv": [
+        "-c",
+        "model_catalog_json=\\\"/tmp/catalog.json\\\"",
+        "-c",
+        "tools.web_search=false",
+        "-m",
+        "preset-chat",
+        "exec",
+        "Reply with PONG",
+    ],
+    "env": {{
+        "CODEX_HOME": str({json.dumps(str(client_home / ".codex"))}),
+        "OPENAI_API_KEY": "matrix-proxy-key",
+    }},
+    "projection": {{"enabled": True, "profile": {{"alias": "preset-chat"}}}},
+    "artifacts": {{"codex_model_catalog": "/tmp/catalog.json"}},
+}}))
+""",
+                encoding="utf-8",
+            )
+            binary.chmod(0o755)
+
+            plan = module.build_client_launch_plan(
+                client_name="codex",
+                proxy_binary=binary,
+                config_path=config_path,
+                env_file_path=env_file_path,
+                proxy_base="http://127.0.0.1:18888/",
+                proxy_key="matrix-proxy-key",
+                artifact_dir=artifact_dir,
+                client_home=client_home,
+                model="preset-chat",
+                native_args=["exec", "Reply with PONG"],
+                base_env={"PATH": os.environ.get("PATH", ""), "HOME": "/home/user"},
+            )
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(record["argv0"], "llmup-codex")
+        self.assertEqual(record["env"]["LLMUP_INTERNAL_LAUNCH_PLAN"], "1")
+        self.assertEqual(record["env"]["LLMUP_CODEX_HOME"], str(client_home / ".codex"))
+        self.assertIn("--llmup-internal-launch-plan-json", record["args"])
+        self.assertIn("--llmup-model", record["args"])
+        self.assertIn("preset-chat", record["args"])
+        self.assertEqual(plan.program, "codex")
+        self.assertIn("model_catalog_json", " ".join(plan.argv))
+        self.assertIn("tools.web_search=false", plan.argv)
+        self.assertIn("-m", plan.argv)
+        self.assertNotIn("provider-secret", json.dumps(dataclasses.asdict(plan)))
 
     def test_fetch_live_model_profile_reads_llmup_surface_for_direct_upstream_model(self):
         module = load_module()
@@ -1529,22 +1650,6 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertTrue(profile.codex_metadata.supports_view_image)
         self.assertEqual(profile.codex_metadata.apply_patch_tool_type, "freeform")
         self.assertTrue(profile.codex_metadata.supports_parallel_tool_calls)
-
-    def test_build_codex_model_catalog_rejects_internal_apply_patch_transport_as_public_tool_type(self):
-        module = load_module()
-
-        with self.assertRaisesRegex(
-            ValueError, "apply_patch public contract must remain freeform"
-        ):
-            module.build_codex_model_catalog(
-                "vision-openai",
-                module.ModelLimits(context_window=200000),
-                module.CodexModelMetadata(
-                    input_modalities=("text", "image"),
-                    supports_search_tool=True,
-                    apply_patch_tool_type="function",
-                ),
-            )
 
     def test_fetch_live_model_profile_rejects_legacy_proxec_payloads(self):
         module = load_module()
@@ -1663,75 +1768,6 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertIsNone(disabled_target.limits)
         self.assertIsNone(disabled_target.codex_metadata)
 
-    def test_build_codex_model_catalog_keeps_85_percent_of_context_when_output_limit_missing(self):
-        module = load_module()
-
-        payload = module.build_codex_model_catalog(
-            "vision-openai",
-            module.ModelLimits(context_window=200000),
-            module.CodexModelMetadata(
-                input_modalities=("text", "image"),
-                supports_search_tool=True,
-            ),
-        )
-
-        model_entry = payload["models"][0]
-        self.assertEqual(model_entry["apply_patch_tool_type"], "freeform")
-        self.assertEqual(model_entry["context_window"], 200000)
-        self.assertEqual(model_entry["auto_compact_token_limit"], 170000)
-        self.assertEqual(model_entry["input_modalities"], ["text", "image"])
-        self.assertTrue(model_entry["supports_search_tool"])
-
-    def test_build_codex_model_catalog_rejects_non_positive_input_budget(self):
-        module = load_module()
-
-        with self.assertRaisesRegex(
-            ValueError, "max_output_tokens must be less than context_window"
-        ):
-            module.build_codex_model_catalog(
-                "broken-openai",
-                module.ModelLimits(context_window=200000, max_output_tokens=200000),
-                module.CodexModelMetadata(
-                    input_modalities=("text",),
-                    supports_search_tool=False,
-                ),
-            )
-
-    def test_build_codex_model_catalog_can_emit_metadata_without_context_window(self):
-        module = load_module()
-
-        payload = module.build_codex_model_catalog(
-            "minimax-openai",
-            module.ModelLimits(max_output_tokens=128000),
-            module.CodexModelMetadata(
-                input_modalities=("text",),
-                supports_search_tool=False,
-            ),
-        )
-
-        model_entry = payload["models"][0]
-        self.assertEqual(model_entry["apply_patch_tool_type"], "freeform")
-        self.assertNotIn("context_window", model_entry)
-        self.assertNotIn("auto_compact_token_limit", model_entry)
-        self.assertEqual(model_entry["input_modalities"], ["text"])
-        self.assertFalse(model_entry["supports_search_tool"])
-
-    def test_build_codex_model_catalog_rejects_internal_tool_artifacts_in_public_payload(self):
-        module = load_module()
-        bad_entry = module.default_codex_catalog_entry("minimax-openai")
-        bad_entry["experimental_supported_tools"] = ["__llmup_custom__apply_patch"]
-
-        with mock.patch.object(module, "default_codex_catalog_entry", return_value=bad_entry):
-            with self.assertRaisesRegex(ValueError, "__llmup_custom__apply_patch"):
-                module.build_codex_model_catalog(
-                    "minimax-openai",
-                    module.ModelLimits(context_window=200000, max_output_tokens=128000),
-                    module.CodexModelMetadata(
-                        input_modalities=("text",),
-                        supports_search_tool=False,
-                    ),
-                )
-
     def test_real_codex_rejects_previous_minimal_catalog_shape(self):
         _module = load_module()
 
@@ -1755,100 +1791,104 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertIn("failed to parse model_catalog_json", output)
         self.assertIn("as JSON", output)
 
-    def test_real_codex_accepts_generated_catalog_shape(self):
+    def test_real_codex_accepts_rust_launch_plan_generated_catalog(self):
         module = load_module()
-
-        payload = module.build_codex_model_catalog(
-            "minimax-openai",
-            module.ModelLimits(context_window=200000, max_output_tokens=128000),
-            module.CodexModelMetadata(
-                input_modalities=("text",),
-                supports_search_tool=False,
-            ),
-        )
-        returncode, output, timed_out = codex_catalog_probe(payload)
-
-        self.assertTrue(timed_out or returncode != 1, output)
-        self.assertNotIn("failed to parse model_catalog_json", output)
-        self.assertNotIn("missing field `", output)
-
-    def test_real_codex_accepts_metadata_only_catalog_shape(self):
-        module = load_module()
-
-        payload = module.build_codex_model_catalog(
-            "minimax-openai",
-            module.ModelLimits(max_output_tokens=128000),
-            module.CodexModelMetadata(
-                input_modalities=("text",),
-                supports_search_tool=False,
-            ),
-        )
-        returncode, output, timed_out = codex_catalog_probe(payload)
-
-        self.assertTrue(timed_out or returncode != 1, output)
-        self.assertNotIn("failed to parse model_catalog_json", output)
-        self.assertNotIn("missing field `", output)
-
-    def test_default_config_codex_catalog_injects_85_percent_compact_limit(self):
-        module = load_module()
-        parsed = module.parse_proxy_source(
-            DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
-        )
-        model_limits = module.resolve_model_limits(parsed, "preset-openai-compatible")
-        codex_metadata = module.resolve_codex_model_metadata(
-            parsed,
-            "preset-openai-compatible",
-        )
+        if shutil.which("codex") is None:
+            self.skipTest("codex binary is not available")
+        proxy_binary = module.default_proxy_binary_path()
+        if not proxy_binary.exists():
+            self.skipTest(f"proxy binary is not available: {proxy_binary}")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            home_dir = pathlib.Path(temp_dir)
-            args = module.build_codex_catalog_args(
-                home_dir,
-                "preset-openai-compatible",
-                model_limits,
-                codex_metadata,
+            root = pathlib.Path(temp_dir)
+            config_path = root / "config.yaml"
+            env_file_path = root / "secrets.env"
+            artifact_dir = root / "artifacts"
+            client_home = root / "client-home"
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    listen: 127.0.0.1:18888
+                    upstreams:
+                      DEFAULT:
+                        api_root: https://api.example.com/v1
+                        format: openai-responses
+                        provider_key_env: LLMUP_PROVIDER_DEFAULT_API_KEY
+                        limits:
+                          context_window: 200000
+                          max_output_tokens: 128000
+                        surface_defaults:
+                          modalities:
+                            input: ["text"]
+                            output: ["text"]
+                          tools:
+                            supports_search: false
+                            supports_view_image: false
+                            apply_patch_transport: freeform
+                            supports_parallel_calls: false
+                    model_aliases:
+                      default: DEFAULT:test-model
+                    """
+                ).lstrip(),
+                encoding="utf-8",
             )
-            catalog_path = home_dir / ".codex" / "catalog.json"
-            payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+            env_file_path.write_text(
+                "LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret\n",
+                encoding="utf-8",
+            )
 
-        self.assertIn("model_catalog_json", " ".join(args))
-        self.assertIn('web_search="disabled"', " ".join(args))
-        self.assertIn('tools.view_image=false', " ".join(args))
+            plan = module.build_client_launch_plan(
+                client_name="codex",
+                proxy_binary=proxy_binary,
+                config_path=config_path,
+                env_file_path=env_file_path,
+                proxy_base="http://127.0.0.1:1",
+                proxy_key="matrix-proxy-key",
+                artifact_dir=artifact_dir,
+                client_home=client_home,
+                model="default",
+                native_args=[],
+                base_env={"PATH": os.environ.get("PATH", ""), "HOME": str(root / "home")},
+            )
+            catalog_path = pathlib.Path(plan.artifacts["codex_model_catalog"])
+            catalog_exists = catalog_path.exists()
+            (root / "codex-debug-home" / ".codex").mkdir(parents=True)
+            env = dict(os.environ)
+            env["HOME"] = str(root / "codex-debug-home")
+            env["CODEX_HOME"] = str(root / "codex-debug-home" / ".codex")
+            completed = subprocess.run(
+                [
+                    "codex",
+                    "debug",
+                    "models",
+                    "-c",
+                    f'model_catalog_json="{catalog_path}"',
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+
+        self.assertIn(f'model_catalog_json="{catalog_path}"', plan.argv)
+        self.assertTrue(catalog_exists)
         self.assertEqual(
-            payload["models"][0]["context_window"],
-            200000,
+            completed.returncode,
+            0,
+            msg=completed.stderr or completed.stdout,
         )
-        self.assertEqual(
-            payload["models"][0]["auto_compact_token_limit"],
-            61200,
+        catalog = json.loads(completed.stdout)
+        models = catalog["models"] if isinstance(catalog, dict) else catalog
+        default_model = next(
+            model for model in models if model.get("slug") == "default"
         )
-        self.assertEqual(payload["models"][0]["apply_patch_tool_type"], "freeform")
-        self.assertEqual(payload["models"][0]["input_modalities"], ["text"])
-        self.assertFalse(payload["models"][0]["supports_search_tool"])
+        self.assertEqual(default_model["context_window"], 200000)
+        self.assertEqual(default_model["auto_compact_token_limit"], 61200)
+        self.assertEqual(default_model["input_modalities"], ["text"])
+        self.assertFalse(default_model["supports_search_tool"])
 
-    def test_default_config_codex_catalog_compacts_before_observed_live_failure_tokens(self):
-        module = load_module()
-        parsed = module.parse_proxy_source(
-            DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
-        )
-        model_limits = module.resolve_model_limits(parsed, "preset-openai-compatible")
-        codex_metadata = module.resolve_codex_model_metadata(
-            parsed,
-            "preset-openai-compatible",
-        )
-
-        payload = module.build_codex_model_catalog(
-            "preset-openai-compatible",
-            model_limits,
-            codex_metadata,
-        )
-
-        compact_limit = payload["models"][0]["auto_compact_token_limit"]
-        observed_live_failure_input_tokens = 133603
-        self.assertLess(compact_limit, observed_live_failure_input_tokens)
-        self.assertEqual(compact_limit, 61200)
-
-    def test_resolve_codex_model_metadata_and_catalog_args_use_surface_defaults_and_alias_surface(self):
+    def test_resolve_codex_model_metadata_uses_surface_defaults_and_alias_surface(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             textwrap.dedent(
@@ -1891,105 +1931,81 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertTrue(codex_metadata.supports_view_image)
         self.assertEqual(codex_metadata.apply_patch_tool_type, "freeform")
         self.assertFalse(codex_metadata.supports_parallel_tool_calls)
-        self.assertFalse(module.codex_should_disable_view_image(codex_metadata))
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            home_dir = pathlib.Path(temp_dir)
-            args = module.build_codex_catalog_args(
-                home_dir,
-                "vision-openai",
-                model_limits,
-                codex_metadata,
-            )
-            payload = json.loads(
-                (home_dir / ".codex" / "catalog.json").read_text(encoding="utf-8")
-            )
-
-        self.assertIn("model_catalog_json", " ".join(args))
-        self.assertNotIn('web_search="disabled"', " ".join(args))
-        self.assertNotIn("tools.view_image=false", " ".join(args))
-        self.assertEqual(payload["models"][0]["input_modalities"], ["text", "image"])
-        self.assertTrue(payload["models"][0]["supports_search_tool"])
-        self.assertEqual(payload["models"][0]["apply_patch_tool_type"], "freeform")
-        self.assertFalse(payload["models"][0]["supports_parallel_tool_calls"])
-
-    def test_resolve_codex_model_metadata_uses_legacy_codex_only_for_surface_gaps(self):
+    def test_parse_proxy_source_rejects_alias_legacy_codex_schema(self):
         module = load_module()
-        parsed = module.parse_proxy_source(
-            textwrap.dedent(
-                """
-                listen: 127.0.0.1:18888
-                upstreams:
-                  MINIMAX-OPENAI:
-                    api_root: "https://api.minimaxi.com/v1"
-                    format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
-                    surface_defaults:
-                      modalities:
-                        input: ["text"]
-                      tools:
-                        supports_search: false
-                model_aliases:
-                  vision-openai:
-                    target: "MINIMAX-OPENAI:MiniMax-Vision"
-                    surface:
-                      modalities:
-                        input: ["text", "image"]
-                    codex:
-                      supports_search_tool: false
-                """
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "legacy codex: schema.*model_aliases\\.vision-openai.*use limits/surface",
+        ):
+            module.parse_proxy_source(
+                textwrap.dedent(
+                    """
+                    listen: 127.0.0.1:18888
+                    upstreams:
+                      MINIMAX-OPENAI:
+                        api_root: "https://api.minimaxi.com/v1"
+                        format: openai-chat-completions
+                        provider_key_env: TEST_PROVIDER_API_KEY
+                    model_aliases:
+                      vision-openai:
+                        target: "MINIMAX-OPENAI:MiniMax-Vision"
+                        codex:
+                          supports_search_tool: true
+                    """
+                )
             )
-        )
 
-        metadata = module.resolve_codex_model_metadata(parsed, "vision-openai")
-
-        self.assertEqual(metadata.input_modalities, ("text", "image"))
-        self.assertFalse(metadata.supports_search_tool)
-
-    def test_resolve_codex_model_metadata_prefers_effective_surface_over_upstream_legacy_codex(self):
+    def test_parse_proxy_source_rejects_upstream_legacy_codex_schema(self):
         module = load_module()
-        parsed = module.parse_proxy_source(
-            textwrap.dedent(
-                """
-                listen: 127.0.0.1:18888
-                upstreams:
-                  MINIMAX-OPENAI:
-                    api_root: "https://api.minimaxi.com/v1"
-                    format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
-                    surface_defaults:
-                      modalities:
-                        input: ["text"]
-                      tools:
-                        supports_search: false
-                    codex:
-                      input_modalities: ["text", "image"]
-                      supports_search_tool: true
-                model_aliases:
-                  vision-openai:
-                    target: "MINIMAX-OPENAI:MiniMax-Vision"
-                    surface:
-                      modalities:
-                        input: ["text", "image"]
-                      tools:
-                        supports_search: false
-                """
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "legacy codex: schema.*upstreams\\.MINIMAX-OPENAI.*use limits/surface",
+        ):
+            module.parse_proxy_source(
+                textwrap.dedent(
+                    """
+                    listen: 127.0.0.1:18888
+                    upstreams:
+                      MINIMAX-OPENAI:
+                        api_root: "https://api.minimaxi.com/v1"
+                        format: openai-chat-completions
+                        provider_key_env: TEST_PROVIDER_API_KEY
+                        codex:
+                          input_modalities: ["text", "image"]
+                          supports_search_tool: true
+                    """
+                )
             )
-        )
 
-        direct_metadata = module.resolve_codex_model_metadata(
-            parsed, "MINIMAX-OPENAI:MiniMax-Vision"
-        )
-        alias_metadata = module.resolve_codex_model_metadata(parsed, "vision-openai")
-
-        self.assertEqual(direct_metadata.input_modalities, ("text",))
-        self.assertFalse(direct_metadata.supports_search_tool)
-        self.assertEqual(alias_metadata.input_modalities, ("text", "image"))
-        self.assertFalse(alias_metadata.supports_search_tool)
-
-    def test_build_client_command_binds_codex_proxy_provider_to_proxy_key_env(self):
+    def test_build_client_command_uses_rust_launch_plan_command(self):
         module = load_module()
         fixture = make_fixture(module)
+        plan = module.ClientLaunchPlan(
+            program="codex",
+            argv=[
+                "-c",
+                'model_provider="proxy"',
+                "-c",
+                'model_catalog_json="/tmp/catalog.json"',
+                "-c",
+                "tools.web_search=false",
+                "-m",
+                "preset-chat",
+                "exec",
+                "Reply with PONG",
+                "--ephemeral",
+                "--json",
+                "--skip-git-repo-check",
+                "-C",
+                "/tmp/workspace",
+            ],
+            env={"OPENAI_API_KEY": "matrix-proxy-key"},
+            projection={"enabled": True},
+            artifacts={"codex_model_catalog": "/tmp/catalog.json"},
+        )
 
         command = module.build_client_command(
             "codex",
@@ -1997,92 +2013,177 @@ class RealCliMatrixTests(unittest.TestCase):
             make_target(module, name="preset-chat", proxy_model="preset-chat"),
             fixture,
             pathlib.Path("/tmp/workspace").resolve(),
-            client_home=pathlib.Path("/tmp/codex-home").resolve(),
+            launch_plan=plan,
         )
 
-        self.assertIn(
-            'model_providers.proxy.env_key="OPENAI_API_KEY"',
-            " ".join(command),
-        )
+        self.assertEqual(command, ["codex", *plan.argv])
+        self.assertIn('model_catalog_json="/tmp/catalog.json"', command)
+        self.assertIn("tools.web_search=false", command)
+        self.assertIn("-m", command)
+        self.assertNotIn("--model", command)
 
-    def test_build_client_command_injects_codex_model_catalog_for_capacity_aware_alias(self):
+    def test_build_client_env_is_base_plus_rust_launch_plan_env(self):
         module = load_module()
-        target = make_target(module, name="minimax-openai", proxy_model="minimax-openai")
-        target.limits = module.ModelLimits(
-            context_window=200000,
-            max_output_tokens=128000,
+        plan = module.ClientLaunchPlan(
+            program="claude",
+            argv=["--bare"],
+            env={
+                "CLAUDE_CONFIG_DIR": "/tmp/claude-config",
+                "ANTHROPIC_API_KEY": "matrix-proxy-key",
+                "ANTHROPIC_BASE_URL": "http://127.0.0.1:18888/anthropic",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION": "preset-anthropic-compatible",
+                "ANTHROPIC_MODEL": "preset-anthropic-compatible",
+            },
+            projection={"enabled": True},
+            artifacts={"codex_model_catalog": None},
         )
-        target.codex_metadata = module.CodexModelMetadata(
-            input_modalities=("text",),
-            supports_search_tool=False,
-        )
-        fixture = make_fixture(module)
-        workspace = pathlib.Path("/tmp/workspace").resolve()
-        home_dir = pathlib.Path("/tmp/codex-home").resolve()
 
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = module.build_client_env(
+                "claude",
+                {
+                    "PATH": "/usr/bin",
+                    "HOME": "/home/user",
+                    "ANTHROPIC_API_KEY": "host-anthropic-key",
+                    "PRESET_ENDPOINT_API_KEY": "provider-secret",
+                },
+                "http://127.0.0.1:18888",
+                pathlib.Path(temp_dir) / "claude-home",
+                launch_plan=plan,
+            )
+
+        self.assertEqual(env["PATH"], "/usr/bin")
+        self.assertNotEqual(env["HOME"], "/home/user")
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "matrix-proxy-key")
+        self.assertEqual(
+            env["ANTHROPIC_CUSTOM_MODEL_OPTION"],
+            "preset-anthropic-compatible",
+        )
+        self.assertEqual(env["ANTHROPIC_MODEL"], "preset-anthropic-compatible")
+        self.assertNotIn("PRESET_ENDPOINT_API_KEY", env)
+
+    def test_run_matrix_case_uses_rust_launch_plan_for_command_and_env(self):
+        module = load_module()
+        target = make_target(module, name="preset-chat", proxy_model="preset-chat")
+        fixture = make_fixture(module, prompt="Reply with PONG")
+        case = make_case(module, client_name="codex", target=target, fixture=fixture)
+        captured = {}
+
+        def fake_launch_plan(**kwargs):
+            native_args = list(kwargs["native_args"])
+            captured["native_args"] = native_args
+            captured["model"] = kwargs["model"]
+            captured["client_home"] = kwargs["client_home"]
+            return module.ClientLaunchPlan(
+                program="codex",
+                argv=[
+                    "-c",
+                    'model_catalog_json="/tmp/rust-catalog.json"',
+                    "-c",
+                    "tools.web_search=false",
+                    "-m",
+                    kwargs["model"],
+                    *native_args,
+                ],
+                env={
+                    "CODEX_HOME": str(kwargs["client_home"] / ".codex"),
+                    "OPENAI_API_KEY": kwargs["proxy_key"],
+                    "OPENAI_BASE_URL": f"{kwargs['proxy_base']}/openai/v1",
+                },
+                projection={"enabled": True, "profile": {"alias": kwargs["model"]}},
+                artifacts={"codex_model_catalog": "/tmp/rust-catalog.json"},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.object(
+            module,
+            "build_client_launch_plan",
+            side_effect=fake_launch_plan,
+        ) as build_client_launch_plan, mock.patch.object(
+            module.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                args=["codex"],
+                returncode=0,
+                stdout="PONG\n",
+                stderr="",
+            ),
+        ) as run_command:
+            report_dir = pathlib.Path(temp_dir)
+            result = module.run_matrix_case(
+                case,
+                "http://127.0.0.1:18888",
+                report_dir,
+                {
+                    "PATH": "/usr/bin",
+                    "HOME": "/home/user",
+                    "PRESET_ENDPOINT_API_KEY": "provider-secret",
+                    module.PROXY_KEY_ENV: "matrix-proxy-key",
+                },
+                proxy_binary=pathlib.Path("/tmp/llm-universal-proxy"),
+                config_path=pathlib.Path("/tmp/config.yaml"),
+                env_file_path=pathlib.Path("/tmp/secrets.env"),
+            )
+
+        build_client_launch_plan.assert_called_once()
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(captured["model"], "preset-chat")
+        self.assertEqual(
+            captured["native_args"],
+            [
+                "exec",
+                "Reply with PONG",
+                "--ephemeral",
+                "--json",
+                "--skip-git-repo-check",
+                "-C",
+                str(pathlib.Path(run_command.call_args.kwargs["cwd"])),
+            ],
+        )
+        self.assertEqual(result["command"][:6], ["codex", "-c", 'model_catalog_json="/tmp/rust-catalog.json"', "-c", "tools.web_search=false", "-m"])
+        self.assertIn("preset-chat", result["command"])
+        self.assertNotIn("--model", result["command"])
+        self.assertNotIn("PRESET_ENDPOINT_API_KEY", run_command.call_args.kwargs["env"])
+        self.assertEqual(
+            run_command.call_args.kwargs["env"]["OPENAI_API_KEY"],
+            "matrix-proxy-key",
+        )
+
+    def test_build_client_command_rejects_internal_tool_artifacts_from_launch_plan(self):
+        module = load_module()
+        fixture = make_fixture(module)
+        plan = module.ClientLaunchPlan(
+            program="codex",
+            argv=["-c", 'tool_identity_contract="__llmup_custom__apply_patch"'],
+            env={},
+            projection={},
+            artifacts={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "__llmup_custom__apply_patch"):
+            module.build_client_command(
+                "codex",
+                "http://127.0.0.1:18888",
+                make_target(module),
+                fixture,
+                pathlib.Path("/tmp/workspace").resolve(),
+                launch_plan=plan,
+            )
+
+    def test_build_client_command_native_fallback_does_not_project_model(self):
+        module = load_module()
+        fixture = make_fixture(module)
         command = module.build_client_command(
             "codex",
             "http://127.0.0.1:18888",
-            target,
-            fixture,
-            workspace,
-            client_home=home_dir,
-        )
-
-        joined = " ".join(command)
-        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
-        self.assertIn("--sandbox", command)
-        self.assertIn("model_catalog_json", joined)
-        self.assertIn(str(home_dir / ".codex" / "catalog.json"), joined)
-        self.assertIn('web_search="disabled"', joined)
-        self.assertIn('tools.view_image=false', joined)
-
-    def test_build_client_command_respects_codex_metadata_search_override(self):
-        module = load_module()
-        target = make_target(module, name="vision-openai", proxy_model="vision-openai")
-        target.limits = module.ModelLimits(context_window=200000)
-        target.codex_metadata = module.CodexModelMetadata(
-            input_modalities=("text", "image"),
-            supports_search_tool=True,
-        )
-        fixture = make_fixture(module)
-
-        command = module.build_client_command(
-            "codex",
-            "http://127.0.0.1:18888",
-            target,
+            make_target(module, name="preset-chat", proxy_model="preset-chat"),
             fixture,
             pathlib.Path("/tmp/workspace").resolve(),
-            client_home=pathlib.Path("/tmp/codex-home").resolve(),
         )
 
-        joined = " ".join(command)
-        self.assertIn("model_catalog_json", joined)
-        self.assertNotIn('web_search="disabled"', joined)
-        self.assertNotIn('tools.view_image=false', joined)
-
-    def test_build_client_command_rejects_internal_tool_artifacts_in_public_args(self):
-        module = load_module()
-        target = make_target(module, name="minimax-openai", proxy_model="minimax-openai")
-        fixture = make_fixture(module)
-
-        with mock.patch.object(
-            module,
-            "build_codex_catalog_args",
-            return_value=[
-                "-c",
-                'tool_identity_contract="__llmup_custom__apply_patch"',
-            ],
-        ):
-            with self.assertRaisesRegex(ValueError, "__llmup_custom__apply_patch"):
-                module.build_client_command(
-                    "codex",
-                    "http://127.0.0.1:18888",
-                    target,
-                    fixture,
-                    pathlib.Path("/tmp/workspace").resolve(),
-                    client_home=pathlib.Path("/tmp/codex-home").resolve(),
-                )
+        self.assertEqual(command[0], "codex")
+        self.assertIn("exec", command)
+        self.assertNotIn("-m", command)
+        self.assertNotIn("--model", command)
 
     def test_prepare_proxy_env_keeps_dotenv_scoped_to_proxy_only(self):
         module = load_module()
@@ -3594,6 +3695,10 @@ class RealCliMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             report_dir = pathlib.Path(temp_dir)
             with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(
                 module.subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess(["claude"], 0, stdout="PONG\n", stderr=""),
@@ -3627,7 +3732,11 @@ class RealCliMatrixTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             report_dir = pathlib.Path(temp_dir)
-            with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(module.subprocess, "run", side_effect=fake_run):
                 result = module.run_matrix_case(
                     case,
                     "http://127.0.0.1:18888",
@@ -3694,7 +3803,11 @@ class RealCliMatrixTests(unittest.TestCase):
                     )
                 return subprocess.CompletedProcess(command, 0, stdout="PONG\n", stderr="")
 
-            with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(module.subprocess, "run", side_effect=fake_run):
                 result = module.run_matrix_case(
                     case,
                     "http://127.0.0.1:18888",
@@ -3760,7 +3873,11 @@ class RealCliMatrixTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             report_dir = pathlib.Path(temp_dir)
-            with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(module.subprocess, "run", side_effect=fake_run):
                 result = module.run_matrix_case(
                     case,
                     "http://127.0.0.1:18888",
@@ -3860,7 +3977,11 @@ class RealCliMatrixTests(unittest.TestCase):
                 )
                 return subprocess.CompletedProcess(command, 0, stdout="fixed\n", stderr="")
 
-            with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(module.subprocess, "run", side_effect=fake_run):
                 result = module.run_matrix_case(
                     case,
                     "http://127.0.0.1:18888",
@@ -3893,7 +4014,11 @@ class RealCliMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=REPO_ROOT) as temp_dir:
             report_dir = pathlib.Path(temp_dir) / "reports" / "run-001"
             report_dir.mkdir(parents=True, exist_ok=True)
-            with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(module.subprocess, "run", side_effect=fake_run):
                 result = module.run_matrix_case(
                     case,
                     "http://127.0.0.1:18888",
@@ -3930,7 +4055,11 @@ class RealCliMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=REPO_ROOT) as temp_dir:
             report_dir = pathlib.Path(temp_dir) / "reports" / "run-001"
             report_dir.mkdir(parents=True, exist_ok=True)
-            with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(module.subprocess, "run", side_effect=fake_run):
                 result = module.run_matrix_case(
                     case,
                     "http://127.0.0.1:18888",
@@ -3964,6 +4093,10 @@ class RealCliMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             report_dir = pathlib.Path(temp_dir)
             with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(
                 module.subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess(
@@ -4005,6 +4138,10 @@ class RealCliMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             report_dir = pathlib.Path(temp_dir)
             with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(
                 module.subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess(
@@ -4046,6 +4183,10 @@ class RealCliMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             report_dir = pathlib.Path(temp_dir)
             with mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=self.fake_launch_plan_side_effect(module),
+            ), mock.patch.object(
                 module.subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess(

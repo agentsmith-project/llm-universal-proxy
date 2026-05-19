@@ -162,92 +162,59 @@ class InteractiveCliTests(unittest.TestCase):
                 )
                 self.assertIn("interactive_cli.py", completed.stdout)
 
-    def test_build_interactive_command_injects_codex_catalog_when_limits_exist(self):
+    def test_build_interactive_native_args_leave_codex_model_projection_to_rust_plan(self):
         module = load_module()
         workspace = pathlib.Path("/tmp/workspace").resolve()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            client_home = pathlib.Path(temp_dir).resolve()
 
-            command = module.build_interactive_command(
-                "codex",
-                workspace,
-                "preset-openai-compatible",
-                "http://127.0.0.1:18888",
-                client_home=client_home,
-                model_limits=module.ModelLimits(
-                    context_window=200000,
-                    max_output_tokens=128000,
-                ),
-                codex_metadata=module.CodexModelMetadata(
-                    input_modalities=("text",),
-                    supports_search_tool=False,
-                ),
-            )
-
-            catalog = json.loads(
-                (client_home / ".codex" / "catalog.json").read_text(encoding="utf-8")
-            )
-
-        joined = " ".join(command)
-        self.assertIn("model_providers.proxy.supports_websockets=false", command)
-        self.assertIn("model_catalog_json", joined)
-        self.assertIn(str(client_home / ".codex" / "catalog.json"), joined)
-        self.assertIn('web_search="disabled"', joined)
-        self.assertIn('tools.view_image=false', joined)
-        self.assertEqual(
-            catalog["models"][0]["apply_patch_tool_type"],
-            "freeform",
+        safe_args = module.build_interactive_native_args("codex", workspace)
+        dangerous_args = module.build_interactive_native_args(
+            "codex",
+            workspace,
+            dangerous_harness=True,
         )
 
-    def test_codex_proxy_configs_match_real_matrix_command(self):
-        module = load_module()
-        real_matrix = sys.modules["real_cli_matrix"]
-        workspace = pathlib.Path("/tmp/workspace").resolve()
-        proxy_base = "http://127.0.0.1:18888"
+        self.assertEqual(safe_args, ["-C", str(workspace), "--sandbox", "workspace-write"])
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", dangerous_args)
+        self.assertNotIn("-m", safe_args)
+        self.assertNotIn("--model", safe_args)
 
-        interactive_command = module.build_interactive_command(
+    def test_build_interactive_command_uses_rust_launch_plan_command(self):
+        module = load_module()
+        workspace = pathlib.Path("/tmp/workspace").resolve()
+        plan = module.ClientLaunchPlan(
+            program="codex",
+            argv=[
+                "-c",
+                'model_provider="proxy"',
+                "-c",
+                'model_catalog_json="/tmp/catalog.json"',
+                "-c",
+                "tools.web_search=false",
+                "-m",
+                "preset-chat",
+                "-C",
+                str(workspace),
+                "--sandbox",
+                "workspace-write",
+            ],
+            env={"OPENAI_API_KEY": "proxy-key"},
+            projection={"enabled": True},
+            artifacts={"codex_model_catalog": "/tmp/catalog.json"},
+        )
+
+        command = module.build_interactive_command(
             "codex",
             workspace,
             "preset-chat",
-            proxy_base,
-            client_home=pathlib.Path("/tmp/codex-home"),
-            model_limits=None,
-        )
-        matrix_command = real_matrix.build_client_command(
-            "codex",
-            proxy_base,
-            real_matrix.MatrixTarget(
-                name="preset-chat",
-                required=True,
-                enabled=True,
-                proxy_model="preset-chat",
-                upstream_name="PRESET-COMPAT",
-                skip_reason=None,
-            ),
-            real_matrix.TaskFixture(
-                fixture_id="smoke",
-                kind="smoke",
-                prompt="Reply with OK",
-                verifier={},
-                timeout_secs=30,
-                workspace_template=None,
-            ),
-            workspace,
-            client_home=pathlib.Path("/tmp/matrix-codex-home"),
+            "http://127.0.0.1:18888",
+            launch_plan=plan,
         )
 
-        self.assertEqual(
-            codex_proxy_configs(interactive_command),
-            codex_proxy_configs(matrix_command),
-        )
-        self.assertIn(
-            'model_providers.proxy.env_key="OPENAI_API_KEY"',
-            codex_proxy_configs(interactive_command),
-        )
-        self.assertIn(
-            "model_providers.proxy.supports_websockets=false",
-            codex_proxy_configs(interactive_command),
-        )
+        self.assertEqual(command, ["codex", *plan.argv])
+        self.assertIn("model_catalog_json", " ".join(command))
+        self.assertIn("tools.web_search=false", command)
+        self.assertIn("-m", command)
+        self.assertNotIn("--model", command)
 
     def test_codex_wrapper_executes_scripted_interactive_two_turns_hermetically(self):
         server, thread, proxy_base, proxy_requests = run_hermetic_proxy_server()
@@ -266,6 +233,7 @@ class InteractiveCliTests(unittest.TestCase):
                 host_home.mkdir()
                 record_path = root / "fake-codex-record.json"
                 fake_codex = fake_bin / "codex"
+                fake_proxy = root / "llm-universal-proxy"
                 fake_codex.write_text(
                     f"""#!/usr/bin/env python3
 import json
@@ -394,6 +362,50 @@ if __name__ == "__main__":
                     encoding="utf-8",
                 )
                 fake_codex.chmod(0o755)
+                fake_proxy.write_text(
+                    """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+proxy_base = args[args.index("--llmup-internal-proxy-base") + 1].rstrip("/")
+proxy_key = args[args.index("--llmup-internal-proxy-key") + 1]
+model = args[args.index("--llmup-model") + 1]
+native_args = args[args.index("--") + 1:]
+print(json.dumps({
+    "schema_version": 1,
+    "agent": "codex",
+    "program": "codex",
+    "argv": [
+        "-c",
+        "model_provider=\\"proxy\\"",
+        "-c",
+        "model_providers.proxy.name=\\"llmup\\"",
+        "-c",
+        f"model_providers.proxy.base_url=\\"{proxy_base}/openai/v1\\"",
+        "-c",
+        "model_providers.proxy.env_key=\\"OPENAI_API_KEY\\"",
+        "-c",
+        "model_providers.proxy.wire_api=\\"responses\\"",
+        "-c",
+        "model_providers.proxy.supports_websockets=false",
+        "-m",
+        model,
+        *native_args,
+    ],
+    "env": {
+        "CODEX_HOME": os.environ["LLMUP_CODEX_HOME"],
+        "OPENAI_API_KEY": proxy_key,
+        "OPENAI_BASE_URL": f"{proxy_base}/openai/v1",
+    },
+    "projection": {"enabled": True, "profile": {"alias": model}},
+    "artifacts": {"codex_model_catalog": None},
+}))
+""",
+                    encoding="utf-8",
+                )
+                fake_proxy.chmod(0o755)
                 env = {
                     "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
                     "HOME": str(host_home),
@@ -412,6 +424,8 @@ if __name__ == "__main__":
                     str(workspace),
                     "--model",
                     "preset-openai-compatible",
+                    "--binary",
+                    str(fake_proxy),
                     "--proxy-health-timeout-secs",
                     "5",
                 ]
@@ -447,7 +461,7 @@ if __name__ == "__main__":
             self.assertEqual(record["cwd"], str(workspace.resolve()))
             self.assertEqual(record["stdin_lines"][:2], ["first scripted turn", "second scripted turn"])
             self.assertEqual(pathlib.Path(record["argv"][0]).name, "codex")
-            self.assertEqual(record["argv"][1], "-C")
+            self.assertIn("-C", record["argv"])
             self.assertNotIn("exec", record["argv"][1:])
             for forbidden_arg in FORBIDDEN_DANGEROUS_ARGS:
                 self.assertNotIn(forbidden_arg, record["argv"])
@@ -486,70 +500,61 @@ if __name__ == "__main__":
             server.server_close()
             thread.join(timeout=5)
 
-    def test_build_interactive_command_skips_view_image_disable_for_image_capable_models(self):
+    def test_build_interactive_command_rejects_internal_tool_artifacts_from_launch_plan(self):
         module = load_module()
         workspace = pathlib.Path("/tmp/workspace").resolve()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            client_home = pathlib.Path(temp_dir).resolve()
+        plan = module.ClientLaunchPlan(
+            program="codex",
+            argv=["-c", 'tool_identity_contract="__llmup_custom__apply_patch"'],
+            env={},
+            projection={},
+            artifacts={},
+        )
 
-            command = module.build_interactive_command(
+        with self.assertRaisesRegex(ValueError, "__llmup_custom__apply_patch"):
+            module.build_interactive_command(
                 "codex",
                 workspace,
-                "vision-openai",
+                "preset-openai-compatible",
                 "http://127.0.0.1:18888",
-                client_home=client_home,
-                model_limits=module.ModelLimits(context_window=200000),
-                codex_metadata=module.CodexModelMetadata(
-                    input_modalities=("text", "image"),
-                    supports_search_tool=True,
-                ),
+                launch_plan=plan,
             )
-
-        joined = " ".join(command)
-        self.assertIn("model_catalog_json", joined)
-        self.assertNotIn('tools.view_image=false', joined)
-
-    def test_build_interactive_command_rejects_internal_tool_artifacts_in_public_args(self):
-        module = load_module()
-        workspace = pathlib.Path("/tmp/workspace").resolve()
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            client_home = pathlib.Path(temp_dir).resolve()
-            with mock.patch.object(
-                module,
-                "build_codex_catalog_args",
-                return_value=[
-                    "-c",
-                    'tool_identity_contract="__llmup_custom__apply_patch"',
-                ],
-            ):
-                with self.assertRaisesRegex(ValueError, "__llmup_custom__apply_patch"):
-                    module.build_interactive_command(
-                        "codex",
-                        workspace,
-                        "preset-openai-compatible",
-                        "http://127.0.0.1:18888",
-                        client_home=client_home,
-                        model_limits=None,
-                    )
 
     def test_run_with_proxy_base_does_not_call_start_proxy(self):
         module = load_module()
-        live_profile = mock.Mock(
-            limits=module.ModelLimits(
-                context_window=200000,
-                max_output_tokens=128000,
-            ),
-            codex_metadata=module.CodexModelMetadata(
-                input_modalities=("text", "image"),
-                supports_search_tool=True,
-                supports_view_image=True,
-                apply_patch_tool_type="freeform",
-                supports_parallel_tool_calls=True,
-            ),
-        )
+        captured = {}
+
+        def fake_launch_plan(**kwargs):
+            captured.update(kwargs)
+            return module.ClientLaunchPlan(
+                program="codex",
+                argv=["-m", kwargs["model"], *kwargs["native_args"]],
+                env={
+                    "CODEX_HOME": str(kwargs["client_home"] / ".codex"),
+                    "OPENAI_API_KEY": kwargs["proxy_key"],
+                    "OPENAI_BASE_URL": f"{kwargs['proxy_base']}/openai/v1",
+                },
+                projection={"enabled": True},
+                artifacts={"codex_model_catalog": "/tmp/catalog.json"},
+            )
 
         with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            config_source = root / "proxy.yaml"
+            env_file = root / "secrets.env"
+            config_source.write_text(
+                """
+listen: 127.0.0.1:18888
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-responses
+model_aliases:
+  preset-openai-compatible: "DEFAULT:test-model"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            env_file.write_text("", encoding="utf-8")
             with mock.patch.object(
                 module, "ensure_client_binary"
             ), mock.patch.object(
@@ -560,76 +565,9 @@ if __name__ == "__main__":
                 module, "stop_proxy"
             ) as stop_proxy, mock.patch.object(
                 module,
-                "fetch_live_model_profile",
-                return_value=live_profile,
-            ) as fetch_live_model_profile, mock.patch.object(
-                module, "launch_interactive_client", return_value=0
-            ) as launch_client:
-                exit_code = module.run(
-                    [
-                        "--client",
-                        "codex",
-                        "--workspace",
-                        temp_dir,
-                        "--proxy-base",
-                        "http://127.0.0.1:18888/",
-                        "--proxy-health-timeout-secs",
-                        "55",
-                    ]
-                )
-
-        self.assertEqual(exit_code, 0)
-        start_proxy.assert_not_called()
-        wait_for_health.assert_called_once_with("http://127.0.0.1:18888", timeout_secs=55)
-        fetch_live_model_profile.assert_called_once_with(
-            "http://127.0.0.1:18888",
-            "preset-openai-compatible",
-            proxy_key=module.DEFAULT_PROXY_KEY,
-        )
-        stop_proxy.assert_called_once_with(None, terminate_grace_secs=15)
-        launch_args = launch_client.call_args.args
-        self.assertEqual(
-            launch_args[0],
-            module.build_interactive_command(
-                "codex",
-                pathlib.Path(temp_dir).resolve(),
-                "preset-openai-compatible",
-                "http://127.0.0.1:18888",
-                client_home=pathlib.Path(launch_args[2]["HOME"]),
-                model_limits=live_profile.limits,
-                codex_metadata=live_profile.codex_metadata,
-            ),
-        )
-
-    def test_run_with_proxy_base_uses_live_profile_without_reading_local_config(self):
-        module = load_module()
-        live_profile = mock.Mock(
-            limits=module.ModelLimits(
-                context_window=200000,
-                max_output_tokens=128000,
-            ),
-            codex_metadata=module.CodexModelMetadata(
-                input_modalities=("text", "image"),
-                supports_search_tool=True,
-                supports_view_image=False,
-                apply_patch_tool_type="freeform",
-                supports_parallel_tool_calls=True,
-            ),
-        )
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            missing_config = pathlib.Path(temp_dir) / "missing-proxy.yaml"
-            with mock.patch.object(
-                module, "ensure_client_binary"
-            ), mock.patch.object(
-                module, "wait_for_health"
-            ), mock.patch.object(
-                module, "stop_proxy"
-            ), mock.patch.object(
-                module,
-                "fetch_live_model_profile",
-                return_value=live_profile,
-            ) as fetch_live_model_profile, mock.patch.object(
+                "build_client_launch_plan",
+                side_effect=fake_launch_plan,
+            ) as build_client_launch_plan, mock.patch.object(
                 module, "launch_interactive_client", return_value=0
             ) as launch_client:
                 exit_code = module.run(
@@ -641,29 +579,132 @@ if __name__ == "__main__":
                         "--proxy-base",
                         "http://127.0.0.1:18888/",
                         "--config-source",
-                        str(missing_config),
+                        str(config_source),
+                        "--env-file",
+                        str(env_file),
+                        "--proxy-health-timeout-secs",
+                        "55",
                     ]
                 )
 
         self.assertEqual(exit_code, 0)
-        fetch_live_model_profile.assert_called_once_with(
-            "http://127.0.0.1:18888",
-            "preset-openai-compatible",
-            proxy_key=module.DEFAULT_PROXY_KEY,
-        )
+        start_proxy.assert_not_called()
+        wait_for_health.assert_called_once_with("http://127.0.0.1:18888", timeout_secs=55)
+        build_client_launch_plan.assert_called_once()
+        stop_proxy.assert_called_once_with(None, terminate_grace_secs=15)
         launch_args = launch_client.call_args.args
         self.assertEqual(
             launch_args[0],
-            module.build_interactive_command(
+            [
                 "codex",
-                pathlib.Path(temp_dir).resolve(),
+                "-m",
                 "preset-openai-compatible",
-                "http://127.0.0.1:18888",
-                client_home=pathlib.Path(launch_args[2]["HOME"]),
-                model_limits=live_profile.limits,
-                codex_metadata=live_profile.codex_metadata,
-            ),
+                "-C",
+                str(pathlib.Path(temp_dir).resolve()),
+                "--sandbox",
+                "workspace-write",
+            ],
         )
+        self.assertEqual(captured["model"], "preset-openai-compatible")
+        self.assertNotIn("--model", captured["native_args"])
+        self.assertEqual(launch_args[2]["OPENAI_API_KEY"], module.DEFAULT_PROXY_KEY)
+
+    def test_run_with_proxy_base_passes_config_to_rust_launch_plan(self):
+        module = load_module()
+        captured = {}
+
+        def fake_launch_plan(**kwargs):
+            captured.update(kwargs)
+            captured["runtime_config_text"] = pathlib.Path(
+                kwargs["config_path"]
+            ).read_text(encoding="utf-8")
+            return module.ClientLaunchPlan(
+                program="codex",
+                argv=["-m", kwargs["model"], *kwargs["native_args"]],
+                env={
+                    "CODEX_HOME": str(kwargs["client_home"] / ".codex"),
+                    "OPENAI_API_KEY": kwargs["proxy_key"],
+                    "OPENAI_BASE_URL": f"{kwargs['proxy_base']}/openai/v1",
+                },
+                projection={"enabled": True},
+                artifacts={"codex_model_catalog": "/tmp/catalog.json"},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_source = pathlib.Path(temp_dir) / "proxy.yaml"
+            env_file = pathlib.Path(temp_dir) / "secrets.env"
+            config_source.write_text(
+                """
+listen: 127.0.0.1:18888
+upstreams:
+  PRESET-OPENAI-COMPATIBLE:
+    api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
+    format: openai-chat-completions
+    provider_key_env: PRESET_ENDPOINT_API_KEY
+    limits:
+      context_window: 200000
+      max_output_tokens: 128000
+model_aliases:
+  preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            env_file.write_text(
+                "\n".join(
+                    [
+                        "PRESET_ENDPOINT_API_KEY=proxy-only-secret",
+                        "PRESET_OPENAI_ENDPOINT_BASE_URL=https://openai-compatible.example/v1",
+                        "PRESET_ENDPOINT_MODEL=provider-configured-model",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                module, "ensure_client_binary"
+            ), mock.patch.object(
+                module, "wait_for_health"
+            ), mock.patch.object(
+                module, "stop_proxy"
+            ), mock.patch.object(
+                module,
+                "build_client_launch_plan",
+                side_effect=fake_launch_plan,
+            ) as build_client_launch_plan, mock.patch.object(
+                module, "launch_interactive_client", return_value=0
+            ) as launch_client:
+                exit_code = module.run(
+                    [
+                        "--client",
+                        "codex",
+                        "--workspace",
+                        temp_dir,
+                        "--proxy-base",
+                        "http://127.0.0.1:18888/",
+                        "--config-source",
+                        str(config_source),
+                        "--env-file",
+                        str(env_file),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        build_client_launch_plan.assert_called_once()
+        self.assertNotEqual(captured["config_path"], config_source)
+        self.assertIn(
+            "api_root: https://openai-compatible.example/v1",
+            captured["runtime_config_text"],
+        )
+        self.assertIn(
+            'preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:provider-configured-model"',
+            captured["runtime_config_text"],
+        )
+        self.assertNotIn("api_root: PRESET_", captured["runtime_config_text"])
+        self.assertNotIn("PRESET_ENDPOINT_MODEL", captured["runtime_config_text"])
+        self.assertNotIn("proxy-only-secret", captured["runtime_config_text"])
+        self.assertEqual(captured["env_file_path"], env_file)
+        self.assertEqual(captured["proxy_base"], "http://127.0.0.1:18888")
+        self.assertEqual(launch_client.call_args.args[0][0], "codex")
 
     def test_run_without_proxy_base_starts_waits_and_stops_proxy(self):
         module = load_module()
@@ -673,6 +714,23 @@ if __name__ == "__main__":
                 return None
 
         fake_process = FakeProcess()
+        captured = {}
+
+        def fake_launch_plan(**kwargs):
+            captured.update(kwargs)
+            return module.ClientLaunchPlan(
+                program="claude",
+                argv=[*kwargs["native_args"]],
+                env={
+                    "CLAUDE_CONFIG_DIR": str(kwargs["client_home"] / ".claude"),
+                    "ANTHROPIC_API_KEY": kwargs["proxy_key"],
+                    "ANTHROPIC_BASE_URL": f"{kwargs['proxy_base']}/anthropic",
+                    "ANTHROPIC_CUSTOM_MODEL_OPTION": kwargs["model"],
+                    "ANTHROPIC_MODEL": kwargs["model"],
+                },
+                projection={"enabled": True},
+                artifacts={"codex_model_catalog": None},
+            )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -711,14 +769,11 @@ if __name__ == "__main__":
                 module, "stop_proxy"
             ) as stop_proxy, mock.patch.object(
                 module,
-                "fetch_live_model_profile",
-                return_value=mock.Mock(
-                    limits=None,
-                    codex_metadata=None,
-                ),
-            ) as fetch_live_model_profile, mock.patch.object(
+                "build_client_launch_plan",
+                side_effect=fake_launch_plan,
+            ) as build_client_launch_plan, mock.patch.object(
                 module, "launch_interactive_client", return_value=0
-            ):
+            ) as launch_interactive_client:
                 exit_code = module.run(
                     [
                         "--client",
@@ -762,10 +817,17 @@ if __name__ == "__main__":
             stdout_path=root / "proxy.stdout.log",
             stderr_path=root / "proxy.stderr.log",
         )
-        fetch_live_model_profile.assert_called_once_with(
-            "http://127.0.0.1:18888",
+        build_client_launch_plan.assert_called_once()
+        self.assertEqual(captured["model"], "preset-anthropic-compatible")
+        self.assertNotIn("--model", captured["native_args"])
+        self.assertIn("--bare", captured["native_args"])
+        self.assertEqual(
+            launch_interactive_client.call_args.args[2]["ANTHROPIC_CUSTOM_MODEL_OPTION"],
             "preset-anthropic-compatible",
-            proxy_key=module.DEFAULT_PROXY_KEY,
+        )
+        self.assertEqual(
+            launch_interactive_client.call_args.args[2]["ANTHROPIC_MODEL"],
+            "preset-anthropic-compatible",
         )
         stop_proxy.assert_called_once_with(fake_process, terminate_grace_secs=15)
 
@@ -790,8 +852,8 @@ if __name__ == "__main__":
             ) as wait_for_health, mock.patch.object(
                 module, "stop_proxy"
             ) as stop_proxy, mock.patch.object(
-                module, "fetch_live_model_profile"
-            ) as fetch_live_model_profile, mock.patch.object(
+                module, "build_client_launch_plan"
+            ) as build_client_launch_plan, mock.patch.object(
                 module, "launch_interactive_client"
             ) as launch_interactive_client:
                 with self.assertRaises(ValueError) as raised:
@@ -816,7 +878,7 @@ if __name__ == "__main__":
             self.assertIn(required_key, message)
         start_proxy.assert_not_called()
         wait_for_health.assert_not_called()
-        fetch_live_model_profile.assert_not_called()
+        build_client_launch_plan.assert_not_called()
         launch_interactive_client.assert_not_called()
         stop_proxy.assert_called_once_with(None, terminate_grace_secs=15)
 
@@ -1119,8 +1181,8 @@ model_aliases:
             ), mock.patch.object(
                 module, "start_proxy", side_effect=fake_start_proxy
             ) as start_proxy, mock.patch.object(
-                module, "fetch_live_model_profile"
-            ) as fetch_live_model_profile, mock.patch.object(
+                module, "build_client_launch_plan"
+            ) as build_client_launch_plan, mock.patch.object(
                 module, "launch_interactive_client"
             ) as launch_interactive_client:
                 with self.assertRaises(RuntimeError) as raised:
@@ -1149,7 +1211,7 @@ model_aliases:
             message,
         )
         start_proxy.assert_called_once()
-        fetch_live_model_profile.assert_not_called()
+        build_client_launch_plan.assert_not_called()
         launch_interactive_client.assert_not_called()
         self.assertNotIn("provider_key_env:", captured_runtime_config["text"])
         self.assertNotIn("MINIMAX", captured_runtime_config["text"].upper())

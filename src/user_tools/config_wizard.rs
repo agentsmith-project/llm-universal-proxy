@@ -4,6 +4,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use serde_yaml::{Mapping, Value};
 use uuid::Uuid;
 
 use super::env_file::{read_env_file, EnvFile};
@@ -67,6 +68,20 @@ pub enum ConfigCommand {
     Help,
     Version,
     Init(InitCliOptions),
+    SetLimits(SetLimitsCliOptions),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetLimitsTarget {
+    Alias(String),
+    Upstream(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetLimitsCliOptions {
+    pub target: SetLimitsTarget,
+    pub context_window: u64,
+    pub max_output_tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +111,7 @@ llmup-config
 Usage:
   llmup-config
   llmup-config doctor
+  llmup-config set-limits (--alias <name> | --upstream <name>) --context-window <n> --max-output-tokens <n>
   llmup-config --help
   llmup-config --version
 
@@ -131,6 +147,9 @@ pub fn parse_config_args(
     let Some(first) = args.first().and_then(|item| item.to_str()) else {
         return Err("llmup-config arguments must be valid UTF-8".to_string());
     };
+    if first == "set-limits" {
+        return parse_set_limits_args(&args[1..]).map(ConfigCommand::SetLimits);
+    }
     if first != "init" {
         return Err(format!("unknown llmup-config command `{first}`"));
     }
@@ -163,6 +182,16 @@ pub fn run_cli(
             Ok(0)
         }
         ConfigCommand::Doctor => run_doctor(stdout),
+        ConfigCommand::SetLimits(options) => {
+            let home = home_dir_from_env()?;
+            let llmup_home = env_path_or_default("LLMUP_HOME", home.join(".llmup"));
+            let config_path = llmup_home.join("config.yaml");
+            let summary = set_limits_in_config(&config_path, &options)?;
+            stdout
+                .write_all(summary.as_bytes())
+                .map_err(|error| format!("failed to write summary: {error}"))?;
+            Ok(0)
+        }
         ConfigCommand::Init(init) => {
             let api_key = match init.api_key_source {
                 ApiKeySource::Stdin => read_api_key_from_stdin(stdin)?,
@@ -762,6 +791,351 @@ fn command_in_path(command: &str) -> bool {
             .split(';')
             .any(|ext| dir.join(format!("{command}{ext}")).is_file())
     })
+}
+
+fn parse_set_limits_args(args: &[OsString]) -> Result<SetLimitsCliOptions, String> {
+    let mut target = None;
+    let mut context_window = None;
+    let mut max_output_tokens = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index]
+            .to_str()
+            .ok_or_else(|| "llmup-config set-limits arguments must be valid UTF-8".to_string())?;
+        if let Some(value) = inline_value(arg, "--alias") {
+            set_limits_target(
+                &mut target,
+                SetLimitsTarget::Alias(parse_set_limits_target_name("--alias", value)?),
+            )?;
+            index += 1;
+        } else if arg == "--alias" {
+            let value = take_utf8_value(args, &mut index, "--alias")?;
+            set_limits_target(
+                &mut target,
+                SetLimitsTarget::Alias(parse_set_limits_target_name("--alias", &value)?),
+            )?;
+        } else if let Some(value) = inline_value(arg, "--upstream") {
+            set_limits_target(
+                &mut target,
+                SetLimitsTarget::Upstream(parse_set_limits_target_name("--upstream", value)?),
+            )?;
+            index += 1;
+        } else if arg == "--upstream" {
+            let value = take_utf8_value(args, &mut index, "--upstream")?;
+            set_limits_target(
+                &mut target,
+                SetLimitsTarget::Upstream(parse_set_limits_target_name("--upstream", &value)?),
+            )?;
+        } else if let Some(value) = inline_value(arg, "--context-window") {
+            set_set_limits_number(&mut context_window, "--context-window", value)?;
+            index += 1;
+        } else if arg == "--context-window" {
+            let value = take_utf8_value(args, &mut index, "--context-window")?;
+            set_set_limits_number(&mut context_window, "--context-window", &value)?;
+        } else if let Some(value) = inline_value(arg, "--max-output-tokens") {
+            set_set_limits_number(&mut max_output_tokens, "--max-output-tokens", value)?;
+            index += 1;
+        } else if arg == "--max-output-tokens" {
+            let value = take_utf8_value(args, &mut index, "--max-output-tokens")?;
+            set_set_limits_number(&mut max_output_tokens, "--max-output-tokens", &value)?;
+        } else {
+            return Err(format!("unknown llmup-config set-limits argument `{arg}`"));
+        }
+    }
+
+    let target = target
+        .ok_or_else(|| "choose exactly one of --alias <name> or --upstream <name>".to_string())?;
+    let context_window =
+        context_window.ok_or_else(|| "--context-window is required".to_string())?;
+    let max_output_tokens =
+        max_output_tokens.ok_or_else(|| "--max-output-tokens is required".to_string())?;
+    validate_set_limits_numbers(context_window, max_output_tokens)?;
+
+    Ok(SetLimitsCliOptions {
+        target,
+        context_window,
+        max_output_tokens,
+    })
+}
+
+fn parse_set_limits_target_name(flag: &str, value: &str) -> Result<String, String> {
+    validate_plain_yaml_scalar(flag, value)?;
+    Ok(value.to_string())
+}
+
+fn set_limits_target(
+    target: &mut Option<SetLimitsTarget>,
+    next: SetLimitsTarget,
+) -> Result<(), String> {
+    if target.replace(next).is_some() {
+        return Err("choose exactly one of --alias <name> or --upstream <name>".to_string());
+    }
+    Ok(())
+}
+
+fn set_set_limits_number(target: &mut Option<u64>, flag: &str, value: &str) -> Result<(), String> {
+    if target.is_some() {
+        return Err(format!("{flag} may only be provided once"));
+    }
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| format!("{flag} must be a positive integer"))?;
+    *target = Some(parsed);
+    Ok(())
+}
+
+fn validate_set_limits_numbers(context_window: u64, max_output_tokens: u64) -> Result<(), String> {
+    if context_window == 0 {
+        return Err("--context-window must be greater than zero".to_string());
+    }
+    if max_output_tokens == 0 {
+        return Err("--max-output-tokens must be greater than zero".to_string());
+    }
+    if max_output_tokens >= context_window {
+        return Err("--max-output-tokens must be less than --context-window".to_string());
+    }
+    Ok(())
+}
+
+fn set_limits_in_config(path: &Path, options: &SetLimitsCliOptions) -> Result<String, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read config {}: {error}", path.display()))?;
+    let mut value: Value = serde_yaml::from_str(&raw)
+        .map_err(|error| format!("failed to parse config {}: {error}", path.display()))?;
+    let original_value = value.clone();
+    let limits = model_limits_value(options.context_window, options.max_output_tokens);
+
+    match &options.target {
+        SetLimitsTarget::Alias(alias) => update_alias_limits(&mut value, alias, limits)?,
+        SetLimitsTarget::Upstream(upstream) => {
+            update_upstream_limits(&mut value, upstream, limits)?;
+        }
+    }
+
+    let rendered = serde_yaml::to_string(&value)
+        .map_err(|error| format!("failed to render updated config: {error}"))?;
+    let config = Config::from_yaml_str(&rendered)
+        .map_err(|error| format!("updated config would be invalid: {error}"))?;
+    config
+        .validate()
+        .map_err(|error| format!("updated config would be invalid: {error}"))?;
+
+    let changed = value != original_value;
+    if changed {
+        write_config_file_atomic(path, &rendered)?;
+    }
+
+    Ok(set_limits_summary(path, options, changed))
+}
+
+fn update_alias_limits(root: &mut Value, alias: &str, limits: Value) -> Result<(), String> {
+    let root = yaml_mapping_mut(root, "config root")?;
+    let aliases = root
+        .get_mut(&yaml_key("model_aliases"))
+        .ok_or_else(|| format!("unknown alias `{alias}`"))?;
+    let aliases = yaml_mapping_mut(aliases, "model_aliases")?;
+    let alias_value = aliases
+        .get_mut(&yaml_key(alias))
+        .ok_or_else(|| format!("unknown alias `{alias}`"))?;
+
+    match alias_value {
+        Value::String(target) => {
+            validate_alias_target_string(alias, target)?;
+            let mut structured = Mapping::new();
+            structured.insert(yaml_key("target"), Value::String(target.clone()));
+            structured.insert(yaml_key("limits"), limits);
+            *alias_value = Value::Mapping(structured);
+            Ok(())
+        }
+        Value::Mapping(mapping) => {
+            validate_alias_target_value(alias, mapping.get(&yaml_key("target")))?;
+            mapping.insert(yaml_key("limits"), limits);
+            Ok(())
+        }
+        _ => Err(format!(
+            "alias `{alias}` must be a string target or an object with `target`"
+        )),
+    }
+}
+
+fn update_upstream_limits(root: &mut Value, upstream: &str, limits: Value) -> Result<(), String> {
+    let root = yaml_mapping_mut(root, "config root")?;
+    let upstreams = root
+        .get_mut(&yaml_key("upstreams"))
+        .ok_or_else(|| format!("unknown upstream `{upstream}`"))?;
+    let upstreams = yaml_mapping_mut(upstreams, "upstreams")?;
+    let upstream_value = upstreams
+        .get_mut(&yaml_key(upstream))
+        .ok_or_else(|| format!("unknown upstream `{upstream}`"))?;
+    let upstream_mapping = yaml_mapping_mut(upstream_value, &format!("upstream `{upstream}`"))?;
+    upstream_mapping.insert(yaml_key("limits"), limits);
+    Ok(())
+}
+
+fn validate_alias_target_value(alias: &str, target: Option<&Value>) -> Result<(), String> {
+    let Some(Value::String(target)) = target else {
+        return Err(format!(
+            "alias `{alias}` object must contain string `target`"
+        ));
+    };
+    validate_alias_target_string(alias, target)
+}
+
+fn validate_alias_target_string(alias: &str, target: &str) -> Result<(), String> {
+    let Some((upstream, model)) = target.split_once(':') else {
+        return Err(format!(
+            "alias `{alias}` target must use upstream:model syntax"
+        ));
+    };
+    if upstream.trim().is_empty() || model.trim().is_empty() {
+        return Err(format!(
+            "alias `{alias}` target must use non-empty upstream:model syntax"
+        ));
+    }
+    Ok(())
+}
+
+fn yaml_mapping_mut<'a>(value: &'a mut Value, owner: &str) -> Result<&'a mut Mapping, String> {
+    value
+        .as_mapping_mut()
+        .ok_or_else(|| format!("{owner} must be a YAML mapping"))
+}
+
+fn yaml_key(key: &str) -> Value {
+    Value::String(key.to_string())
+}
+
+fn model_limits_value(context_window: u64, max_output_tokens: u64) -> Value {
+    let mut limits = Mapping::new();
+    limits.insert(
+        yaml_key("context_window"),
+        serde_yaml::to_value(context_window).expect("u64 should serialize to YAML"),
+    );
+    limits.insert(
+        yaml_key("max_output_tokens"),
+        serde_yaml::to_value(max_output_tokens).expect("u64 should serialize to YAML"),
+    );
+    Value::Mapping(limits)
+}
+
+fn set_limits_summary(path: &Path, options: &SetLimitsCliOptions, changed: bool) -> String {
+    let target = match &options.target {
+        SetLimitsTarget::Alias(alias) => format!("alias {alias}"),
+        SetLimitsTarget::Upstream(upstream) => format!("upstream {upstream}"),
+    };
+    let action = if changed {
+        "Updated"
+    } else {
+        "limits unchanged for"
+    };
+    if changed {
+        format!(
+            "{action} {target} limits in {}: context_window={} max_output_tokens={}\n",
+            path.display(),
+            options.context_window,
+            options.max_output_tokens
+        )
+    } else {
+        format!(
+            "{action} {target} in {}: context_window={} max_output_tokens={}\n",
+            path.display(),
+            options.context_window,
+            options.max_output_tokens
+        )
+    }
+}
+
+fn write_config_file_atomic(path: &Path, contents: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("failed to find parent directory for {}", path.display()))?;
+    let original_permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("config.yaml");
+    let temp_path = parent.join(format!(
+        ".{file_name}.tmp-{}-{}",
+        std::process::id(),
+        Uuid::new_v4().simple()
+    ));
+
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+            let mode = original_permissions
+                .as_ref()
+                .map(|permissions| permissions.mode() & 0o777)
+                .unwrap_or(0o600);
+            options.mode(mode);
+        }
+        let mut file = options.open(&temp_path).map_err(|error| {
+            format!(
+                "failed to write temporary config {}: {error}",
+                temp_path.display()
+            )
+        })?;
+        if let Some(permissions) = original_permissions.clone() {
+            fs::set_permissions(&temp_path, permissions).map_err(|error| {
+                format!(
+                    "failed to preserve permissions on temporary config {}: {error}",
+                    temp_path.display()
+                )
+            })?;
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600)).map_err(
+                    |error| {
+                        format!(
+                            "failed to secure temporary config {}: {error}",
+                            temp_path.display()
+                        )
+                    },
+                )?;
+            }
+        }
+        file.write_all(contents.as_bytes()).map_err(|error| {
+            format!(
+                "failed to write temporary config {}: {error}",
+                temp_path.display()
+            )
+        })?;
+        file.flush().map_err(|error| {
+            format!(
+                "failed to flush temporary config {}: {error}",
+                temp_path.display()
+            )
+        })?;
+        file.sync_all().map_err(|error| {
+            format!(
+                "failed to sync temporary config {}: {error}",
+                temp_path.display()
+            )
+        })?;
+        drop(file);
+        fs::rename(&temp_path, path).map_err(|error| {
+            format!(
+                "failed to replace config {} with {}: {error}",
+                path.display(),
+                temp_path.display()
+            )
+        })
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
 }
 
 fn parse_hidden_init_args(args: &[OsString]) -> Result<InitCliOptions, String> {
