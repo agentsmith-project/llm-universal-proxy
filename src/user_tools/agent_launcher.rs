@@ -74,7 +74,7 @@ pub enum ProxyMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileProjection {
     Enabled {
-        model_catalog: AgentModelCatalog,
+        model_catalog: Box<AgentModelCatalog>,
         codex_catalog_path: Option<PathBuf>,
     },
     Disabled,
@@ -322,7 +322,7 @@ pub fn prepare_profile_projection(
         AgentKind::Claude => None,
     };
     Ok(ProfileProjection::Enabled {
-        model_catalog,
+        model_catalog: Box::new(model_catalog),
         codex_catalog_path,
     })
 }
@@ -649,7 +649,7 @@ pub fn run_cli(
     })?;
     let projection = match &base_projection {
         ProfileProjection::Enabled { model_catalog, .. } => {
-            prepare_profile_projection(kind, model_catalog.clone(), &session_dir)?
+            prepare_profile_projection(kind, model_catalog.as_ref().clone(), &session_dir)?
         }
         ProfileProjection::Disabled => ProfileProjection::Disabled,
     };
@@ -744,7 +744,7 @@ fn build_base_projection(
         .unwrap_or(DEFAULT_AGENT_MODEL_ALIAS);
     let model_catalog = AgentModelCatalog::from_config(user_config, alias)?;
     Ok(ProfileProjection::Enabled {
-        model_catalog,
+        model_catalog: Box::new(model_catalog),
         codex_catalog_path: None,
     })
 }
@@ -795,7 +795,7 @@ fn write_internal_launch_plan(
     let secrets = read_env_file(&env_file_path)?;
     let projection = match &base_projection {
         ProfileProjection::Enabled { model_catalog, .. } => {
-            prepare_profile_projection(kind, model_catalog.clone(), &artifact_dir)?
+            prepare_profile_projection(kind, model_catalog.as_ref().clone(), &artifact_dir)?
         }
         ProfileProjection::Disabled => ProfileProjection::Disabled,
     };

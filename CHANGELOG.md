@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.2.39 - 2026-05-20
+
+- Fixed the release-blocking Clippy `large_enum_variant` finding in launcher profile projection by boxing the model catalog inside `ProfileProjection::Enabled`; this keeps the Codex/Claude launcher behavior unchanged while satisfying the release gate.
+- Advanced the main-branch release identity to Cargo package version `0.2.39`, the next patch version after the published, occupied `v0.2.37` tag and the unpublished, failed `v0.2.38` tag, without moving, deleting, or reusing the existing tag.
+
 ## v0.2.38 - 2026-05-20
 
 - Reworked the launcher-managed `llmup-config` path around a lower-cognitive-load interactive setup: new configs use the `main` local model name, strict service types (`openai-chat-completions`, `openai-responses`, `anthropic-messages`), and a single visible add-model flow instead of hidden compatibility commands.
@@ -9,7 +14,7 @@
 - Hardened Codex/Claude launcher metadata and subagent behavior with generated Codex catalog descriptions, selected-model environment projection, Claude family model environment isolation, and focused fake-client/full-flow regression coverage.
 - Updated README / README_CN / clients / advanced docs around the install -> configure -> launch path, explicit protocol names, and the `main` default model; advanced server and manual YAML usage remain separate from the beginner path.
 - Removed the hidden `llmup-config init --non-interactive` surface from the product CLI, keeping tests on the same interactive setup path that users run while preserving internal Rust helpers for focused generation tests.
-- Advanced the main-branch release identity to Cargo package version `0.2.38`, the next patch version after the published, occupied `v0.2.37` tag, without moving, deleting, or reusing the existing tag.
+- Advanced the main-branch release identity to Cargo package version `0.2.38`, the next patch version after the published, occupied `v0.2.37` tag, without moving, deleting, or reusing the existing tag. This release identity was not published because CI failed on Clippy and was superseded by `v0.2.39`.
 
 ## v0.2.37 - 2026-05-19
 

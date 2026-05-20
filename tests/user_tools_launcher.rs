@@ -121,8 +121,10 @@ fn managed_mode(port: u16) -> ProxyMode {
 
 fn enabled_projection(alias: &str) -> ProfileProjection {
     ProfileProjection::Enabled {
-        model_catalog: AgentModelCatalog::from_config(&launcher_profile_config(), alias)
-            .expect("model catalog should resolve"),
+        model_catalog: Box::new(
+            AgentModelCatalog::from_config(&launcher_profile_config(), alias)
+                .expect("model catalog should resolve"),
+        ),
         codex_catalog_path: None,
     }
 }
@@ -680,8 +682,9 @@ model_aliases:
     .expect("config should parse");
     config.validate().expect("config should validate");
     let projection = ProfileProjection::Enabled {
-        model_catalog: AgentModelCatalog::from_config(&config, "main")
-            .expect("model catalog should resolve"),
+        model_catalog: Box::new(
+            AgentModelCatalog::from_config(&config, "main").expect("model catalog should resolve"),
+        ),
         codex_catalog_path: None,
     };
     let parent = BTreeMap::from([
