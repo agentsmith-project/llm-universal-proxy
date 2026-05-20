@@ -46,7 +46,11 @@ def rust_toolchain() -> str:
 
 def changelog_version() -> str:
     changelog = _read(ROOT_DIR / "CHANGELOG.md")
-    match = re.search(r"^## v([0-9][^\s]*) - ", changelog, re.MULTILINE)
+    match = re.search(
+        r"^## (?:v|Unreleased / Next v)([0-9]+(?:\.[0-9]+){2})(?: - |\s+\(not published\))",
+        changelog,
+        re.MULTILINE,
+    )
     if match is None:
         raise RuntimeError("failed to locate latest changelog version")
     return match.group(1)

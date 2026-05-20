@@ -965,23 +965,26 @@ class GaDocsContractTests(unittest.TestCase):
                 self.assertNotIn("OpenAI-compatible completions surface", text)
                 self.assertNotIn("OpenAI-compatible completions and", text)
 
-    def test_changelog_latest_release_records_current_release_metadata(self):
+    def test_changelog_latest_entry_records_next_release_identity_without_published_heading(self):
         refs = container_refs()
         changelog = read_doc("CHANGELOG.md")
         version = cargo_package_version()
-        heading_match = re.search(
-            rf"^## v{re.escape(version)} - \d{{4}}-\d{{2}}-\d{{2}}$",
-            changelog,
-            flags=re.MULTILINE,
+        release_heading = rf"^## v{re.escape(version)} - \d{{4}}-\d{{2}}-\d{{2}}$"
+        next_heading = f"Unreleased / Next v{version} (not published)"
+
+        self.assertIsNone(
+            re.search(release_heading, changelog, flags=re.MULTILINE),
+            "the next release identity must not use a final-release heading until published",
         )
-        self.assertIsNotNone(heading_match)
-        latest_release = markdown_section(changelog, heading_match.group(0)[3:])
+        latest_release = markdown_section(changelog, next_heading)
 
         for snippet in (
             "release identity",
             f"occupied `{refs['published_release_tag']}` tag",
             "reusing the existing tag",
             "next patch version",
+            f"`{refs['next_release_tag']}`",
+            "not published",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, latest_release)

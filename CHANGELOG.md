@@ -1,8 +1,6 @@
 # Changelog
 
-## Unreleased
-
-## v0.2.40 - 2026-05-20
+## Unreleased / Next v0.2.40 (not published)
 
 - Advanced the main-branch release identity to Cargo package version `0.2.40`, the next patch version after the published, occupied `v0.2.39` tag, without moving, deleting, or reusing the existing tag.
 - Refreshed the checked-in container publication manifest and container docs around the published `v0.2.39` multi-arch image digest while keeping `0.2.40` / `v0.2.40` as the next release identity, not a published container tag yet.
