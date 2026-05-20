@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.40 - 2026-05-20
+
+- Advanced the main-branch release identity to Cargo package version `0.2.40`, the next patch version after the published, occupied `v0.2.39` tag, without moving, deleting, or reusing the existing tag.
+- Refreshed the checked-in container publication manifest and container docs around the published `v0.2.39` multi-arch image digest while keeping `0.2.40` / `v0.2.40` as the next release identity, not a published container tag yet.
+- Verified the `v0.2.39` release workflow, main/tag CI, GitHub Release assets, online `install.sh` asset, and GHCR `v0.2.39` multi-arch image publication.
+
 ## v0.2.39 - 2026-05-20
 
 - Fixed the release-blocking Clippy `large_enum_variant` finding in launcher profile projection by boxing the model catalog inside `ProfileProjection::Enabled`; this keeps the Codex/Claude launcher behavior unchanged while satisfying the release gate.
