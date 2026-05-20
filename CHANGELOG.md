@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased / Next v0.2.40 (not published)
+## Unreleased / Next v0.2.41 (not published)
+
+- Advanced the main-branch release identity to Cargo package version `0.2.41`, the next patch version after the published, occupied `v0.2.40` tag, without moving, deleting, or reusing the existing tag.
+- Refreshed the checked-in container publication manifest and container docs around the published `v0.2.40` multi-arch image digest while keeping `0.2.41` / `v0.2.41` as the next release identity, not a published container tag yet.
+- Verified the `v0.2.40` release workflow, main/tag CI, GitHub Release assets, online `install.sh` asset, and GHCR `v0.2.40` multi-arch image publication.
+
+## v0.2.40 - 2026-05-20
 
 - Stopped injecting `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` by default in `llmup-claude`, preserving Claude Code's native permission and sandbox behavior for flags such as `--dangerously-skip-permissions` while keeping llmup's own startup-time provider secret scrubbing.
 - Advanced the main-branch release identity to Cargo package version `0.2.40`, the next patch version after the published, occupied `v0.2.39` tag, without moving, deleting, or reusing the existing tag.
