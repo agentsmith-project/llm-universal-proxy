@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.2.38 - 2026-05-20
+
+- Reworked the launcher-managed `llmup-config` path around a lower-cognitive-load interactive setup: new configs use the `main` local model name, strict service types (`openai-chat-completions`, `openai-responses`, `anthropic-messages`), and a single visible add-model flow instead of hidden compatibility commands.
+- Added multi-model user tooling support: `llmup-config list` and `add-model` can manage multiple services and aliases, `llmup-codex` projects all configured aliases into the Codex model catalog, and `llmup-claude` projects the selected alias plus configured `haiku` / `sonnet` / `opus` family aliases.
+- Hardened Codex/Claude launcher metadata and subagent behavior with generated Codex catalog descriptions, selected-model environment projection, Claude family model environment isolation, and focused fake-client/full-flow regression coverage.
+- Updated README / README_CN / clients / advanced docs around the install -> configure -> launch path, explicit protocol names, and the `main` default model; advanced server and manual YAML usage remain separate from the beginner path.
+- Removed the hidden `llmup-config init --non-interactive` surface from the product CLI, keeping tests on the same interactive setup path that users run while preserving internal Rust helpers for focused generation tests.
+- Advanced the main-branch release identity to Cargo package version `0.2.38`, the next patch version after the published, occupied `v0.2.37` tag, without moving, deleting, or reusing the existing tag.
+
 ## v0.2.37 - 2026-05-19
 
 - Added launcher-managed model capability projection for Codex CLI and Claude Code, including configured context windows, maximum output tokens, Codex auto-compact thresholds, web-search capability, and Claude custom model metadata.
