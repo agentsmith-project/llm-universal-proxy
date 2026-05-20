@@ -125,7 +125,7 @@
 托管 projection 模式必须：
 
 - 移除自动追加的 `--model default`。
-- 注入 `ANTHROPIC_API_KEY=<proxy_key>`、`ANTHROPIC_BASE_URL=http://127.0.0.1:{port}/anthropic`、`CLAUDE_CONFIG_DIR=<managed dir>`、`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`。
+- 注入 `ANTHROPIC_API_KEY=<proxy_key>`、`ANTHROPIC_BASE_URL=http://127.0.0.1:{port}/anthropic`、`CLAUDE_CONFIG_DIR=<managed dir>`；默认不注入 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`，避免影响 Claude Code 原生 permission / sandbox 行为。
 - 注入 `ANTHROPIC_CUSTOM_MODEL_OPTION=<alias>`、`ANTHROPIC_MODEL=<alias>`、`ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=<alias>`、`ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION=llmup proxy model <alias>`。
 - 注入 managed profile env 前清理会干扰选模的调用者环境变量，包括 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` 及其 `_NAME` / `_DESCRIPTION` / `_SUPPORTED_CAPABILITIES` 等后缀变量，以及 `ANTHROPIC_SMALL_FAST_MODEL` 系列变量。
 - 按 limits 注入 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 和 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`。

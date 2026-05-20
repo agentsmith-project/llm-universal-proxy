@@ -459,7 +459,6 @@ pub fn build_client_environment(
                             .expect("managed proxy mode should have a base URL"),
                     ),
                 );
-                env.insert("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB".into(), "1".into());
                 env.insert("CLAUDE_CODE_ATTRIBUTION_HEADER".into(), "0".into());
                 if let ProfileProjection::Enabled { model_catalog, .. } = projection {
                     let profile = &model_catalog.selected;

@@ -178,6 +178,7 @@ with open(log_path, "w", encoding="utf-8") as log:
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
         "CLAUDE_CONFIG_DIR",
         "LLMUP_PROVIDER_DEFAULT_API_KEY",
         "LLMUP_PROVIDER_MAIN_API_KEY",
@@ -889,7 +890,7 @@ exit 9
     )));
     assert!(fake.contains("ANTHROPIC_BASE_URL=http://127.0.0.1:"));
     assert!(fake.contains("/anthropic"));
-    assert!(fake.contains("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"));
+    assert!(fake.contains("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=unset"));
     assert!(!fake.contains("parent-provider-key"));
     assert!(!fake.contains("provider-secret-from-stdin"));
     assert!(!fake.contains("ANTHROPIC_API_KEY=parent-anthropic-key"));
@@ -1029,6 +1030,7 @@ async fn claude_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
     assert!(fake.contains("ANTHROPIC_CUSTOM_MODEL_OPTION=main"));
     assert!(fake.contains("SUBAGENT_MODEL=main"));
     assert!(fake.contains("ARG=--dangerously-skip-permissions"));
+    assert!(fake.contains("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=unset"));
 
     let user_config = fs::read_to_string(llmup_home.join("config.yaml")).expect("read user config");
     assert!(user_config.contains("listen: 127.0.0.1:8080"));

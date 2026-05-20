@@ -86,7 +86,7 @@ V1 要补的不是大架构，而是验证和小修：
 - `ANTHROPIC_BASE_URL=<llmup>/anthropic`
 - `ANTHROPIC_MODEL=<llmup alias>`
 - `ANTHROPIC_CUSTOM_MODEL_OPTION=<llmup alias>`
-- `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`
+- 默认不注入 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`，避免 llmup 意外改写 Claude Code 原生 permission / sandbox 行为；需要该 hardening 的高级用户可自行显式设置。
 - 输出 token 和 auto compact 相关 env
 
 V1 增加两个默认 env：

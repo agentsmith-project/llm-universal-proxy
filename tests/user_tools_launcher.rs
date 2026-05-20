@@ -1021,10 +1021,7 @@ LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret
         claude_env.get(&OsString::from("CLAUDE_CONFIG_DIR")),
         Some(&homes.claude_config_dir.clone().into_os_string())
     );
-    assert_eq!(
-        claude_env.get(&OsString::from("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB")),
-        Some(&OsString::from("1"))
-    );
+    assert!(!claude_env.contains_key(&OsString::from("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB")));
     assert!(!claude_env.contains_key(&OsString::from("ANTHROPIC_BEDROCK_TOKEN")));
     assert!(!claude_env.contains_key(&OsString::from("CLAUDE_CODE_USE_VERTEX")));
 }

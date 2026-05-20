@@ -315,7 +315,7 @@ runtime YAML 生成要求：
 - Codex 客户端环境必须显式设置 `OPENAI_API_KEY="$LLM_UNIVERSAL_PROXY_KEY"`，并确保同名父环境值不会覆盖它。
 - Claude Code 客户端环境必须显式设置 `ANTHROPIC_API_KEY="$LLM_UNIVERSAL_PROXY_KEY"` 和 `ANTHROPIC_BASE_URL="http://127.0.0.1:<port>/anthropic"`，并确保同名父环境值不会覆盖它。
 - Claude Code 客户端环境还必须移除可能绕过 `ANTHROPIC_BASE_URL` 的 provider routing 和认证 helper 变量，再显式写入 llmup 的 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`。至少包括 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BEDROCK_*`、`ANTHROPIC_VERTEX_*`、`ANTHROPIC_FOUNDRY_*`、`ANTHROPIC_AWS_*`、`ANTHROPIC_WORKSPACE_ID`、`AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS`、`GCLOUD_PROJECT`、`GOOGLE_CLOUD_PROJECT`、`CLAUDE_CODE_USE_BEDROCK`、`CLAUDE_CODE_USE_VERTEX`、`CLAUDE_CODE_USE_FOUNDRY`、`CLAUDE_CODE_USE_MANTLE`、`CLAUDE_CODE_USE_ANTHROPIC_AWS`、`CLAUDE_CODE_SKIP_BEDROCK_AUTH`、`CLAUDE_CODE_SKIP_VERTEX_AUTH`、`CLAUDE_CODE_SKIP_FOUNDRY_AUTH`、`CLAUDE_CODE_SKIP_MANTLE_AUTH`、`CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH`。
-- Claude Code 默认设置 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`，减少工具子进程继承敏感环境变量。
+- Claude Code 默认不设置 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`，避免 llmup 意外改变原生 permission / sandbox 行为；需要该 hardening 的高级用户可在外层环境中自行显式设置。
 - 因为不改 `HOME`，dangerous/yolo 这类原生权限参数仍可能访问用户真实文件和凭据。llmup 不解析这些参数，用户需要按 Codex/Claude 原生文档自行理解风险。
 
 ## 原生 CLI 薄包装契约
