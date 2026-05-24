@@ -1,10 +1,11 @@
-# Historical concrete example.
+# Concrete DeepSeek OpenAI-compatible example.
 #
-# MiniMax is a replaceable OpenAI-compatible example, not a GA-required provider
+# This file keeps its historical filename for compatibility with existing links.
+# DeepSeek is a replaceable OpenAI-compatible example, not a GA-required provider
 # and not the main CLI-wrapper preset path. The recommended user-entry config
 # source is quickstart-provider-neutral.yaml; this file shows how to replace
 # provider-neutral PRESET_* placeholders with concrete upstreams when you want
-# an explicit OpenAI + MiniMax sample.
+# an explicit OpenAI + DeepSeek sample.
 
 listen: 127.0.0.1:8080
 upstream_timeout_secs: 120
@@ -24,10 +25,10 @@ upstreams:
         apply_patch_transport: freeform
         supports_parallel_calls: false
 
-  MINIMAX_OPENAI_COMPATIBLE_EXAMPLE:
-    api_root: https://api.minimaxi.com/v1
+  DEEPSEEK_OPENAI_COMPATIBLE_EXAMPLE:
+    api_root: https://api.deepseek.com
     format: openai-chat-completions
-    provider_key_env: MINIMAX_API_KEY
+    provider_key_env: DEEPSEEK_API_KEY
     surface_defaults:
       modalities:
         input: ["text"]
@@ -40,4 +41,4 @@ upstreams:
 
 model_aliases:
   openai-responses-example: OPENAI_RESPONSES_EXAMPLE:gpt-5.4
-  minimax-openai-compatible-example: MINIMAX_OPENAI_COMPATIBLE_EXAMPLE:MiniMax-M2.7-highspeed
+  deepseek-openai-compatible-example: DEEPSEEK_OPENAI_COMPATIBLE_EXAMPLE:deepseek-v4-flash

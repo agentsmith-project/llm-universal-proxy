@@ -152,8 +152,8 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
         codex_home: temp.path().join(".llmup-codex"),
         claude_config_dir: temp.path().join(".llmup-claude"),
         interface: ProviderInterface::OpenAiChatCompletions,
-        model_service_url: "https://api.minimaxi.com/v1".to_string(),
-        model_name: "MiniMax-M2.7-highspeed".to_string(),
+        model_service_url: "https://api.deepseek.com".to_string(),
+        model_name: "deepseek-v4-flash".to_string(),
         model_alias: "main".to_string(),
         force: false,
     };
@@ -164,7 +164,7 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
     let config_yaml = fs::read_to_string(&result.config_path).expect("read generated config");
     assert!(!config_yaml.contains("provider-secret-from-stdin"));
     assert!(config_yaml.contains("model_aliases"));
-    assert!(config_yaml.contains("main: main:MiniMax-M2.7-highspeed"));
+    assert!(config_yaml.contains("main: main:deepseek-v4-flash"));
     assert!(!config_yaml.contains("DEFAULT"));
     assert!(!config_yaml.contains("default:"));
     assert!(config_yaml.contains("data_auth"));
@@ -176,7 +176,7 @@ fn non_interactive_init_writes_valid_redacted_config_and_0600_secrets() {
         .resolve_model("main")
         .expect("main alias should resolve");
     assert_eq!(resolved.upstream_name, "main");
-    assert_eq!(resolved.upstream_model, "MiniMax-M2.7-highspeed");
+    assert_eq!(resolved.upstream_model, "deepseek-v4-flash");
 
     let secrets = fs::read_to_string(&result.secrets_path).expect("read generated secrets");
     assert!(secrets.contains("LLM_UNIVERSAL_PROXY_KEY="));
@@ -770,8 +770,7 @@ fn config_help_mentions_set_limits_but_interactive_path_stays_unchanged() {
     let _home = EnvGuard::set("HOME", temp.path());
     let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
     let mut stdin = Cursor::new(
-        b"\nhttps://api.minimaxi.com/v1\nMiniMax-M2.7-highspeed\nprovider-secret-from-prompt\n"
-            .to_vec(),
+        b"\nhttps://api.deepseek.com\ndeepseek-v4-flash\nprovider-secret-from-prompt\n".to_vec(),
     );
     let mut stdout = Vec::new();
 
@@ -795,8 +794,7 @@ fn interactive_config_wizard_creates_config_instead_of_printing_usage_only() {
     let _llmup_home = EnvGuard::set("LLMUP_HOME", &llmup_home);
 
     let mut stdin = Cursor::new(
-        b"\nhttps://api.minimaxi.com/v1\nMiniMax-M2.7-highspeed\nprovider-secret-from-prompt\n"
-            .to_vec(),
+        b"\nhttps://api.deepseek.com\ndeepseek-v4-flash\nprovider-secret-from-prompt\n".to_vec(),
     );
     let mut stdout = Vec::new();
 
@@ -812,9 +810,9 @@ fn interactive_config_wizard_creates_config_instead_of_printing_usage_only() {
 
     let config_yaml =
         fs::read_to_string(llmup_home.join("config.yaml")).expect("read generated config");
-    assert!(config_yaml.contains("api_root: https://api.minimaxi.com/v1"));
+    assert!(config_yaml.contains("api_root: https://api.deepseek.com"));
     assert!(config_yaml.contains("format: openai-chat-completions"));
-    assert!(config_yaml.contains("main: main:MiniMax-M2.7-highspeed"));
+    assert!(config_yaml.contains("main: main:deepseek-v4-flash"));
     assert!(!config_yaml.contains("DEFAULT"));
     assert!(!config_yaml.contains("default:"));
     assert!(!config_yaml.contains("provider-secret-from-prompt"));
@@ -938,8 +936,8 @@ fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
             codex_home: temp.path().join(".llmup-codex"),
             claude_config_dir: temp.path().join(".llmup-claude"),
             interface: ProviderInterface::OpenAiChatCompletions,
-            model_service_url: "https://api.minimaxi.com/v1".to_string(),
-            model_name: "MiniMax-M2.7-highspeed".to_string(),
+            model_service_url: "https://api.deepseek.com".to_string(),
+            model_name: "deepseek-v4-flash".to_string(),
             model_alias: "main".to_string(),
             force: false,
         },
@@ -964,11 +962,11 @@ fn existing_config_offers_keep_reconfigure_doctor_and_redacted_summary() {
         llmup_home.join("secrets.env").display()
     )));
     assert!(output.contains("Local models:"));
-    assert!(output.contains("main -> main:MiniMax-M2.7-highspeed"));
+    assert!(output.contains("main -> main:deepseek-v4-flash"));
     assert!(output.contains("Model services:"));
     assert!(output.contains("main"));
     assert!(output.contains("openai-chat-completions"));
-    assert!(output.contains("https://api.minimaxi.com/v1"));
+    assert!(output.contains("https://api.deepseek.com"));
     assert!(output.contains("Provider API keys: all configured"));
     assert!(output.contains("Press Enter to finish"));
     assert!(output.contains("add-model"));

@@ -318,7 +318,7 @@ fn run_interactive(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<(), S
     let model_name = prompt_required_line(
         stdin,
         stdout,
-        "Model name, for example MiniMax-M2.7-highspeed: ",
+        "Model name, for example deepseek-v4-flash: ",
         "model name",
     )?;
     let api_key = prompt_required_line(
@@ -429,7 +429,7 @@ fn prompt_add_new_service(
     let model_name = prompt_required_line(
         stdin,
         stdout,
-        "Provider model name, for example MiniMax-M2.7-highspeed: ",
+        "Provider model name, for example deepseek-v4-flash: ",
         "provider model name",
     )?;
     let model_alias = prompt_required_line(
@@ -464,7 +464,7 @@ fn prompt_add_alias_for_existing_service(
     let model_name = prompt_required_line(
         stdin,
         stdout,
-        "Provider model name, for example MiniMax-M2.7-highspeed: ",
+        "Provider model name, for example deepseek-v4-flash: ",
         "provider model name",
     )?;
     let model_alias = prompt_required_line(

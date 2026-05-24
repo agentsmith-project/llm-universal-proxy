@@ -16,7 +16,7 @@ ENDPOINT_MATRIX_SCRIPT = REPO_ROOT / "scripts" / "real_endpoint_matrix.py"
 REQUIRED_REAL_PROVIDER_ENVS = {
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
-    "MINIMAX_API_KEY",
+    "DEEPSEEK_API_KEY",
 }
 REQUIRED_COMPAT_PROVIDER_CONFIG = {
     "COMPAT_OPENAI_BASE_URL",
@@ -86,6 +86,27 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             args = module.parse_args(["--mode", "real-provider-smoke"])
 
         self.assertEqual(args.anthropic_model, "claude-sonnet-4-6")
+
+    def test_deepseek_default_model_tracks_current_openai_compatible_id(self):
+        module = load_endpoint_matrix_module()
+
+        self.assertEqual(module.REAL_DEEPSEEK_DEFAULT_MODEL, "deepseek-v4-flash")
+
+        cases = module.build_real_provider_matrix_cases()
+        deepseek_defaults = {
+            case.default_model for case in cases if case.provider == "deepseek"
+        }
+        self.assertEqual(deepseek_defaults, {"deepseek-v4-flash"})
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DEEPSEEK_UPSTREAM_BASE_URL", None)
+            os.environ.pop("DEEPSEEK_BASE_URL", None)
+            os.environ.pop("DEEPSEEK_UPSTREAM_MODEL", None)
+            os.environ.pop("DEEPSEEK_MODEL", None)
+            args = module.parse_args(["--mode", "real-provider-smoke"])
+
+        self.assertEqual(args.deepseek_base_url, "https://api.deepseek.com")
+        self.assertEqual(args.deepseek_model, "deepseek-v4-flash")
 
     def test_mock_tool_request_detection_ignores_removed_native_gemini_schema(self):
         module = load_endpoint_matrix_module()
@@ -236,13 +257,13 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             for case in module.build_mock_matrix_cases()
             if case.case_id == "openai_chat_stream"
         )
-        minimax_stream = next(
+        deepseek_stream = next(
             case
             for case in module.build_real_provider_matrix_cases()
-            if case.case_id == "minimax_openai_chat_stream"
+            if case.case_id == "deepseek_openai_chat_stream"
         )
         self.assertIn("[DONE]", mock_stream.expected_markers)
-        self.assertIn("[DONE]", minimax_stream.expected_markers)
+        self.assertIn("[DONE]", deepseek_stream.expected_markers)
 
     def test_real_provider_matrix_cases_remain_optional_extended_evidence(self):
         module = load_endpoint_matrix_module()
@@ -251,7 +272,7 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
         self.assertGreaterEqual(len(cases), 12)
         self.assertEqual(
             {case.provider for case in cases if case.required},
-            {"openai", "anthropic", "minimax"},
+            {"openai", "anthropic", "deepseek"},
         )
         self.assertEqual(
             {case.provider_key_env for case in cases if case.required},
@@ -267,10 +288,10 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             ("anthropic", "messages", "stream", "messages_stream"),
             ("anthropic", "messages", "tool", "client_tool"),
             ("anthropic", "messages", "fail_closed", "high_risk_state"),
-            ("minimax", "openai_chat", "unary", "chat_unary"),
-            ("minimax", "openai_chat", "stream", "chat_stream"),
-            ("minimax", "openai_chat", "tool", "chat_tool"),
-            ("minimax", "openai_chat", "fail_closed", "unsupported_lifecycle_state"),
+            ("deepseek", "openai_chat", "unary", "chat_unary"),
+            ("deepseek", "openai_chat", "stream", "chat_stream"),
+            ("deepseek", "openai_chat", "tool", "chat_tool"),
+            ("deepseek", "openai_chat", "fail_closed", "unsupported_lifecycle_state"),
         }
         actual = {
             (case.provider, case.surface, case.mode, case.feature)
@@ -381,10 +402,10 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
         args = types.SimpleNamespace(
             openai_base_url="https://openai.example/v1",
             anthropic_base_url="https://anthropic.example/v1",
-            minimax_base_url="https://minimax.example/v1",
+            deepseek_base_url="https://api.deepseek.com",
             openai_model="gpt-contract",
             anthropic_model="claude-contract",
-            minimax_model="minimax-contract",
+            deepseek_model="deepseek-v4-flash",
         )
 
         with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
@@ -478,7 +499,7 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             set(report["real_surfaces"]),
             {"openai_chat_completions", "anthropic_messages"},
         )
-        self.assertNotIn("MINIMAX_API_KEY", completed.stderr + report_text)
+        self.assertNotIn("DEEPSEEK_API_KEY", completed.stderr + report_text)
         self.assertNotIn("GEMINI_API_KEY", completed.stderr + report_text)
         for result in report["results"]:
             with self.subTest(case=result["case_id"]):

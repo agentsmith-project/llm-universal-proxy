@@ -26,7 +26,7 @@ PERF_DEFAULT_TOTAL_MS = 15_000.0
 REAL_PROVIDER_REQUIRED_ENVS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
-    "MINIMAX_API_KEY",
+    "DEEPSEEK_API_KEY",
 )
 REAL_PROVIDER_GATE = "real-provider-smoke"
 COMPATIBLE_PROVIDER_GATE = "compatible-provider-smoke"
@@ -46,7 +46,7 @@ COMPAT_ANTHROPIC_BASE_URL_ENV = "COMPAT_ANTHROPIC_BASE_URL"
 COMPAT_ANTHROPIC_MODEL_ENV = "COMPAT_ANTHROPIC_MODEL"
 REAL_OPENAI_DEFAULT_MODEL = "gpt-5-mini"
 REAL_ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6"
-REAL_MINIMAX_DEFAULT_MODEL = "MiniMax-M2.7"
+REAL_DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 SECRET_REDACTION_PLACEHOLDER_PREFIX = "[REDACTED:"
 MIN_SECRET_REDACTION_LENGTH = 4
 AUTH_MODE_ENV = "LLM_UNIVERSAL_PROXY_AUTH_MODE"
@@ -467,7 +467,7 @@ def build_real_provider_matrix_cases(
     *,
     openai_model: str = REAL_OPENAI_DEFAULT_MODEL,
     anthropic_model: str = REAL_ANTHROPIC_DEFAULT_MODEL,
-    minimax_model: str = REAL_MINIMAX_DEFAULT_MODEL,
+    deepseek_model: str = REAL_DEEPSEEK_DEFAULT_MODEL,
 ) -> list[RealProviderMatrixCase]:
     cases: list[RealProviderMatrixCase] = []
 
@@ -627,59 +627,59 @@ def build_real_provider_matrix_cases(
 
 
     add(
-        "minimax_openai_chat_unary",
-        "minimax",
+        "deepseek_openai_chat_unary",
+        "deepseek",
         "openai_chat",
         "unary",
         "chat_unary",
-        "MINIMAX_API_KEY",
-        minimax_model,
-        "real-minimax-chat",
+        "DEEPSEEK_API_KEY",
+        deepseek_model,
+        "real-deepseek-chat",
         "openai-chat-completions",
         "/openai/v1/chat/completions",
-        _openai_chat_payload("real-minimax-chat"),
+        _openai_chat_payload("real-deepseek-chat"),
     )
     add(
-        "minimax_openai_chat_stream",
-        "minimax",
+        "deepseek_openai_chat_stream",
+        "deepseek",
         "openai_chat",
         "stream",
         "chat_stream",
-        "MINIMAX_API_KEY",
-        minimax_model,
-        "real-minimax-chat",
+        "DEEPSEEK_API_KEY",
+        deepseek_model,
+        "real-deepseek-chat",
         "openai-chat-completions",
         "/openai/v1/chat/completions",
-        _openai_chat_payload("real-minimax-chat", stream=True),
+        _openai_chat_payload("real-deepseek-chat", stream=True),
         content_type="text/event-stream",
         markers=("data:", "[DONE]"),
     )
     add(
-        "minimax_openai_chat_tool",
-        "minimax",
+        "deepseek_openai_chat_tool",
+        "deepseek",
         "openai_chat",
         "tool",
         "chat_tool",
-        "MINIMAX_API_KEY",
-        minimax_model,
-        "real-minimax-chat",
+        "DEEPSEEK_API_KEY",
+        deepseek_model,
+        "real-deepseek-chat",
         "openai-chat-completions",
         "/openai/v1/chat/completions",
-        _openai_chat_payload("real-minimax-chat", tool=True),
+        _openai_chat_payload("real-deepseek-chat", tool=True),
         markers=("tool_calls", "get_weather"),
     )
     add(
-        "minimax_unsupported_lifecycle_state_fail_closed",
-        "minimax",
+        "deepseek_unsupported_lifecycle_state_fail_closed",
+        "deepseek",
         "openai_chat",
         "fail_closed",
         "unsupported_lifecycle_state",
-        "MINIMAX_API_KEY",
-        minimax_model,
-        "real-minimax-chat",
+        "DEEPSEEK_API_KEY",
+        deepseek_model,
+        "real-deepseek-chat",
         "openai-chat-completions",
         "/openai/v1/responses",
-        _responses_high_risk_state_payload("real-minimax-chat"),
+        _responses_high_risk_state_payload("real-deepseek-chat"),
         status=400,
         markers=("previous_response_id",),
     )
@@ -1402,15 +1402,15 @@ upstreams:
     api_root: {json.dumps(args.anthropic_base_url)}
     format: anthropic
     provider_key_env: ANTHROPIC_API_KEY
-  REAL_MINIMAX_CHAT:
-    api_root: {json.dumps(args.minimax_base_url)}
+  REAL_DEEPSEEK_CHAT:
+    api_root: {json.dumps(args.deepseek_base_url)}
     format: openai-chat-completions
-    provider_key_env: MINIMAX_API_KEY
+    provider_key_env: DEEPSEEK_API_KEY
 model_aliases:
   real-openai-chat: {json.dumps(f"REAL_OPENAI_CHAT:{args.openai_model}")}
   real-openai-responses: {json.dumps(f"REAL_OPENAI_RESPONSES:{args.openai_model}")}
   real-anthropic-messages: {json.dumps(f"REAL_ANTHROPIC:{args.anthropic_model}")}
-  real-minimax-chat: {json.dumps(f"REAL_MINIMAX_CHAT:{args.minimax_model}")}
+  real-deepseek-chat: {json.dumps(f"REAL_DEEPSEEK_CHAT:{args.deepseek_model}")}
 """
     path.write_text(config.strip() + "\n", encoding="utf-8")
 
@@ -1731,7 +1731,7 @@ def run_real_provider_smoke(args: argparse.Namespace) -> int:
     cases = build_real_provider_matrix_cases(
         openai_model=args.openai_model,
         anthropic_model=args.anthropic_model,
-        minimax_model=args.minimax_model,
+        deepseek_model=args.deepseek_model,
     )
     missing_env = sorted(
         {
@@ -1852,8 +1852,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("OPENAI_UPSTREAM_BASE_URL", "https://api.openai.com/v1"),
     )
     parser.add_argument(
-        "--minimax-base-url",
-        default=os.environ.get("MINIMAX_UPSTREAM_BASE_URL", os.environ.get("MINIMAX_BASE_URL", "https://api.minimax.io/v1")),
+        "--deepseek-base-url",
+        default=os.environ.get(
+            "DEEPSEEK_UPSTREAM_BASE_URL",
+            os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        ),
     )
     parser.add_argument(
         "--anthropic-model",
@@ -1864,8 +1867,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("OPENAI_UPSTREAM_MODEL", os.environ.get("OPENAI_MODEL", REAL_OPENAI_DEFAULT_MODEL)),
     )
     parser.add_argument(
-        "--minimax-model",
-        default=os.environ.get("MINIMAX_UPSTREAM_MODEL", os.environ.get("MINIMAX_MODEL", REAL_MINIMAX_DEFAULT_MODEL)),
+        "--deepseek-model",
+        default=os.environ.get(
+            "DEEPSEEK_UPSTREAM_MODEL",
+            os.environ.get("DEEPSEEK_MODEL", REAL_DEEPSEEK_DEFAULT_MODEL),
+        ),
     )
     args = parser.parse_args(argv)
     mode_sources = []

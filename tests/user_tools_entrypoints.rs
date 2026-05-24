@@ -516,9 +516,7 @@ fn installed_config_entrypoint_without_args_runs_interactive_setup() {
         .stdin
         .as_mut()
         .expect("interactive stdin")
-        .write_all(
-            b"\nhttps://api.minimaxi.com/v1\nMiniMax-M2.7-highspeed\nprovider-secret-from-prompt\n",
-        )
+        .write_all(b"\nhttps://api.deepseek.com\ndeepseek-v4-flash\nprovider-secret-from-prompt\n")
         .expect("write interactive answers");
     let output = child.wait_with_output().expect("wait interactive config");
     assert!(
