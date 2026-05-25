@@ -91,7 +91,7 @@ docs/
 
 | Path | Contributor entrypoint |
 | --- | --- |
-| `src/config.rs` | YAML/env config, static `data_auth`, upstream `provider_key.inline` / `provider_key.env` / `provider_key_env`, namespace/admin config payloads, aliases, validation, resource limits |
+| `src/config.rs` | YAML/env config, static `data_auth`, upstream `provider_key.inline` / `provider_key.env`, namespace/admin config payloads, aliases, validation, resource limits |
 | `src/config/model_surface.rs` | Effective model surface vocabulary: modalities, tool flags, `apply_patch_transport` |
 | `src/formats.rs` | Shared client/upstream protocol names |
 | `src/detect.rs` | Request-format detection by path and body shape |
@@ -110,7 +110,7 @@ docs/
 | `src/server/mod.rs` | Router assembly for admin, dashboard, health, data routes, namespaces, CORS, disconnect wrapping |
 | `src/server/state.rs` | Runtime namespace state, admin policy, upstream resolution bootstrap |
 | `src/server/admin.rs` | Admin token middleware, namespace config/state handlers, and `GET` / `PUT` `/admin/data-auth` CAS handlers |
-| `src/server/data_auth.rs` | Provider-route auth policy: static `data_auth`, `LLM_UNIVERSAL_PROXY_AUTH_MODE`, `LLM_UNIVERSAL_PROXY_KEY`, `provider_key.inline`, `provider_key.env`, `provider_key_env`, and admin separation |
+| `src/server/data_auth.rs` | Provider-route auth policy: static `data_auth`, `LLM_UNIVERSAL_PROXY_AUTH_MODE`, `LLM_UNIVERSAL_PROXY_KEY`, `provider_key.inline`, `provider_key.env`, and admin separation |
 | `src/server/body_limits.rs` | JSON request parsing with namespace `max_request_body_bytes` enforcement |
 | `src/server/proxy.rs` | Main request execution path for OpenAI and Anthropic protocol surfaces |
 | `src/server/responses_resources.rs` | Native OpenAI Responses and Conversations lifecycle resource handlers |

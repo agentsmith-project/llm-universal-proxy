@@ -50,22 +50,21 @@ the global mode is `proxy_key`. Supported provider credential sources are:
 
 - `provider_key: { inline: "..." }`: inline provider key value.
 - `provider_key: { env: "ENV" }`: structured environment variable source.
-- `provider_key_env: ENV`: legacy environment variable source kept for
-  compatibility.
 
-`provider_key_env` is a per-upstream environment variable name. It is not the
-provider key itself.
-`provider_key.inline`, `provider_key.env`, and `provider_key_env` are mutually exclusive
-on one upstream. Inline and env source values must be non-empty. In `proxy_key`
-mode, every upstream that can receive traffic must have one provider credential
-source, and env sources must resolve in the proxy process environment.
+The pre-GA `provider_key_env: ENV` field has been removed. Static YAML and
+Admin runtime payloads that still include it are rejected with a migration hint;
+use `provider_key: { env: ENV }` instead.
+
+`provider_key.inline` and `provider_key.env` are mutually exclusive on one
+upstream. Inline and env source values must be non-empty. In `proxy_key` mode,
+every upstream that can receive traffic must have one provider credential source,
+and env sources must resolve in the proxy process environment.
 Admin read views never return inline secret values.
 
-In `client_provider_key` mode, `provider_key_env` is not required and provider
-credential sources are normally omitted. `provider_key.inline` is rejected
-because it would embed a server-held provider key that the mode will never use.
-`provider_key.env` and the legacy `provider_key_env` are not rejected for config
-compatibility, but they are not used for request auth in this mode.
+In `client_provider_key` mode, provider credential sources are normally omitted.
+`provider_key.inline` is rejected because it would embed a server-held provider
+key that the mode will never use. `provider_key.env` is accepted but is not used
+for request auth in this mode.
 
 ### Static YAML Auth Examples
 
@@ -104,8 +103,8 @@ upstreams:
   PROXY-KEY-ANTHROPIC-COMPATIBLE:
     api_root: https://anthropic-compatible.example/v1
     format: anthropic-messages
-    # Legacy env source remains supported for compatibility.
-    provider_key_env: ANTHROPIC_COMPATIBLE_API_KEY
+    provider_key:
+      env: ANTHROPIC_COMPATIBLE_API_KEY
 
 model_aliases:
   coding-openai: "PROXY-KEY-OPENAI-COMPATIBLE:provider-openai-model"
@@ -135,7 +134,7 @@ model_aliases:
   inline-demo: "INLINE-DEMO:provider-model-id"
 ```
 
-In `client_provider_key` mode, clients send the real provider key through their normal SDK API key or bearer-token path. The proxy does not need server-side provider key env vars for these upstream calls, so static YAML normally leaves `provider_key_env` out.
+In `client_provider_key` mode, clients send the real provider key through their normal SDK API key or bearer-token path. The proxy does not need server-side provider key env vars for these upstream calls, so static YAML normally leaves `provider_key` out.
 
 Static YAML:
 
@@ -150,7 +149,7 @@ upstreams:
   CLIENT-KEY-OPENAI-COMPATIBLE:
     api_root: https://openai-compatible.example/v1
     format: openai-chat-completions
-    # provider_key / provider_key_env are normally omitted.
+    # provider_key is normally omitted.
 
   CLIENT-KEY-ANTHROPIC-COMPATIBLE:
     api_root: https://anthropic-compatible.example/v1
@@ -234,18 +233,17 @@ Each upstream usually needs:
 - `api_root`: the provider API root, including its version segment
 - `format`: the expected upstream protocol when you want to pin it
 - a provider credential source in `proxy_key` mode, usually `provider_key.env`
-  or the legacy `provider_key_env`
 
 Practical rules:
 
 - `api_root` should point at the provider API root, not a model-specific path
 - include the version segment such as `/v1` or `/v1beta`
 - `upstream_headers` may add non-secret routing or tenant headers, but cannot override auth/secret headers such as `authorization`, `proxy-authorization`, `x-api-key`, `api-key`, `openai-api-key`, or `anthropic-api-key`
-- use exactly one of `provider_key.inline`, `provider_key.env`, or
-  `provider_key_env` when the global mode is `proxy_key`
+- use exactly one of `provider_key.inline` or `provider_key.env` when the
+  global mode is `proxy_key`
 - normally omit provider credential sources when the global mode is
-  `client_provider_key`; `provider_key.env` and `provider_key_env` are accepted
-  but ignored, while `provider_key.inline` is rejected
+  `client_provider_key`; `provider_key.env` is accepted but ignored, while
+  `provider_key.inline` is rejected
 
 Provider-specific static headers belong inside the upstream's `headers` field.
 

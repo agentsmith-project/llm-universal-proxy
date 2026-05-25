@@ -395,8 +395,8 @@ class GaDocsContractTests(unittest.TestCase):
         for snippet in (
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
-            "provider_key_env: OPENAI_COMPATIBLE_API_KEY",
-            "provider_key_env: ANTHROPIC_COMPATIBLE_API_KEY",
+            "env: OPENAI_COMPATIBLE_API_KEY",
+            "env: ANTHROPIC_COMPATIBLE_API_KEY",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, container_config)
@@ -493,7 +493,8 @@ class GaDocsContractTests(unittest.TestCase):
             "`Authorization: Bearer <proxy-key>`",
             "`LLM_UNIVERSAL_PROXY_ADMIN_TOKEN`",
             "`Authorization: Bearer <admin-token>`",
-            "`provider_key_env`",
+            "`provider_key.env`",
+            "`provider_key_env` field is rejected",
             "fail closed",
         ):
             with self.subTest(snippet=snippet):
@@ -509,7 +510,6 @@ class GaDocsContractTests(unittest.TestCase):
             "`client_provider_key`",
             "`proxy_key`",
             "`LLM_UNIVERSAL_PROXY_KEY`",
-            "`provider_key_env`",
             "`data_auth`",
             "`provider_key.env`",
             "`provider_key.inline`",
@@ -551,8 +551,8 @@ class GaDocsContractTests(unittest.TestCase):
 
         for snippet in (
             "`client_provider_key` mode",
-            "`provider_key_env`",
-            "provider_key_env: GEMINI_API_KEY",
+            "`provider_key.env`",
+            "env: GEMINI_API_KEY",
             "The provider key belongs to the proxy",
         ):
             with self.subTest(snippet=snippet):
@@ -606,18 +606,20 @@ class GaDocsContractTests(unittest.TestCase):
         expectations = {
             "docs/advanced-usage.md": (
                 "`data_auth.proxy_key` protects the local proxy",
-                "`provider_key.inline`, `provider_key.env`, or `provider_key_env`",
+                "`provider_key.inline` or `provider_key.env`",
                 "`client_provider_key` mode",
             ),
             "docs/configuration.md": (
                 "The preferred static configuration is the top-level `data_auth` object",
                 "environment fallback",
-                "`provider_key.inline`, `provider_key.env`, and `provider_key_env`",
+                "`provider_key.inline` and `provider_key.env`",
+                "`provider_key_env: ENV` field has been removed",
             ),
             "docs/CONSTITUTION.md": (
                 "Prefer static `data_auth`",
                 "compatibility environment fallback",
-                "`provider_key.inline`, `provider_key.env`, or legacy `provider_key_env`",
+                "`provider_key.inline` or `provider_key.env`",
+                "`provider_key_env` field is rejected",
             ),
         }
         for relative_path, snippets in expectations.items():
@@ -647,13 +649,13 @@ class GaDocsContractTests(unittest.TestCase):
             "`proxy_key.env`",
             "`provider_key.inline`",
             "`provider_key.env`",
-            "`provider_key_env` is a per-upstream environment variable name",
-            "`provider_key.inline`, `provider_key.env`, and `provider_key_env` are mutually exclusive",
+            "The pre-GA `provider_key_env: ENV` field has been removed",
+            "`provider_key.inline` and `provider_key.env` are mutually exclusive",
             "Inline and env source values must be non-empty",
             "Admin read views never return inline secret values",
-            "`provider_key_env` is not required",
+            "provider credential sources are normally omitted",
             "normally omitted",
-            "not rejected",
+            "accepted",
             "not used",
         ):
             with self.subTest(snippet=snippet):
@@ -663,16 +665,17 @@ class GaDocsContractTests(unittest.TestCase):
             "That one state applies to all provider/model/resource routes.",
             "That path is the environment fallback.",
             "In this mode, `provider_key_env` is not required, is normally omitted, and `provider_key.env` or `provider_key_env` are not rejected if present, but are not used.",
+            "`provider_key_env` is a per-upstream environment variable name",
         ):
             with self.subTest(repeated_sentence=repeated_sentence):
                 self.assertNotIn(repeated_sentence, security)
 
         normalized_security = normalized_whitespace(security)
         for repeated_snippet in (
-            "`provider_key.inline`, `provider_key.env`, and `provider_key_env` are mutually exclusive",
+            "`provider_key.inline` and `provider_key.env` are mutually exclusive",
             "Inline and env source values must be non-empty.",
             "Admin read views never return inline secret values.",
-            "`provider_key_env` is not required",
+            "provider credential sources are normally omitted",
         ):
             with self.subTest(repeated_snippet=repeated_snippet):
                 self.assertEqual(normalized_security.count(repeated_snippet), 1)
@@ -685,13 +688,13 @@ class GaDocsContractTests(unittest.TestCase):
                 and "mode: proxy_key" in block
                 and "provider_key:" in block
                 and "env: OPENAI_COMPATIBLE_API_KEY" in block
-                and "provider_key_env: ANTHROPIC_COMPATIBLE_API_KEY" in block
+                and "env: ANTHROPIC_COMPATIBLE_API_KEY" in block
             ),
             None,
         )
         self.assertIsNotNone(
             proxy_key_block,
-            "proxy_key static YAML example must show data_auth plus structured and legacy provider key sources",
+            "proxy_key static YAML example must show data_auth plus structured provider key sources",
         )
         self.assertIn("#", proxy_key_block)
         self.assertIn("format: openai-chat-completions", proxy_key_block)
@@ -774,11 +777,9 @@ class GaDocsContractTests(unittest.TestCase):
             "provider credential source",
             "`provider_key.inline`",
             "`provider_key.env`",
-            "`provider_key_env`",
             "`client_provider_key` mode",
-            "does not require `provider_key_env`",
-            "normally omitted",
-            "not rejected",
+            "payload normally omits `provider_key`",
+            "accepted",
             "not used",
         ):
             with self.subTest(section="write", snippet=snippet):
@@ -787,8 +788,9 @@ class GaDocsContractTests(unittest.TestCase):
         for snippet in (
             "`PRESET_*` URL/model placeholders",
             "already-hydrated concrete URL/model values",
-            "`provider_key_env` remains an environment variable name",
+            "`provider_key.env` remains an environment variable name",
             "`PRESET_ENDPOINT_API_KEY` is valid",
+            "`provider_key_env` field is removed and",
             "`llm-universal-proxy --config <config.yaml>`",
             "`--admin-bootstrap` starts with no namespaces",
             "`/ready` stays unavailable",
@@ -802,7 +804,8 @@ class GaDocsContractTests(unittest.TestCase):
         for snippet in (
             "- name: PRESET-OPENAI-COMPATIBLE",
             "fixed_upstream_format: openai-chat-completions",
-            "provider_key_env: PRESET_ENDPOINT_API_KEY",
+            "provider_key:",
+            "env: PRESET_ENDPOINT_API_KEY",
             "upstream_name: PRESET-OPENAI-COMPATIBLE",
             "upstream_model: provider-model-id",
         ):
@@ -822,7 +825,8 @@ class GaDocsContractTests(unittest.TestCase):
             '"upstreams": [',
             '"name": "PRESET-OPENAI-COMPATIBLE"',
             '"fixed_upstream_format": "openai-chat-completions"',
-            '"provider_key_env": "PRESET_ENDPOINT_API_KEY"',
+            '"provider_key": {',
+            '"env": "PRESET_ENDPOINT_API_KEY"',
             '"upstream_name": "PRESET-OPENAI-COMPATIBLE"',
             '"upstream_model": "provider-model-id"',
         ):
@@ -840,7 +844,7 @@ class GaDocsContractTests(unittest.TestCase):
             "`/admin/data-auth`",
             "not in namespace payload",
             "`provider_key` object",
-            "`provider_key_env` legacy field",
+            "`provider_key_env` is rejected with a migration hint",
         ):
             with self.subTest(section="mapping", snippet=snippet):
                 self.assertIn(snippet, mapping)
@@ -868,7 +872,7 @@ class GaDocsContractTests(unittest.TestCase):
             "inline upstream credentials",
             "inline `data_auth.proxy_key` values",
             "`provider_key` view reports `source`, `configured`, `redacted`, and `env_name` when applicable",
-            "provider_key_env presence",
+            "whether a provider key is configured",
         ):
             with self.subTest(section="redaction", snippet=snippet):
                 self.assertIn(snippet, redaction)

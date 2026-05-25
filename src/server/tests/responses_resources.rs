@@ -311,7 +311,6 @@ async fn responses_resource_redaction_state(api_root: &str) -> Arc<AppState> {
             "responses",
             api_root,
             crate::formats::UpstreamFormat::OpenAiResponses,
-            None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(PROVIDER_INLINE_REDACTION_SECRET.to_string()),
                 env: None,
@@ -384,7 +383,6 @@ async fn responses_resource_redaction_state_with(
             "responses",
             api_root,
             crate::formats::UpstreamFormat::OpenAiResponses,
-            None,
             provider_secret.map(|secret| crate::config::SecretSourceConfig {
                 inline: Some(secret.to_string()),
                 env: None,
@@ -1108,7 +1106,6 @@ async fn openai_responses_resource_uses_request_snapshot_after_auth_runtime_race
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiResponses,
             None,
-            None,
         )],
         data_auth::DataAccess::ClientProviderKey,
     )
@@ -1129,7 +1126,6 @@ async fn openai_responses_resource_uses_request_snapshot_after_auth_runtime_race
             "primary",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiResponses,
-            None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(new_server_key.to_string()),
                 env: None,
@@ -1721,7 +1717,6 @@ async fn handle_openai_responses_resource_public_metadata_errors_redact_active_c
             &upstream_name,
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiResponses,
-            None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(provider_secret.to_string()),
                 env: None,

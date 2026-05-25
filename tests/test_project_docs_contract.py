@@ -27,7 +27,6 @@ class ProjectDocsContractTests(unittest.TestCase):
                 "`src/server/web_dashboard/index.html`",
                 "`LLM_UNIVERSAL_PROXY_AUTH_MODE`",
                 "`LLM_UNIVERSAL_PROXY_KEY`",
-                "`provider_key_env`",
                 "`provider_key.inline`",
                 "`provider_key.env`",
                 "`data_auth`",

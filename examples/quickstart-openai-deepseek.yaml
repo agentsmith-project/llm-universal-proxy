@@ -13,7 +13,8 @@ upstreams:
   OPENAI_RESPONSES_EXAMPLE:
     api_root: https://api.openai.com/v1
     format: openai-responses
-    provider_key_env: OPENAI_API_KEY
+    provider_key:
+      env: OPENAI_API_KEY
     surface_defaults:
       modalities:
         input: ["text"]
@@ -27,7 +28,8 @@ upstreams:
   DEEPSEEK_OPENAI_COMPATIBLE_EXAMPLE:
     api_root: https://api.deepseek.com
     format: openai-chat-completions
-    provider_key_env: DEEPSEEK_API_KEY
+    provider_key:
+      env: DEEPSEEK_API_KEY
     surface_defaults:
       modalities:
         input: ["text"]

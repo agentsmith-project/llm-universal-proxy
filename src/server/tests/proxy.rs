@@ -735,7 +735,6 @@ fn snapshot_race_config(
             "primary",
             api_root,
             upstream_format,
-            None,
             provider_key.map(|key| crate::config::SecretSourceConfig {
                 inline: Some(key.to_string()),
                 env: None,
@@ -817,7 +816,6 @@ async fn app_state_with_all_provider_redaction_sources(
                 "inline",
                 api_root,
                 upstream_format,
-                None,
                 Some(crate::config::SecretSourceConfig {
                     inline: Some(PROVIDER_INLINE_REDACTION_SECRET.to_string()),
                     env: None,
@@ -827,18 +825,19 @@ async fn app_state_with_all_provider_redaction_sources(
                 "env",
                 api_root,
                 upstream_format,
-                None,
                 Some(crate::config::SecretSourceConfig {
                     inline: None,
                     env: Some(PROVIDER_ENV_REDACTION_ENV.to_string()),
                 }),
             ),
             redaction_upstream_config(
-                "legacy",
+                "structured-env",
                 api_root,
                 upstream_format,
-                Some(PROVIDER_LEGACY_REDACTION_ENV),
-                None,
+                Some(crate::config::SecretSourceConfig {
+                    inline: None,
+                    env: Some(PROVIDER_STRUCTURED_ENV_REDACTION_ENV.to_string()),
+                }),
             ),
         ],
         data_access,
@@ -867,7 +866,7 @@ fn data_access_from_default_env_proxy_key() -> data_auth::DataAccess {
 
 fn upstream_error_body_with_secrets(proxy_secret: &str, extra_secret: Option<&str>) -> String {
     let mut message = format!(
-        "upstream denied provider inline {PROVIDER_INLINE_REDACTION_SECRET}, provider env {PROVIDER_ENV_REDACTION_SECRET}, legacy provider {PROVIDER_LEGACY_REDACTION_SECRET}, proxy key {proxy_secret}"
+        "upstream denied provider inline {PROVIDER_INLINE_REDACTION_SECRET}, provider env {PROVIDER_ENV_REDACTION_SECRET}, structured provider env {PROVIDER_STRUCTURED_ENV_REDACTION_SECRET}, proxy key {proxy_secret}"
     );
     if let Some(extra_secret) = extra_secret {
         message.push_str(&format!(", request key {extra_secret}"));
@@ -898,7 +897,6 @@ async fn stale_client_provider_key_context_does_not_use_new_proxy_server_key() {
             "primary",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             None,
         )],
         data_auth::DataAccess::ClientProviderKey,
@@ -978,7 +976,6 @@ async fn stale_proxy_key_context_does_not_drop_or_replace_old_server_key() {
             "primary",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(old_server_key.to_string()),
                 env: None,
@@ -1053,7 +1050,6 @@ async fn redactor_uses_same_snapshot_as_outbound_runtime_after_auth_race() {
             "primary",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(old_server_key.to_string()),
                 env: None,
@@ -1251,9 +1247,9 @@ async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_fro
     let _env_guard = SECRET_REDACTION_ENV_LOCK.lock().await;
     let _provider_env =
         ScopedEnvVar::set(PROVIDER_ENV_REDACTION_ENV, PROVIDER_ENV_REDACTION_SECRET);
-    let _provider_legacy_env = ScopedEnvVar::set(
-        PROVIDER_LEGACY_REDACTION_ENV,
-        PROVIDER_LEGACY_REDACTION_SECRET,
+    let _provider_structured_env = ScopedEnvVar::set(
+        PROVIDER_STRUCTURED_ENV_REDACTION_ENV,
+        PROVIDER_STRUCTURED_ENV_REDACTION_SECRET,
     );
     let _proxy_env = ScopedEnvVar::set(PROXY_ENV_REDACTION_ENV, PROXY_ENV_REDACTION_SECRET);
     let _auth_mode = ScopedEnvVar::set(data_auth::AUTH_MODE_ENV, "proxy_key");
@@ -1312,7 +1308,7 @@ async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_fro
         let secrets = [
             PROVIDER_INLINE_REDACTION_SECRET,
             PROVIDER_ENV_REDACTION_SECRET,
-            PROVIDER_LEGACY_REDACTION_SECRET,
+            PROVIDER_STRUCTURED_ENV_REDACTION_SECRET,
             proxy_secret,
         ];
         assert_no_secret_leak(&body_text, &secrets, label);
@@ -1335,9 +1331,9 @@ async fn streaming_upstream_error_redacts_runtime_secrets_from_sse_and_logs() {
     let _env_guard = SECRET_REDACTION_ENV_LOCK.lock().await;
     let _provider_env =
         ScopedEnvVar::set(PROVIDER_ENV_REDACTION_ENV, PROVIDER_ENV_REDACTION_SECRET);
-    let _provider_legacy_env = ScopedEnvVar::set(
-        PROVIDER_LEGACY_REDACTION_ENV,
-        PROVIDER_LEGACY_REDACTION_SECRET,
+    let _provider_structured_env = ScopedEnvVar::set(
+        PROVIDER_STRUCTURED_ENV_REDACTION_ENV,
+        PROVIDER_STRUCTURED_ENV_REDACTION_SECRET,
     );
     let proxy_secret = PROXY_INLINE_REDACTION_SECRET;
     let upstream_body = upstream_error_body_with_secrets(proxy_secret, None);
@@ -1373,7 +1369,7 @@ async fn streaming_upstream_error_redacts_runtime_secrets_from_sse_and_logs() {
     let secrets = [
         PROVIDER_INLINE_REDACTION_SECRET,
         PROVIDER_ENV_REDACTION_SECRET,
-        PROVIDER_LEGACY_REDACTION_SECRET,
+        PROVIDER_STRUCTURED_ENV_REDACTION_SECRET,
         proxy_secret,
     ];
     assert!(body_text.contains("response.failed"), "body = {body_text}");
@@ -1405,7 +1401,6 @@ async fn client_provider_key_upstream_error_redaction_is_request_scoped_and_not_
             "client",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             None,
         )],
         data_auth::DataAccess::ClientProviderKey,
@@ -1484,7 +1479,6 @@ async fn non_stream_success_redacts_known_credentials_from_response_and_debug_tr
             "primary",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(server_provider_secret.to_string()),
                 env: None,
@@ -1550,7 +1544,6 @@ async fn non_stream_success_redacts_known_credentials_from_response_and_debug_tr
             "client",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             None,
         )],
         data_auth::DataAccess::ClientProviderKey,
@@ -1619,7 +1612,6 @@ async fn streaming_success_redacts_known_credentials_from_sse_response() {
             "primary",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(server_provider_secret.to_string()),
                 env: None,
@@ -1679,7 +1671,6 @@ async fn streaming_success_redacts_known_credentials_from_sse_response() {
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
             None,
-            None,
         )],
         data_auth::DataAccess::ClientProviderKey,
     )
@@ -1738,7 +1729,6 @@ async fn request_metadata_redacts_client_provider_key_in_hook_debug_logs_and_met
             "client",
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             None,
         )],
         data_auth::DataAccess::ClientProviderKey,
@@ -3692,7 +3682,6 @@ async fn request_metadata_redacts_proxy_and_provider_keys_in_hook_debug_logs_and
             &upstream_name,
             &mock_base,
             crate::formats::UpstreamFormat::OpenAiChatCompletions,
-            None,
             Some(crate::config::SecretSourceConfig {
                 inline: Some(provider_secret.to_string()),
                 env: None,
@@ -3779,7 +3768,6 @@ async fn request_metadata_redacts_proxy_and_provider_keys_from_public_model_erro
                 &left_upstream,
                 "http://127.0.0.1:9/v1",
                 crate::formats::UpstreamFormat::OpenAiChatCompletions,
-                None,
                 Some(crate::config::SecretSourceConfig {
                     inline: Some(provider_secret.to_string()),
                     env: None,
@@ -3789,7 +3777,6 @@ async fn request_metadata_redacts_proxy_and_provider_keys_from_public_model_erro
                 "right",
                 "http://127.0.0.1:9/v1",
                 crate::formats::UpstreamFormat::OpenAiChatCompletions,
-                None,
                 Some(crate::config::SecretSourceConfig {
                     inline: Some("right-provider-key".to_string()),
                     env: None,

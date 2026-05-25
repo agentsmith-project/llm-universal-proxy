@@ -8,7 +8,7 @@
 # - PRESET_ENDPOINT_API_KEY: provider credential kept on the proxy side
 #
 # Proxy auth is separate from provider auth. In proxy_key mode, clients use
-# LLM_UNIVERSAL_PROXY_KEY, while provider_key_env below names the env var that
+# LLM_UNIVERSAL_PROXY_KEY, while provider_key.env below names the env var that
 # contains the real upstream provider key.
 #
 # For direct `llm-universal-proxy --config` use, replace the PRESET_* placeholders
@@ -23,7 +23,8 @@ upstreams:
     api_root: PRESET_ANTHROPIC_ENDPOINT_BASE_URL
     format: anthropic
     # Env var name, not the secret value.
-    provider_key_env: PRESET_ENDPOINT_API_KEY
+    provider_key:
+      env: PRESET_ENDPOINT_API_KEY
     limits:
       context_window: 200000
       max_output_tokens: 128000
@@ -41,7 +42,8 @@ upstreams:
     api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
     format: openai-chat-completions
     # Env var name, not the secret value.
-    provider_key_env: PRESET_ENDPOINT_API_KEY
+    provider_key:
+      env: PRESET_ENDPOINT_API_KEY
     limits:
       context_window: 200000
       max_output_tokens: 128000

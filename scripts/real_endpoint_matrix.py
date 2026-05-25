@@ -1053,15 +1053,18 @@ upstreams:
   MOCK_OPENAI_CHAT:
     api_root: {json.dumps(mock_base_url + "/v1")}
     format: openai-chat-completions
-    provider_key_env: {MOCK_PROVIDER_KEY_ENV}
+    provider_key:
+      env: {MOCK_PROVIDER_KEY_ENV}
   MOCK_OPENAI_RESPONSES:
     api_root: {json.dumps(mock_base_url + "/v1")}
     format: openai-responses
-    provider_key_env: {MOCK_PROVIDER_KEY_ENV}
+    provider_key:
+      env: {MOCK_PROVIDER_KEY_ENV}
   MOCK_ANTHROPIC:
     api_root: {json.dumps(mock_base_url + "/v1")}
     format: anthropic
-    provider_key_env: {MOCK_PROVIDER_KEY_ENV}
+    provider_key:
+      env: {MOCK_PROVIDER_KEY_ENV}
 model_aliases:
   mock-openai-chat: "MOCK_OPENAI_CHAT:gpt-mock"
   mock-openai-responses: "MOCK_OPENAI_RESPONSES:gpt-mock"
@@ -1373,11 +1376,13 @@ upstreams:
   COMPAT_OPENAI_CHAT:
     api_root: {json.dumps(config.openai_base_url)}
     format: openai-chat-completions
-    provider_key_env: {config.openai_provider_key_env}
+    provider_key:
+      env: {config.openai_provider_key_env}
   COMPAT_ANTHROPIC:
     api_root: {json.dumps(config.anthropic_base_url)}
     format: anthropic
-    provider_key_env: {config.anthropic_provider_key_env}
+    provider_key:
+      env: {config.anthropic_provider_key_env}
 model_aliases:
   compat-openai-chat: {json.dumps(f"COMPAT_OPENAI_CHAT:{config.openai_model}")}
   compat-anthropic-messages: {json.dumps(f"COMPAT_ANTHROPIC:{config.anthropic_model}")}
@@ -1393,19 +1398,23 @@ upstreams:
   REAL_OPENAI_CHAT:
     api_root: {json.dumps(args.openai_base_url)}
     format: openai-chat-completions
-    provider_key_env: OPENAI_API_KEY
+    provider_key:
+      env: OPENAI_API_KEY
   REAL_OPENAI_RESPONSES:
     api_root: {json.dumps(args.openai_base_url)}
     format: openai-responses
-    provider_key_env: OPENAI_API_KEY
+    provider_key:
+      env: OPENAI_API_KEY
   REAL_ANTHROPIC:
     api_root: {json.dumps(args.anthropic_base_url)}
     format: anthropic
-    provider_key_env: ANTHROPIC_API_KEY
+    provider_key:
+      env: ANTHROPIC_API_KEY
   REAL_DEEPSEEK_CHAT:
     api_root: {json.dumps(args.deepseek_base_url)}
     format: openai-chat-completions
-    provider_key_env: DEEPSEEK_API_KEY
+    provider_key:
+      env: DEEPSEEK_API_KEY
 model_aliases:
   real-openai-chat: {json.dumps(f"REAL_OPENAI_CHAT:{args.openai_model}")}
   real-openai-responses: {json.dumps(f"REAL_OPENAI_RESPONSES:{args.openai_model}")}

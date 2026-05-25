@@ -451,7 +451,7 @@ os.execv(real_git, [real_git, *args])
         self.assertIn('CONTAINER_PORT="8080"', script)
         self.assertIn("listen: 0.0.0.0:${CONTAINER_PORT}", script)
         self.assertIn("format: anthropic", script)
-        self.assertIn("provider_key_env: CONTAINER_SMOKE_UPSTREAM_API_KEY", script)
+        self.assertIn("env: CONTAINER_SMOKE_UPSTREAM_API_KEY", script)
         self.assertIn('-p "${HOST}:${PROXY_PORT}:${CONTAINER_PORT}"', script)
         self.assertIn("wait_for_container_healthy", script)
         self.assertIn("/ready", script)
@@ -733,7 +733,7 @@ os.execv(real_git, [real_git, *args])
             with self.subTest(key_pattern=key_pattern):
                 self.assertIn(key_pattern, script)
                 self.assertNotIn(key_pattern, default_config)
-        self.assertIn("provider_key_env: PRESET_ENDPOINT_API_KEY", default_config)
+        self.assertIn("env: PRESET_ENDPOINT_API_KEY", default_config)
         self.assertIn("PRESET-OPENAI-COMPATIBLE", default_config)
         self.assertIn("PRESET-ANTHROPIC-COMPATIBLE", default_config)
         self.assertNotIn("MINIMAX", default_config.upper())
@@ -881,7 +881,7 @@ os.execv(real_git, [real_git, *args])
             "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
             "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
             "In `client_provider_key` mode, the client SDK key is the real provider key",
-            "provider_key_env: GEMINI_API_KEY",
+            "env: GEMINI_API_KEY",
             "The provider key belongs to the proxy",
         ):
             with self.subTest(advanced_snippet=snippet):
@@ -891,7 +891,7 @@ os.execv(real_git, [real_git, *args])
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, admin_doc)
         self.assertIn("whether a provider key is configured", admin_doc)
-        self.assertIn("provider_key_env presence", admin_doc)
+        self.assertIn("provider_key.env", admin_doc)
 
     def test_docs_cover_static_data_auth_and_admin_data_auth_contract(self):
         config_doc = (REPO_ROOT / "docs" / "configuration.md").read_text(
@@ -908,8 +908,8 @@ os.execv(real_git, [real_git, *args])
             "`data_auth`",
             "`provider_key.inline`",
             "`provider_key.env`",
-            "`provider_key_env`",
-            "`provider_key.inline`, `provider_key.env`, and `provider_key_env` are mutually exclusive",
+            "`provider_key_env: ENV`",
+            "`provider_key.inline` and `provider_key.env` are mutually exclusive",
             "Inline and env source values must be non-empty",
             "Admin read views never return inline secret values",
             "If `data_auth` is omitted",
@@ -960,11 +960,8 @@ os.execv(real_git, [real_git, *args])
         )
 
         self.assertIn("listen: 0.0.0.0:8080", container_config)
-        self.assertIn("provider_key_env: OPENAI_COMPATIBLE_API_KEY", container_config)
-        self.assertIn(
-            "provider_key_env: ANTHROPIC_COMPATIBLE_API_KEY",
-            container_config,
-        )
+        self.assertIn("env: OPENAI_COMPATIBLE_API_KEY", container_config)
+        self.assertIn("env: ANTHROPIC_COMPATIBLE_API_KEY", container_config)
         self.assertNotIn("provider_key_inline", container_config)
         self.assertNotIn("MINIMAX", container_config.upper())
         self.assertNotIn("MINIMAX", compose.upper())
@@ -991,7 +988,7 @@ os.execv(real_git, [real_git, *args])
         self.assertIn("ghcr.io/agentsmith-project/llm-universal-proxy", container_doc)
         self.assertIn("LLM_UNIVERSAL_PROXY_AUTH_MODE=proxy_key", container_doc)
         self.assertIn("LLM_UNIVERSAL_PROXY_KEY", container_doc)
-        self.assertIn("provider_key_env", container_doc)
+        self.assertIn("provider_key.env", container_doc)
         self.assertIn(
             "Do not mount the local quickstart config unchanged for container service mode",
             container_doc,

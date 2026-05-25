@@ -191,7 +191,7 @@ check_user_tooling_doc_contract() {
         'OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY' \
         'ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY' \
         "client_provider_key" \
-        "provider_key_env: GEMINI_API_KEY" \
+        "env: GEMINI_API_KEY" \
         "The provider key belongs to the proxy"
 }
 
@@ -852,7 +852,7 @@ check_contains "scripts/test_container_smoke.sh" "host.docker.internal:host-gate
 check_contains "scripts/test_container_smoke.sh" 'CONTAINER_PORT="8080"'
 check_contains "scripts/test_container_smoke.sh" 'listen: 0.0.0.0:${CONTAINER_PORT}'
 check_contains "scripts/test_container_smoke.sh" "format: anthropic"
-check_contains "scripts/test_container_smoke.sh" "provider_key_env: CONTAINER_SMOKE_UPSTREAM_API_KEY"
+check_contains "scripts/test_container_smoke.sh" "env: CONTAINER_SMOKE_UPSTREAM_API_KEY"
 check_contains "scripts/test_container_smoke.sh" '-p "${HOST}:${PROXY_PORT}:${CONTAINER_PORT}"'
 check_contains "scripts/test_container_smoke.sh" "wait_for_container_healthy"
 check_contains "scripts/test_container_smoke.sh" "/ready"
@@ -989,17 +989,17 @@ check_absent "docs/container.md" '$GITHUB_ACTOR'
 check_contains "docs/container.md" "LLM_UNIVERSAL_PROXY_ADMIN_TOKEN"
 check_contains "docs/container.md" "LLM_UNIVERSAL_PROXY_AUTH_MODE=proxy_key"
 check_contains "docs/container.md" "LLM_UNIVERSAL_PROXY_KEY"
-check_contains "docs/container.md" "provider_key_env"
+check_contains "docs/container.md" "provider_key.env"
 check_contains "docs/container.md" "Do not mount the local quickstart config unchanged for container service mode"
 check_contains "docs/container.md" "Do not use the unedited example config for real provider requests"
 check_contains "docs/admin-dynamic-config.md" "do not introduce a separate service key"
 check_absent "docs/admin-dynamic-config.md" "fallback credential"
 check_absent "docs/admin-dynamic-config.md" "fallback_credential"
 check_contains "docs/admin-dynamic-config.md" "whether a provider key is configured"
-check_contains "docs/admin-dynamic-config.md" "provider_key_env presence"
+check_contains "docs/admin-dynamic-config.md" "provider_key.env"
 check_contains "examples/container-config.yaml" "listen: 0.0.0.0:8080"
-check_contains "examples/container-config.yaml" "provider_key_env: OPENAI_COMPATIBLE_API_KEY"
-check_contains "examples/container-config.yaml" "provider_key_env: ANTHROPIC_COMPATIBLE_API_KEY"
+check_contains "examples/container-config.yaml" "env: OPENAI_COMPATIBLE_API_KEY"
+check_contains "examples/container-config.yaml" "env: ANTHROPIC_COMPATIBLE_API_KEY"
 check_absent "examples/container-config.yaml" "MINIMAX"
 check_absent "examples/container-config.yaml" "PRESET_"
 check_contains "examples/docker-compose.yaml" 'OPENAI_COMPATIBLE_API_KEY: ${OPENAI_COMPATIBLE_API_KEY:?set OPENAI_COMPATIBLE_API_KEY}'

@@ -31,14 +31,14 @@ same-protocol traffic still uses compatibility machinery.
   `data_auth` is the preferred process-wide config: in `proxy_key` mode clients
   authenticate with the configured proxy key, commonly
   `LLM_UNIVERSAL_PROXY_KEY` through `proxy_key.env`, and upstream credentials
-  come from `provider_key.env`, `provider_key.inline`, or legacy
-  `provider_key_env`; in `client_provider_key` mode clients send provider keys
+  come from `provider_key.env` or `provider_key.inline`; in
+  `client_provider_key` mode clients send provider keys
   directly and `provider_key.inline` is rejected. Admin routes remain behind the
   admin-token boundary, including `/admin/data-auth`.
 - CORS is opt-in by exact origin rather than broadly emitted by default.
 - Server-held provider-key forwarding is explicit through configured
-  `provider_key.env`, `provider_key.inline`, or `provider_key_env` in
-  `proxy_key` mode, and admin reads redact inline values.
+  `provider_key.env` or `provider_key.inline` in `proxy_key` mode, and admin
+  reads redact inline values.
 - Local limit work is represented in the gate set and compatibility contracts:
   request, response, stream, hook, and trace paths must fail predictably when
   they exceed supported bounds.

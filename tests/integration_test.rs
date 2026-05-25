@@ -858,7 +858,8 @@ upstreams:
   MINIMAX-OPENAI:
     api_root: https://api.minimaxi.com/v1
     format: openai-chat-completions
-    provider_key_env: MINIMAX_API_KEY
+    provider_key:
+      env: MINIMAX_API_KEY
     limits:
       context_window: 200000
       max_output_tokens: 128000
@@ -2427,7 +2428,7 @@ async fn admin_dynamic_config_rejects_legacy_upstream_auth_fields() {
 }
 
 #[tokio::test]
-async fn admin_dynamic_config_rejects_proxy_key_mode_without_provider_key_env() {
+async fn admin_dynamic_config_rejects_proxy_key_mode_without_provider_key() {
     let _data_env_guard = DATA_SECURITY_ENV_LOCK.lock().await;
     let _admin_env_guard = ADMIN_TOKEN_ENV_LOCK.lock().await;
     let _admin_token = ScopedEnvVar::remove("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN");
@@ -2455,13 +2456,13 @@ async fn admin_dynamic_config_rejects_proxy_key_mode_without_provider_key_env() 
     assert_eq!(
         status,
         StatusCode::BAD_REQUEST,
-        "missing provider_key_env should be rejected, body: {body}"
+        "missing provider_key should be rejected, body: {body}"
     );
-    assert!(body.contains("provider_key_env"), "{body}");
+    assert!(body.contains("provider_key"), "{body}");
 }
 
 #[tokio::test]
-async fn admin_dynamic_config_allows_proxy_key_mode_with_provider_key_env() {
+async fn admin_dynamic_config_rejects_provider_key_env_with_migration_hint() {
     let _data_env_guard = DATA_SECURITY_ENV_LOCK.lock().await;
     let _admin_env_guard = ADMIN_TOKEN_ENV_LOCK.lock().await;
     let _admin_token = ScopedEnvVar::remove("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN");
@@ -2483,7 +2484,11 @@ async fn admin_dynamic_config_allows_proxy_key_mode_with_provider_key_env() {
         .send()
         .await
         .unwrap();
-    assert_eq!(apply.status(), StatusCode::OK);
+    let status = apply.status();
+    let body = apply.text().await.unwrap();
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("provider_key_env was removed"), "{body}");
+    assert!(body.contains("provider_key: { env: ENV }"), "{body}");
 }
 
 #[tokio::test]
@@ -2772,8 +2777,11 @@ async fn admin_put_data_auth_does_not_overwrite_concurrent_namespace_cas_update(
             name: "AUTO".to_string(),
             api_root: discovery_base,
             fixed_upstream_format: None,
-            provider_key_env: Some(PROVIDER_KEY_ENV.to_string()),
-            provider_key: None,
+            provider_key_env: None,
+            provider_key: Some(SecretSourceConfig {
+                inline: None,
+                env: Some(PROVIDER_KEY_ENV.to_string()),
+            }),
             upstream_headers: Vec::new(),
             proxy: None,
             limits: None,
@@ -2829,7 +2837,10 @@ async fn admin_put_data_auth_does_not_overwrite_concurrent_namespace_cas_update(
     let expected_api_root =
         upstream_api_root(&new_mock_base, UpstreamFormat::OpenAiChatCompletions);
     let mut namespace_payload = demo_runtime_config(&new_mock_base);
-    namespace_payload.upstreams[0].provider_key_env = Some(PROVIDER_KEY_ENV.to_string());
+    namespace_payload.upstreams[0].provider_key = Some(SecretSourceConfig {
+        inline: None,
+        env: Some(PROVIDER_KEY_ENV.to_string()),
+    });
     let mut namespace_update = {
         let proxy_base = proxy_base.clone();
         let client = Client::new();
@@ -3202,8 +3213,11 @@ async fn admin_namespace_state_redacts_inline_credentials_and_hook_authorization
                     name: "default".to_string(),
                     api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
                     fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-                    provider_key_env: Some("DEMO_KEY".to_string()),
-                    provider_key: None,
+                    provider_key_env: None,
+                    provider_key: Some(SecretSourceConfig {
+                        inline: None,
+                        env: Some("DEMO_KEY".to_string()),
+                    }),
                     upstream_headers: vec![
                         ("x-tenant".to_string(), "demo".to_string()),
                         ("cookie".to_string(), "session=secret".to_string()),
@@ -3256,8 +3270,11 @@ async fn admin_namespace_state_redacts_inline_credentials_and_hook_authorization
         .unwrap();
 
     assert_eq!(state["revision"], applied_revision);
+    assert!(state["config"]["upstreams"][0]
+        .get("provider_key_env")
+        .is_none());
     assert_eq!(
-        state["config"]["upstreams"][0]["provider_key_env"],
+        state["config"]["upstreams"][0]["provider_key"]["env_name"],
         "DEMO_KEY"
     );
     assert_eq!(
@@ -3748,7 +3765,7 @@ async fn client_provider_key_auth_allows_forwarding_headers_with_valid_provider_
 }
 
 #[tokio::test]
-async fn proxy_key_auth_uses_provider_key_env_and_does_not_forward_or_hook_proxy_key() {
+async fn proxy_key_auth_uses_provider_key_env_source_and_does_not_forward_or_hook_proxy_key() {
     let _data_env_guard = DATA_SECURITY_ENV_LOCK.lock().await;
     let _provider_key = ScopedEnvVar::set(PROVIDER_KEY_ENV, "server-secret");
 
@@ -3762,8 +3779,11 @@ async fn proxy_key_auth_uses_provider_key_env_and_does_not_forward_or_hook_proxy
             name: "GLM-OFFICIAL".to_string(),
             api_root: upstream_api_root(&mock_base, UpstreamFormat::Anthropic),
             fixed_upstream_format: Some(UpstreamFormat::Anthropic),
-            provider_key_env: Some(PROVIDER_KEY_ENV.to_string()),
-            provider_key: None,
+            provider_key_env: None,
+            provider_key: Some(SecretSourceConfig {
+                inline: None,
+                env: Some(PROVIDER_KEY_ENV.to_string()),
+            }),
             upstream_headers: Vec::new(),
             proxy: None,
             limits: None,
@@ -3843,7 +3863,7 @@ async fn proxy_key_auth_uses_provider_key_env_and_does_not_forward_or_hook_proxy
 }
 
 #[tokio::test]
-async fn proxy_key_mode_without_provider_key_env_fails_closed_at_startup() {
+async fn proxy_key_mode_without_provider_key_fails_closed_at_startup() {
     let _data_env_guard = DATA_SECURITY_ENV_LOCK.lock().await;
     let _auth_mode = ScopedEnvVar::set(AUTH_MODE_ENV, "proxy_key");
     let _proxy_key = ScopedEnvVar::set(PROXY_KEY_ENV, "proxy-secret");
@@ -3878,8 +3898,8 @@ async fn proxy_key_mode_without_provider_key_env_fails_closed_at_startup() {
     )
     .await
     .expect("server should fail closed before serving");
-    let err = result.expect_err("proxy_key without provider_key_env must not start");
-    assert!(err.to_string().contains("provider_key_env"));
+    let err = result.expect_err("proxy_key without provider_key must not start");
+    assert!(err.to_string().contains("provider_key"));
 }
 
 fn config_with_upstream_header(header_name: &str) -> Config {
@@ -9917,8 +9937,11 @@ async fn proxy_key_auth_ignores_raw_client_provider_key() {
             name: "GLM-OFFICIAL".to_string(),
             api_root: upstream_api_root(&glm_base, UpstreamFormat::Anthropic),
             fixed_upstream_format: Some(UpstreamFormat::Anthropic),
-            provider_key_env: Some(PROVIDER_KEY_ENV.to_string()),
-            provider_key: None,
+            provider_key_env: None,
+            provider_key: Some(SecretSourceConfig {
+                inline: None,
+                env: Some(PROVIDER_KEY_ENV.to_string()),
+            }),
             upstream_headers: Vec::new(),
             proxy: None,
             limits: None,

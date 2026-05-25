@@ -741,7 +741,7 @@ mod tests {
                     }),
                 ),
                 upstream_with_provider_key(
-                    "legacy-provider",
+                    "removed-provider-key-env-provider",
                     Some("LEGACY_PROVIDER_KEY_ENV"),
                     None,
                 ),
@@ -770,7 +770,7 @@ mod tests {
             "rendered = {rendered:?}"
         );
         assert!(
-            rendered.contains("provider_key=legacy-env"),
+            rendered.contains("provider_key=invalid"),
             "rendered = {rendered:?}"
         );
         assert!(

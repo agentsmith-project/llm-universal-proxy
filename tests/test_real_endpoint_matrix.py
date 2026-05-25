@@ -356,9 +356,9 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             config_text = config_path.read_text(encoding="utf-8")
 
         self.assertNotIn("provider_key_inline", config_text)
-        self.assertEqual(config_text.count("provider_key_env: COMPAT_PROVIDER_API_KEY"), 2)
+        self.assertEqual(config_text.count("env: COMPAT_PROVIDER_API_KEY"), 2)
         for official_env in REQUIRED_REAL_PROVIDER_ENVS:
-            self.assertNotIn(f"provider_key_env: {official_env}", config_text)
+            self.assertNotIn(f"env: {official_env}", config_text)
         for secret_value in sentinel_by_env.values():
             self.assertNotIn(secret_value, config_text)
         self.assertNotIn("MINIMAX", config_text.upper())
@@ -388,8 +388,8 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
 
         self.assertEqual(compat_config.openai_provider_key_env, "COMPAT_OPENAI_API_KEY")
         self.assertEqual(compat_config.anthropic_provider_key_env, "COMPAT_ANTHROPIC_API_KEY")
-        self.assertIn("provider_key_env: COMPAT_OPENAI_API_KEY", config_text)
-        self.assertIn("provider_key_env: COMPAT_ANTHROPIC_API_KEY", config_text)
+        self.assertIn("env: COMPAT_OPENAI_API_KEY", config_text)
+        self.assertIn("env: COMPAT_ANTHROPIC_API_KEY", config_text)
         self.assertNotIn("compat-openai-secret", config_text)
         self.assertNotIn("compat-anthropic-secret", config_text)
 
@@ -417,7 +417,7 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
 
         self.assertNotIn("provider_key_inline", config_text)
         for env_name in REQUIRED_REAL_PROVIDER_ENVS:
-            self.assertIn(f"provider_key_env: {env_name}", config_text)
+            self.assertIn(f"env: {env_name}", config_text)
         for secret_value in sentinel_by_env.values():
             self.assertNotIn(secret_value, config_text)
 

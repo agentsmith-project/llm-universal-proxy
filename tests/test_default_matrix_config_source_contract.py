@@ -159,7 +159,7 @@ class DefaultMatrixConfigSourceContractTests(unittest.TestCase):
                 runtime_dir="$AUTO_START_RUNTIME_DIR"
                 grep -Fq "LOCAL-QWEN:" "$runtime_config"
                 grep -Fq "api_root: http://127.0.0.1:9997/v1" "$runtime_config"
-                grep -Fq "provider_key_env: LOCAL_QWEN_API_KEY" "$runtime_config"
+                grep -Fq "env: LOCAL_QWEN_API_KEY" "$runtime_config"
                 grep -Fq 'qwen-local: "LOCAL-QWEN:qwen3.5-9b-awq"' "$runtime_config"
                 cleanup_auto_start_runtime_config
                 test ! -e "$runtime_dir"
@@ -389,7 +389,7 @@ class DefaultMatrixConfigSourceContractTests(unittest.TestCase):
     def test_tracked_default_config_uses_env_credentials_without_provider_keys(self):
         config_text = TRACKED_CONFIG_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("provider_key_env: PRESET_ENDPOINT_API_KEY", config_text)
+        self.assertIn("env: PRESET_ENDPOINT_API_KEY", config_text)
         self.assertIn("PRESET-OPENAI-COMPATIBLE", config_text)
         self.assertIn("PRESET-OPENAI-RESPONSES-COMPATIBLE", config_text)
         self.assertIn("PRESET-ANTHROPIC-COMPATIBLE", config_text)

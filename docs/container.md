@@ -176,7 +176,9 @@ curl -fsS \
         "name": "OPENAI-COMPATIBLE",
         "api_root": "https://openai-compatible.example/v1",
         "fixed_upstream_format": "openai-chat-completions",
-        "provider_key_env": "OPENAI_COMPATIBLE_API_KEY"
+        "provider_key": {
+          "env": "OPENAI_COMPATIBLE_API_KEY"
+        }
       }
     ],
     "model_aliases": {
@@ -310,8 +312,8 @@ explicit port mapping.
 
 Container deployments should normally use `LLM_UNIVERSAL_PROXY_AUTH_MODE=proxy_key`.
 In this environment fallback mode, `LLM_UNIVERSAL_PROXY_KEY` is the
-client-facing SDK key and each upstream's `provider_key_env` or
-`provider_key.env` points at the provider key held by the container environment.
+client-facing SDK key and each upstream's `provider_key.env` points at the
+provider key held by the container environment.
 Mounted static config can instead use top-level `data_auth`, including
 `proxy_key.env`, for the same process-wide data-plane auth state.
 `client_provider_key` mode is available for deployments where clients send

@@ -562,7 +562,7 @@ fn resolve_provider_key(upstream: &UpstreamConfig) -> Result<String, String> {
             )),
         },
         None => Err(format!(
-            "upstream `{}` provider_key or provider_key_env is required when {AUTH_MODE_ENV}=proxy_key",
+            "upstream `{}` provider_key is required when {AUTH_MODE_ENV}=proxy_key; configure provider_key: {{ env: ENV }} or provider_key.inline",
             upstream.name
         )),
     }

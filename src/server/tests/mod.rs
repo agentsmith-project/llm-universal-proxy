@@ -32,9 +32,10 @@ pub(super) static SECRET_REDACTION_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
 pub(super) const PROVIDER_INLINE_REDACTION_SECRET: &str = "provider-inline-redaction-secret-value";
 pub(super) const PROVIDER_ENV_REDACTION_ENV: &str = "LLMUP_TEST_PROVIDER_REDACTION_ENV_SECRET";
 pub(super) const PROVIDER_ENV_REDACTION_SECRET: &str = "provider-env-redaction-secret-value";
-pub(super) const PROVIDER_LEGACY_REDACTION_ENV: &str =
-    "LLMUP_TEST_PROVIDER_LEGACY_REDACTION_ENV_SECRET";
-pub(super) const PROVIDER_LEGACY_REDACTION_SECRET: &str = "provider-legacy-redaction-secret-value";
+pub(super) const PROVIDER_STRUCTURED_ENV_REDACTION_ENV: &str =
+    "LLMUP_TEST_PROVIDER_STRUCTURED_REDACTION_ENV_SECRET";
+pub(super) const PROVIDER_STRUCTURED_ENV_REDACTION_SECRET: &str =
+    "provider-structured-env-redaction-secret-value";
 pub(super) const PROXY_INLINE_REDACTION_SECRET: &str = "proxy-inline-redaction-secret-value";
 pub(super) const PROXY_ENV_REDACTION_ENV: &str = "LLMUP_TEST_PROXY_REDACTION_ENV_SECRET";
 pub(super) const PROXY_ENV_REDACTION_SECRET: &str = "proxy-env-redaction-secret-value";
@@ -107,14 +108,13 @@ pub(super) fn redaction_upstream_config(
     name: &str,
     api_root: &str,
     format: crate::formats::UpstreamFormat,
-    provider_key_env: Option<&str>,
     provider_key: Option<crate::config::SecretSourceConfig>,
 ) -> crate::config::UpstreamConfig {
     crate::config::UpstreamConfig {
         name: name.to_string(),
         api_root: api_root.to_string(),
         fixed_upstream_format: Some(format),
-        provider_key_env: provider_key_env.map(ToString::to_string),
+        provider_key_env: None,
         provider_key,
         upstream_headers: Vec::new(),
         proxy: None,

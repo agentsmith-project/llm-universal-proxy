@@ -6,7 +6,6 @@ fn models_snapshot_config(alias: &str) -> crate::config::Config {
         "http://127.0.0.1:9/v1",
         crate::formats::UpstreamFormat::OpenAiChatCompletions,
         None,
-        None,
     );
     crate::config::Config {
         listen: "127.0.0.1:0".to_string(),
@@ -41,7 +40,6 @@ fn models_catalog_config(
         upstream_name,
         "http://127.0.0.1:9/v1",
         format,
-        None,
         provider_key.map(|secret| crate::config::SecretSourceConfig {
             inline: Some(secret.to_string()),
             env: None,
@@ -118,8 +116,7 @@ fn models_catalog_metadata_config(
 }
 
 fn models_partial_limits_config(format: crate::formats::UpstreamFormat) -> crate::config::Config {
-    let upstream =
-        redaction_upstream_config("primary", "http://127.0.0.1:9/v1", format, None, None);
+    let upstream = redaction_upstream_config("primary", "http://127.0.0.1:9/v1", format, None);
     crate::config::Config {
         listen: "127.0.0.1:0".to_string(),
         upstream_timeout: std::time::Duration::from_secs(30),
@@ -172,7 +169,6 @@ fn models_not_found_config(
                 "left",
                 "http://127.0.0.1:9/v1",
                 format,
-                None,
                 provider_key.map(|secret| crate::config::SecretSourceConfig {
                     inline: Some(secret.to_string()),
                     env: None,
@@ -182,7 +178,6 @@ fn models_not_found_config(
                 "right",
                 "http://127.0.0.1:9/v1",
                 format,
-                None,
                 provider_key.map(|secret| crate::config::SecretSourceConfig {
                     inline: Some(secret.to_string()),
                     env: None,

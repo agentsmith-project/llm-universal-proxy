@@ -41,7 +41,8 @@ upstreams:
   google_chat:
     api_root: https://generativelanguage.googleapis.com/v1beta/openai
     format: openai-chat-completions
-    provider_key_env: GEMINI_API_KEY
+    provider_key:
+      env: GEMINI_API_KEY
 
 model_aliases:
   main: "openai_chat:provider-model"
@@ -55,7 +56,7 @@ The provider key belongs to the proxy, not to the client. In `proxy_key` mode, t
 
 ## Auth Modes
 
-`data_auth.proxy_key` protects the local proxy. In that mode, clients use the local proxy key as their SDK key, while each upstream provider key stays server-side in `provider_key.inline`, `provider_key.env`, or `provider_key_env`.
+`data_auth.proxy_key` protects the local proxy. In that mode, clients use the local proxy key as their SDK key, while each upstream provider key stays server-side in `provider_key.inline` or `provider_key.env`.
 
 In `client_provider_key` mode, the client SDK key is the real provider key. Use that mode only when you intentionally want clients to hold provider credentials and send them through the proxy for the selected upstream.
 

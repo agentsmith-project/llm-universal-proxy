@@ -22,9 +22,10 @@ For CLI-wrapper entrypoints, the provider-neutral preset names are
 `preset-openai-compatible` and `preset-anthropic-compatible`; dynamic admin
 writes should send already-hydrated concrete URL/model values. `PRESET_*` URL/model placeholders such as `PRESET_OPENAI_ENDPOINT_BASE_URL` and
 `PRESET_ENDPOINT_MODEL` should not be sent as `api_root` or `upstream_model`.
-`provider_key_env` remains an environment variable name, so
+`provider_key.env` remains an environment variable name, so
 `PRESET_ENDPOINT_API_KEY` is valid when that variable exists in the proxy
-process environment.
+process environment. The pre-GA `provider_key_env` field is removed and
+rejected; use `provider_key: { env: ENV }` instead.
 
 ## Admin Access Rules
 
@@ -48,8 +49,7 @@ not accept the admin token. That data-plane auth mode is process-wide across
 namespaces. Static config can define `data_auth`; if it is omitted, the proxy
 uses the `LLM_UNIVERSAL_PROXY_AUTH_MODE` and `LLM_UNIVERSAL_PROXY_KEY`
 environment fallback. In `proxy_key` mode, dynamic namespace config can add
-upstream `provider_key.inline`, `provider_key.env`, or legacy
-`provider_key_env` entries. Clients authenticate with the proxy key through
+upstream `provider_key.inline` or `provider_key.env` entries. Clients authenticate with the proxy key through
 their normal SDK API key or bearer token.
 
 ## Admin Dashboard Boundary
@@ -192,7 +192,7 @@ The redacted view does not expose sensitive values such as:
 
 What you get instead is enough operational information to understand the runtime safely, for example:
 
-- whether a provider key is configured through provider_key_env presence
+- whether a provider key is configured, without returning the secret value
 - the `provider_key` view reports `source`, `configured`, `redacted`, and `env_name` when applicable
 - whether the global `data_auth.proxy_key` source is inline or env, without the key value
 - whether hook authorization is configured
@@ -209,16 +209,15 @@ Static `data_auth` or the environment fallback applies to all namespaces and is
 not set through the namespace payload.
 
 - In `proxy_key` mode, every upstream that can receive traffic must include a
-  provider credential source: `provider_key.inline`, `provider_key.env`, or
-  legacy `provider_key_env`. Env sources must resolve in the proxy process
+  provider credential source: `provider_key.inline` or `provider_key.env`.
+  Env sources must resolve in the proxy process
   environment.
-- In `client_provider_key` mode, the payload does not require `provider_key_env`,
-  and it is normally omitted. `provider_key.env` and `provider_key_env` are not
-  rejected just because this mode is active, but they are not used. Clients still
+- In `client_provider_key` mode, the payload normally omits `provider_key`.
+  `provider_key.env` is accepted but not used. Clients still
   send the real provider key through their normal SDK API key or bearer-token
   path. `provider_key.inline` is rejected.
 
-In `client_provider_key` mode, `provider_key.env` and `provider_key_env` are not rejected if present, but they are not used.
+In `client_provider_key` mode, `provider_key.env` is accepted if present, but it is not used.
 
 Runtime writes use the same client-visible surface contract as static YAML. Raw HTTP tests can omit `surface_defaults`, but Codex, Claude Code, and other supported wrapper/live-profile flows should provide at least the conservative text-only surface shown below, or an accurate alias-level `surface`.
 
@@ -254,7 +253,8 @@ config:
       api_root: https://openai-compatible.example/v1
       fixed_upstream_format: openai-chat-completions
       # Env var name read by the proxy in proxy_key mode.
-      provider_key_env: PRESET_ENDPOINT_API_KEY
+      provider_key:
+        env: PRESET_ENDPOINT_API_KEY
       surface_defaults:
         modalities:
           input: ["text"]
@@ -293,7 +293,9 @@ curl -fsS \
         "name": "PRESET-OPENAI-COMPATIBLE",
         "api_root": "https://openai-compatible.example/v1",
         "fixed_upstream_format": "openai-chat-completions",
-        "provider_key_env": "PRESET_ENDPOINT_API_KEY",
+        "provider_key": {
+          "env": "PRESET_ENDPOINT_API_KEY"
+        },
         "surface_defaults": {
           "modalities": {
             "input": ["text"],
@@ -381,7 +383,7 @@ The runtime payload is close to the static YAML structure, but not identical. Dy
 | Alias shorthand | alias string such as `"UPSTREAM:MODEL"` is accepted | alias object with `upstream_name` and `upstream_model` |
 | Structured alias metadata | object with `target`, plus optional `limits` and `surface` | object with `upstream_name`, `upstream_model`, plus optional `limits` and `surface` |
 | Data-plane auth mode | top-level `data_auth`, or `LLM_UNIVERSAL_PROXY_AUTH_MODE` environment fallback when `data_auth` is omitted | managed through `GET /admin/data-auth` and `PUT /admin/data-auth`; not in namespace payload |
-| Provider key reference | `provider_key` object with `inline` or `env`, or the `provider_key_env` legacy field | same provider credential source fields inside each upstream item |
+| Provider key reference | `provider_key` object with `inline` or `env`; `provider_key_env` is rejected with a migration hint | same provider credential source fields inside each upstream item |
 
 The global data auth resource is `/admin/data-auth`; namespace payloads never carry `data_auth`.
 
@@ -389,7 +391,7 @@ For provider-neutral wrapper sources, hydrate URL and model placeholders before 
 
 - static config source `api_root: PRESET_OPENAI_ENDPOINT_BASE_URL` becomes runtime `api_root: https://openai-compatible.example/v1`
 - static alias `"PRESET-OPENAI-COMPATIBLE:PRESET_ENDPOINT_MODEL"` becomes runtime `upstream_name: PRESET-OPENAI-COMPATIBLE` and `upstream_model: provider-model-id`
-- static `provider_key_env: PRESET_ENDPOINT_API_KEY` can stay `provider_key_env: PRESET_ENDPOINT_API_KEY` because it is an environment variable name, not the secret value
+- static `provider_key: { env: PRESET_ENDPOINT_API_KEY }` can stay `provider_key: { env: PRESET_ENDPOINT_API_KEY }` because it is an environment variable name, not the secret value
 
 Good default workflow:
 

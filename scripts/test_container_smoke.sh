@@ -284,7 +284,8 @@ upstreams:
   default:
     api_root: http://host.docker.internal:${MOCK_PORT}/v1
     format: anthropic
-    provider_key_env: CONTAINER_SMOKE_UPSTREAM_API_KEY
+    provider_key:
+      env: CONTAINER_SMOKE_UPSTREAM_API_KEY
 EOF
 }
 
@@ -469,7 +470,7 @@ run_bootstrap_apply_smoke() {
 
     admin_payload="$(
         cat <<EOF
-{"if_revision":null,"config":{"listen":"0.0.0.0:8080","upstream_timeout_secs":10,"upstreams":[{"name":"default","api_root":"http://host.docker.internal:${MOCK_PORT}/v1","fixed_upstream_format":"anthropic","provider_key_env":"CONTAINER_SMOKE_UPSTREAM_API_KEY"}]}}
+{"if_revision":null,"config":{"listen":"0.0.0.0:8080","upstream_timeout_secs":10,"upstreams":[{"name":"default","api_root":"http://host.docker.internal:${MOCK_PORT}/v1","fixed_upstream_format":"anthropic","provider_key":{"env":"CONTAINER_SMOKE_UPSTREAM_API_KEY"}}]}}
 EOF
     )"
 

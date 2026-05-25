@@ -809,8 +809,6 @@ pub struct AdminUpstreamConfigView {
     pub api_root: String,
     pub fixed_upstream_format: Option<UpstreamFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_key_env: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_key: Option<AdminCredentialSourceView>,
     pub upstream_headers: Vec<AdminHeaderValueView>,
     pub proxy: Option<ProxyConfig>,
@@ -981,6 +979,10 @@ impl UpstreamConfig {
     pub(crate) fn provider_key_source(
         &self,
     ) -> Result<Option<UpstreamProviderKeySourceRef<'_>>, String> {
+        if self.provider_key_env.is_some() {
+            return Err(provider_key_env_removed_error(&self.name));
+        }
+
         let mut sources = Vec::new();
         if let Some(provider_key) = &self.provider_key {
             match provider_key.source(&format!("upstream `{}` provider_key", self.name))? {
@@ -995,28 +997,21 @@ impl UpstreamConfig {
                 }
             }
         }
-        if let Some(value) = self.provider_key_env.as_deref() {
-            if value.trim().is_empty() {
-                return Err(format!(
-                    "upstream `{}` provider_key_env must not be empty",
-                    self.name
-                ));
-            }
-            sources.push(UpstreamProviderKeySourceRef::Env {
-                name: value,
-                legacy: true,
-            });
-        }
-
         match sources.as_slice() {
             [] => Ok(None),
             [source] => Ok(Some(*source)),
             _ => Err(format!(
-                "upstream `{}` provider_key.inline, provider_key.env, and provider_key_env are mutually exclusive",
+                "upstream `{}` provider_key.inline and provider_key.env are mutually exclusive",
                 self.name
             )),
         }
     }
+}
+
+fn provider_key_env_removed_error(upstream_name: &str) -> String {
+    format!(
+        "upstream `{upstream_name}` provider_key_env was removed before GA; use provider_key: {{ env: ENV }} instead"
+    )
 }
 
 impl Config {
@@ -1116,6 +1111,9 @@ impl Config {
         for upstream in &self.upstreams {
             if upstream.name.trim().is_empty() {
                 return Err("upstream name must not be empty".to_string());
+            }
+            if upstream.provider_key_env.is_some() {
+                return Err(provider_key_env_removed_error(&upstream.name));
             }
             if upstream.api_root.trim().is_empty() {
                 return Err(format!(
@@ -1428,7 +1426,6 @@ impl From<&Config> for AdminConfigView {
                     name: item.name.clone(),
                     api_root: sanitize_url_for_admin(&item.api_root),
                     fixed_upstream_format: item.fixed_upstream_format,
-                    provider_key_env: item.provider_key_env.clone(),
                     provider_key: admin_provider_key_view(item),
                     upstream_headers: item
                         .upstream_headers
@@ -1497,22 +1494,10 @@ fn sanitize_proxy_config_for_admin(value: &ProxyConfig) -> ProxyConfig {
 }
 
 fn admin_provider_key_view(upstream: &UpstreamConfig) -> Option<AdminCredentialSourceView> {
-    if let Some(view) = upstream
+    upstream
         .provider_key
         .as_ref()
         .and_then(SecretSourceConfig::admin_view)
-    {
-        return Some(view);
-    }
-    upstream
-        .provider_key_env
-        .as_ref()
-        .map(|env_name| AdminCredentialSourceView {
-            source: "env",
-            configured: true,
-            redacted: true,
-            env_name: Some(env_name.clone()),
-        })
 }
 
 pub(crate) fn sanitize_url_for_admin(value: &str) -> String {
@@ -1780,7 +1765,8 @@ upstreams:
   GLM-OFFICIAL:
     api_root: https://open.bigmodel.cn/api/anthropic/v1
     format: anthropic
-    provider_key_env: GLM_APIKEY
+    provider_key:
+      env: GLM_APIKEY
   OPENAI:
     api_root: https://api.openai.com/v1
     format: openai-responses
@@ -1796,7 +1782,10 @@ model_aliases:
         let glm = c.upstream("GLM-OFFICIAL").unwrap();
         assert_eq!(glm.api_root, "https://open.bigmodel.cn/api/anthropic/v1");
         assert_eq!(glm.fixed_upstream_format, Some(UpstreamFormat::Anthropic));
-        assert_eq!(glm.provider_key_env.as_deref(), Some("GLM_APIKEY"));
+        assert_eq!(
+            glm.provider_key.as_ref().and_then(|key| key.env.as_deref()),
+            Some("GLM_APIKEY")
+        );
         let alias = c.model_aliases.get("GLM-5").unwrap();
         assert_eq!(alias.upstream_name, "GLM-OFFICIAL");
         assert_eq!(alias.upstream_model, "GLM-5");
@@ -2424,7 +2413,7 @@ upstreams:
     }
 
     #[test]
-    fn config_from_yaml_str_parses_hooks_and_provider_key_env() {
+    fn config_from_yaml_str_parses_hooks_and_provider_key_env_for_migration_error() {
         let c = Config::from_yaml_str(
             r#"
 hooks:
@@ -2458,6 +2447,11 @@ upstreams:
         );
         let upstream = c.upstream("GLM-OFFICIAL").unwrap();
         assert_eq!(upstream.provider_key_env.as_deref(), Some("GLM_APIKEY"));
+        let error = c
+            .validate()
+            .expect_err("legacy provider_key_env must be rejected");
+        assert!(error.contains("provider_key_env was removed"), "{error}");
+        assert!(error.contains("provider_key: { env: ENV }"), "{error}");
     }
 
     #[test]
@@ -2479,10 +2473,6 @@ upstreams:
     format: anthropic
     provider_key:
       env: ENV_PROVIDER_KEY
-  legacy:
-    api_root: https://api.legacy.example/v1
-    format: openai-responses
-    provider_key_env: LEGACY_PROVIDER_KEY
 "#,
         )
         .expect("provider_key sources and static data_auth should parse");
@@ -2505,11 +2495,6 @@ upstreams:
         assert_eq!(
             upstream("env")["provider_key"]["env_name"],
             "ENV_PROVIDER_KEY"
-        );
-        assert_eq!(upstream("legacy")["provider_key"]["source"], "env");
-        assert_eq!(
-            upstream("legacy")["provider_key"]["env_name"],
-            "LEGACY_PROVIDER_KEY"
         );
 
         let serialized = view.to_string();
@@ -2605,18 +2590,6 @@ upstreams:
 "#,
             ),
             (
-                "conflicting provider_key and provider_key_env",
-                r#"
-upstreams:
-  demo:
-    api_root: https://api.openai.com/v1
-    format: openai-chat-completions
-    provider_key:
-      inline: super-secret-inline-value
-    provider_key_env: DEMO_PROVIDER_KEY
-"#,
-            ),
-            (
                 "blank inline",
                 r#"
 upstreams:
@@ -2653,18 +2626,22 @@ upstreams:
     }
 
     #[test]
-    fn validate_rejects_empty_provider_key_env() {
+    fn validate_rejects_provider_key_env_with_migration_hint() {
         let c = Config::from_yaml_str(
             r#"
 upstreams:
   demo:
     api_root: https://api.openai.com/v1
     format: openai-chat-completions
-    provider_key_env: "   "
+    provider_key_env: DEMO_PROVIDER_KEY
 "#,
         )
         .unwrap();
-        assert!(c.validate().is_err());
+        let error = c
+            .validate()
+            .expect_err("provider_key_env should be rejected");
+        assert!(error.contains("provider_key_env was removed"), "{error}");
+        assert!(error.contains("provider_key: { env: ENV }"), "{error}");
     }
 
     #[test]
@@ -2883,8 +2860,11 @@ upstreams:
                 api_root: "https://user:pass@api.openai.com/v1?api_key=inline-secret#frag"
                     .to_string(),
                 fixed_upstream_format: Some(UpstreamFormat::OpenAiResponses),
-                provider_key_env: Some("DEMO_KEY".to_string()),
-                provider_key: None,
+                provider_key_env: None,
+                provider_key: Some(SecretSourceConfig {
+                    inline: None,
+                    env: Some("DEMO_KEY".to_string()),
+                }),
                 upstream_headers: vec![
                     ("x-tenant".to_string(), "demo".to_string()),
                     (
@@ -2937,7 +2917,10 @@ upstreams:
         let json = serde_json::to_value(&view).unwrap();
 
         assert_eq!(
-            view.upstreams[0].provider_key_env.as_deref(),
+            view.upstreams[0]
+                .provider_key
+                .as_ref()
+                .and_then(|key| key.env_name.as_deref()),
             Some("DEMO_KEY")
         );
         assert_eq!(view.upstreams[0].api_root, "https://api.openai.com/v1");

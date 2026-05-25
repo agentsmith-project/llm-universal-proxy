@@ -618,11 +618,13 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-ANTHROPIC:
                     api_root: "https://api.minimaxi.com/anthropic/v1"
                     format: anthropic
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                 model_aliases:
                   minimax-anth: "MINIMAX-ANTHROPIC:MiniMax-M2.7-highspeed"
                   minimax-openai: "MINIMAX-OPENAI:MiniMax-M2.7-highspeed"
@@ -654,7 +656,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
                       max_output_tokens: 128000
@@ -678,6 +681,27 @@ class RealCliMatrixTests(unittest.TestCase):
             64000,
         )
 
+    def test_parse_proxy_source_rejects_provider_key_env_with_migration_hint(self):
+        module = load_module()
+
+        with self.assertRaises(ValueError) as raised:
+            module.parse_proxy_source(
+                textwrap.dedent(
+                    """
+                    listen: 127.0.0.1:18888
+                    upstreams:
+                      LEGACY:
+                        api_root: "https://api.example.com/v1"
+                        format: openai-chat-completions
+                        provider_key_env: TEST_PROVIDER_API_KEY
+                    """
+                )
+            )
+
+        message = str(raised.exception)
+        self.assertIn("provider_key_env was removed", message)
+        self.assertIn("provider_key: { env: ENV }", message)
+
     def test_parse_proxy_source_extracts_upstream_surface_defaults_and_alias_surface(self):
         module = load_module()
 
@@ -689,7 +713,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     surface_defaults:
                       modalities:
                         input: ["text"]
@@ -1010,7 +1035,7 @@ class RealCliMatrixTests(unittest.TestCase):
         self.assertIn("PRESET-OPENAI-RESPONSES-COMPATIBLE:", rendered)
         self.assertIn("PRESET-ANTHROPIC-COMPATIBLE:", rendered)
         self.assertIn("api_root: https://anthropic-compatible.example/v1", rendered)
-        self.assertEqual(rendered.count("provider_key_env: PRESET_ENDPOINT_API_KEY"), 3)
+        self.assertEqual(rendered.count("env: PRESET_ENDPOINT_API_KEY"), 3)
         self.assertIn(
             'preset-openai-compatible: "PRESET-OPENAI-COMPATIBLE:provider-configured-model"',
             rendered,
@@ -1088,7 +1113,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: MINIMAX_API_KEY
+                    provider_key:
+                      env: MINIMAX_API_KEY
                 model_aliases:
                   minimax-openai: "MINIMAX-OPENAI:MiniMax-M2.7-highspeed"
                 """
@@ -1107,10 +1133,10 @@ class RealCliMatrixTests(unittest.TestCase):
             trace_path=pathlib.Path("/tmp/cli-matrix-trace.jsonl"),
         )
 
-        self.assertIn("provider_key_env: LOCAL_QWEN_API_KEY", rendered)
+        self.assertIn("env: LOCAL_QWEN_API_KEY", rendered)
         self.assertNotIn("sk-local-secret-that-must-not-be-rendered", rendered)
 
-    def test_build_runtime_config_omits_local_qwen_when_provider_key_env_is_missing(self):
+    def test_build_runtime_config_omits_local_qwen_when_provider_key_env_source_is_missing(self):
         module = load_module()
         parsed = module.parse_proxy_source(
             DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
@@ -1129,7 +1155,7 @@ class RealCliMatrixTests(unittest.TestCase):
 
         self.assertNotIn("LOCAL-QWEN:", rendered)
         self.assertNotIn('qwen-local: "LOCAL-QWEN:', rendered)
-        self.assertNotIn("provider_key_env: LOCAL_QWEN_API_KEY", rendered)
+        self.assertNotIn("env: LOCAL_QWEN_API_KEY", rendered)
 
     def test_build_runtime_config_preserves_structured_model_alias_limits(self):
         module = load_module()
@@ -1141,7 +1167,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
                       max_output_tokens: 128000
@@ -1181,7 +1208,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     surface_defaults:
                       modalities:
                         input: ["text"]
@@ -1242,7 +1270,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     proxy:
                       url: http://upstream-proxy.example:8080
                     surface_defaults:
@@ -1332,7 +1361,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
                       max_output_tokens: 128000
@@ -1360,7 +1390,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
                       max_output_tokens: 128000
@@ -1387,7 +1418,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
                 model_aliases:
@@ -1411,7 +1443,8 @@ class RealCliMatrixTests(unittest.TestCase):
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     surface_defaults:
                       modalities:
                         input: ["text"]
@@ -1814,7 +1847,8 @@ print(json.dumps({{
                       DEFAULT:
                         api_root: https://api.example.com/v1
                         format: openai-responses
-                        provider_key_env: LLMUP_PROVIDER_DEFAULT_API_KEY
+                        provider_key:
+                          env: LLMUP_PROVIDER_DEFAULT_API_KEY
                         limits:
                           context_window: 200000
                           max_output_tokens: 128000
@@ -1899,7 +1933,8 @@ print(json.dumps({{
                   MINIMAX-OPENAI:
                     api_root: "https://api.minimaxi.com/v1"
                     format: openai-chat-completions
-                    provider_key_env: TEST_PROVIDER_API_KEY
+                    provider_key:
+                      env: TEST_PROVIDER_API_KEY
                     limits:
                       context_window: 200000
                     surface_defaults:
@@ -1948,7 +1983,8 @@ print(json.dumps({{
                       MINIMAX-OPENAI:
                         api_root: "https://api.minimaxi.com/v1"
                         format: openai-chat-completions
-                        provider_key_env: TEST_PROVIDER_API_KEY
+                        provider_key:
+                          env: TEST_PROVIDER_API_KEY
                     model_aliases:
                       vision-openai:
                         target: "MINIMAX-OPENAI:MiniMax-Vision"
@@ -1973,7 +2009,8 @@ print(json.dumps({{
                       MINIMAX-OPENAI:
                         api_root: "https://api.minimaxi.com/v1"
                         format: openai-chat-completions
-                        provider_key_env: TEST_PROVIDER_API_KEY
+                        provider_key:
+                          env: TEST_PROVIDER_API_KEY
                         codex:
                           input_modalities: ["text", "image"]
                           supports_search_tool: true

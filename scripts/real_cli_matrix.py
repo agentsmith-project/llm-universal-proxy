@@ -721,6 +721,11 @@ def parse_proxy_source(text: str) -> ProxySourceConfig:
                 current_upstream_nested_key = None
                 current_upstream_surface_section = None
                 key, value = stripped.split(":", 1)
+                if key == "provider_key_env":
+                    raise ValueError(
+                        f"upstream {current_upstream} provider_key_env was removed before GA; "
+                        "use provider_key: { env: ENV }"
+                    )
                 if not value.strip():
                     current_upstream_nested_key = key
                     upstreams[current_upstream][key] = collections.OrderedDict()
@@ -907,7 +912,11 @@ def required_preset_endpoint_env_keys(config: ProxySourceConfig) -> tuple[str, .
             continue
         if upstream.get("api_root") == base_url_env:
             _append_unique(required, base_url_env)
-        if upstream.get("provider_key_env") == PRESET_ENDPOINT_API_KEY_ENV:
+        provider_key = upstream.get("provider_key")
+        if (
+            isinstance(provider_key, collections.abc.Mapping)
+            and provider_key.get("env") == PRESET_ENDPOINT_API_KEY_ENV
+        ):
             _append_unique(required, PRESET_ENDPOINT_API_KEY_ENV)
 
     preset_upstreams = _preset_upstream_names()
@@ -1073,7 +1082,10 @@ def _runtime_upstreams(
             [
                 ("api_root", dotenv_env["LOCAL_QWEN_BASE_URL"]),
                 ("format", "openai-chat-completions"),
-                ("provider_key_env", "LOCAL_QWEN_API_KEY"),
+                (
+                    "provider_key",
+                    collections.OrderedDict([("env", "LOCAL_QWEN_API_KEY")]),
+                ),
             ]
         )
         upstreams["LOCAL-QWEN"] = qwen_upstream

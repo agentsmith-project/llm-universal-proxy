@@ -140,13 +140,13 @@ The proxy MUST support:
 - **Auto-discovery** — probe upstream to detect supported protocols when format is not explicitly set
 - **Credential policies**:
   - `data_auth` — a process-wide static/global auth config that applies to all namespaces and all provider/model/resource routes; when omitted, `LLM_UNIVERSAL_PROXY_AUTH_MODE` and `LLM_UNIVERSAL_PROXY_KEY` remain the environment fallback
-  - `client_provider_key` — clients send provider keys directly; missing keys fail closed; upstream `provider_key.inline` is rejected, while upstream `provider_key.env` and `provider_key_env` are accepted for compatibility but not used
+  - `client_provider_key` — clients send provider keys directly; missing keys fail closed; upstream `provider_key.inline` is rejected, while upstream `provider_key.env` is accepted but not used
   - `proxy_key` — clients send the configured proxy key; upstream calls require exactly one provider credential source on each routable upstream
 - **Provider credential sources**:
   - `provider_key: { inline: "..." }` — inline provider key, accepted for controlled generated/local config and redacted from admin reads
   - `provider_key: { env: "ENV" }` — structured env var source
-  - `provider_key_env: ENV` — legacy env var source kept for compatibility
-  - `provider_key.inline`, `provider_key.env`, and `provider_key_env` MUST be mutually exclusive and non-empty
+  - `provider_key_env: ENV` — pre-GA legacy env var source removed and rejected; use `provider_key: { env: ENV }`
+  - `provider_key.inline` and `provider_key.env` MUST be mutually exclusive and non-empty
 - **Discovery availability split**:
   - fixed-format upstreams are immediately available
   - auto-discovered upstreams are available only when discovery returns at least one supported protocol

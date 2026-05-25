@@ -644,7 +644,8 @@ upstreams:
   PRESET-OPENAI-COMPATIBLE:
     api_root: PRESET_OPENAI_ENDPOINT_BASE_URL
     format: openai-chat-completions
-    provider_key_env: PRESET_ENDPOINT_API_KEY
+    provider_key:
+      env: PRESET_ENDPOINT_API_KEY
     limits:
       context_window: 200000
       max_output_tokens: 128000
@@ -899,7 +900,8 @@ upstreams:
   MINIMAX-OPENAI:
     api_root: "https://api.minimaxi.com/v1"
     format: openai-chat-completions
-    provider_key_env: TEST_PROVIDER_API_KEY
+    provider_key:
+      env: TEST_PROVIDER_API_KEY
     surface_defaults:
       modalities:
         input: ["text"]
@@ -998,7 +1000,8 @@ upstreams:
   PRESET-COMPAT:
     api_root: "https://preset.example/v1"
     format: openai-chat-completions
-    provider_key_env: PRESET_ENDPOINT_API_KEY
+    provider_key:
+      env: PRESET_ENDPOINT_API_KEY
 model_aliases:
   preset-chat: "PRESET-COMPAT:preset-model"
 """.lstrip(),
@@ -1058,7 +1061,7 @@ model_aliases:
         runtime_config_text = start_proxy.call_args.args[1]
         proxy_env = start_proxy.call_args.args[3]
         self.assertIs(process, fake_process)
-        self.assertIn("provider_key_env: PRESET_ENDPOINT_API_KEY", runtime_config_text)
+        self.assertIn("env: PRESET_ENDPOINT_API_KEY", runtime_config_text)
         self.assertNotIn("provider_key_inline", runtime_config_text)
         self.assertNotIn("proxy-only-secret", runtime_config_text)
         self.assertNotIn("MINIMAX", runtime_config_text.upper())
@@ -1235,7 +1238,8 @@ upstreams:
   MINIMAX-OPENAI:
     api_root: "https://api.minimaxi.com/v1"
     format: openai-chat-completions
-    provider_key_env: TEST_PROVIDER_API_KEY
+    provider_key:
+      env: TEST_PROVIDER_API_KEY
     proxy:
       url: http://upstream-proxy.example:8080
 model_aliases:
@@ -1301,7 +1305,8 @@ upstreams:
   MINIMAX-OPENAI:
     api_root: "https://api.minimaxi.com/v1"
     format: openai-chat-completions
-    provider_key_env: TEST_PROVIDER_API_KEY
+    provider_key:
+      env: TEST_PROVIDER_API_KEY
     surface_defaults:
       modalities:
         input: ["text"]
