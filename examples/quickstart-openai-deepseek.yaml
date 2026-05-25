@@ -1,6 +1,5 @@
 # Concrete DeepSeek OpenAI-compatible example.
 #
-# This file keeps its historical filename for compatibility with existing links.
 # DeepSeek is a replaceable OpenAI-compatible example, not a GA-required provider
 # and not the main CLI-wrapper preset path. The recommended user-entry config
 # source is quickstart-provider-neutral.yaml; this file shows how to replace

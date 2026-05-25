@@ -233,7 +233,7 @@
 ### Docs And Quickstart
 
 - Reworked the public README/docs around the `llmup` name and provider-API-only usage scope, with a docs index plus dedicated guides for configuration, client setup, and admin-driven dynamic config.
-- Replaced the old homepage path with a simpler two-upstream OpenAI + MiniMax quickstart and matching `examples/quickstart-openai-minimax.yaml`, including stable alias examples such as `gpt-5-4` and `gpt-5-4-mini`.
+- Replaced the old homepage path with a simpler two-upstream OpenAI + DeepSeek quickstart and matching `examples/quickstart-openai-deepseek.yaml`, including stable alias examples such as `gpt-5-4` and `gpt-5-4-mini`.
 - Clarified Codex, Claude Code, and Gemini wrapper routing so the docs now distinguish wrapper base URLs from the proxy endpoints they eventually hit.
 
 ### Tooling

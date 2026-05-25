@@ -13,7 +13,7 @@
 #
 # For direct `llm-universal-proxy --config` use, replace the PRESET_* placeholders
 # with concrete URLs/model names first, or use the concrete DeepSeek example in
-# quickstart-openai-minimax.yaml. The filename is historical.
+# quickstart-openai-deepseek.yaml.
 
 listen: 127.0.0.1:8080
 upstream_timeout_secs: 120

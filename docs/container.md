@@ -326,10 +326,9 @@ CORS response headers are not emitted by default. Set
 `LLM_UNIVERSAL_PROXY_CORS_ALLOWED_ORIGINS` to exact browser origins only when a
 browser client needs cross-origin access.
 
-The concrete DeepSeek OpenAI-compatible example remains available at
-[examples/quickstart-openai-minimax.yaml](../examples/quickstart-openai-minimax.yaml)
-for users who want a named-provider sample. The filename is historical. It is
-optional example material, not the container main path or a GA release-gate
+For a named OpenAI-compatible example, see
+[examples/quickstart-openai-deepseek.yaml](../examples/quickstart-openai-deepseek.yaml).
+It is optional example material, not the container main path or a GA release-gate
 requirement.
 
 ## Local Build and Smoke

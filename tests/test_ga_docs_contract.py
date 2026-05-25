@@ -429,6 +429,7 @@ class GaDocsContractTests(unittest.TestCase):
             "OPENAI_COMPATIBLE_API_KEY",
             "ANTHROPIC_COMPATIBLE_API_KEY",
             "provider-neutral compatible upstreams",
+            "examples/quickstart-openai-deepseek.yaml",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, run_section)
@@ -437,6 +438,9 @@ class GaDocsContractTests(unittest.TestCase):
             "OPENAI_API_KEY",
             "OpenAI/MiniMax",
             "MiniMax is only an example provider choice here",
+            "quickstart-openai-" + "minimax.yaml",
+            "historical " + "filename",
+            "The filename is " + "historical",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, run_section)
