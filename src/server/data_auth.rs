@@ -543,36 +543,25 @@ pub(super) fn validate_runtime_config(config: &Config, access: &DataAccess) -> R
 fn resolve_provider_key(upstream: &UpstreamConfig) -> Result<String, String> {
     match upstream.provider_key_source()? {
         Some(UpstreamProviderKeySourceRef::Inline(value)) => Ok(value.to_string()),
-        Some(UpstreamProviderKeySourceRef::Env { name, legacy }) => match std::env::var(name) {
+        Some(UpstreamProviderKeySourceRef::Env { name }) => match std::env::var(name) {
             Ok(value) if value.trim().is_empty() => Err(format!(
-                "upstream `{}` {} `{name}` must not be empty",
-                upstream.name,
-                provider_env_label(legacy)
+                "upstream `{}` provider_key.env `{name}` must not be empty",
+                upstream.name
             )),
             Ok(value) => Ok(value),
             Err(std::env::VarError::NotPresent) => Err(format!(
-                "upstream `{}` {} `{name}` is not set",
-                upstream.name,
-                provider_env_label(legacy)
+                "upstream `{}` provider_key.env `{name}` is not set",
+                upstream.name
             )),
             Err(std::env::VarError::NotUnicode(_)) => Err(format!(
-                "upstream `{}` {} `{name}` must be valid UTF-8",
-                upstream.name,
-                provider_env_label(legacy)
+                "upstream `{}` provider_key.env `{name}` must be valid UTF-8",
+                upstream.name
             )),
         },
         None => Err(format!(
             "upstream `{}` provider_key is required when {AUTH_MODE_ENV}=proxy_key; configure provider_key: {{ env: ENV }} or provider_key.inline",
             upstream.name
         )),
-    }
-}
-
-fn provider_env_label(legacy: bool) -> &'static str {
-    if legacy {
-        "provider_key_env"
-    } else {
-        "provider_key.env"
     }
 }
 

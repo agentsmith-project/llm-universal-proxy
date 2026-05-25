@@ -178,7 +178,6 @@ async fn admin_namespace_state_sanitizes_urls_and_redacts_sensitive_headers() {
             name: "default".to_string(),
             api_root: "https://user:pass@api.openai.com/v1?api_key=inline-secret#frag".to_string(),
             fixed_upstream_format: Some(crate::formats::UpstreamFormat::OpenAiResponses),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: vec![
                 ("x-tenant".to_string(), "demo".to_string()),
@@ -350,7 +349,6 @@ async fn admin_namespace_state_reports_environment_proxy_without_echoing_url() {
             name: "default".to_string(),
             api_root: "https://api.openai.com/v1".to_string(),
             fixed_upstream_format: Some(crate::formats::UpstreamFormat::OpenAiResponses),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,
@@ -455,7 +453,6 @@ async fn admin_namespace_state_reports_namespace_proxy_source() {
             name: "default".to_string(),
             api_root: "https://api.openai.com/v1".to_string(),
             fixed_upstream_format: Some(crate::formats::UpstreamFormat::OpenAiResponses),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,

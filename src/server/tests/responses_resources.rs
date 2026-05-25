@@ -1550,7 +1550,6 @@ async fn handle_openai_responses_resource_uses_upstream_state_client() {
         name: "responses".to_string(),
         api_root: format!("http://{addr}"),
         fixed_upstream_format: Some(crate::formats::UpstreamFormat::OpenAiResponses),
-        provider_key_env: None,
         provider_key: None,
         upstream_headers: Vec::new(),
         proxy: None,

@@ -297,7 +297,7 @@ impl std::fmt::Debug for SecretSourceRef<'_> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UpstreamProviderKeySourceRef<'a> {
     Inline(&'a str),
-    Env { name: &'a str, legacy: bool },
+    Env { name: &'a str },
 }
 
 impl std::fmt::Debug for UpstreamProviderKeySourceRef<'_> {
@@ -307,11 +307,7 @@ impl std::fmt::Debug for UpstreamProviderKeySourceRef<'_> {
                 .debug_tuple("Inline")
                 .field(&"<redacted>")
                 .finish(),
-            Self::Env { name, legacy } => formatter
-                .debug_struct("Env")
-                .field("name", name)
-                .field("legacy", legacy)
-                .finish(),
+            Self::Env { name } => formatter.debug_struct("Env").field("name", name).finish(),
         }
     }
 }
@@ -604,6 +600,7 @@ impl ModelLimits {
 
 /// Runtime configuration for one named upstream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpstreamConfig {
     /// Stable upstream name referenced by `upstream:model`.
     pub name: String,
@@ -611,9 +608,6 @@ pub struct UpstreamConfig {
     pub api_root: String,
     /// Optional fixed upstream format. When unset, capability discovery is used.
     pub fixed_upstream_format: Option<UpstreamFormat>,
-    /// Provider credential env var name used when the proxy owns upstream credentials.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_key_env: Option<String>,
     /// Provider credential source used when the proxy owns upstream credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_key: Option<SecretSourceConfig>,
@@ -712,25 +706,63 @@ impl Default for RuntimeHookConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RuntimeUpstreamConfig {
     pub name: String,
     pub api_root: String,
-    #[serde(default)]
     pub fixed_upstream_format: Option<UpstreamFormat>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_key_env: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_key: Option<SecretSourceConfig>,
-    #[serde(default)]
     pub upstream_headers: Vec<(String, String)>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
-    #[serde(default)]
     pub limits: Option<ModelLimits>,
-    #[serde(default)]
     pub surface_defaults: Option<ModelSurfacePatch>,
+}
+
+impl<'de> Deserialize<'de> for RuntimeUpstreamConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RuntimeUpstreamConfigWire::deserialize(deserializer)?;
+        if wire.removed_provider_key_env.is_some() {
+            return Err(de::Error::custom(provider_key_env_removed_error(Some(
+                &wire.name,
+            ))));
+        }
+        Ok(RuntimeUpstreamConfig {
+            name: wire.name,
+            api_root: wire.api_root,
+            fixed_upstream_format: wire.fixed_upstream_format,
+            provider_key: wire.provider_key,
+            upstream_headers: wire.upstream_headers,
+            proxy: wire.proxy,
+            limits: wire.limits,
+            surface_defaults: wire.surface_defaults,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeUpstreamConfigWire {
+    name: String,
+    api_root: String,
+    #[serde(default)]
+    fixed_upstream_format: Option<UpstreamFormat>,
+    #[serde(default, rename = "provider_key_env")]
+    removed_provider_key_env: Option<de::IgnoredAny>,
+    #[serde(default)]
+    provider_key: Option<SecretSourceConfig>,
+    #[serde(default)]
+    upstream_headers: Vec<(String, String)>,
+    #[serde(default)]
+    proxy: Option<ProxyConfig>,
+    #[serde(default)]
+    limits: Option<ModelLimits>,
+    #[serde(default)]
+    surface_defaults: Option<ModelSurfacePatch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -863,8 +895,6 @@ struct UpstreamConfigFile {
     #[serde(default, alias = "upstream_format", alias = "format")]
     fixed_upstream_format: Option<UpstreamFormat>,
     #[serde(default)]
-    provider_key_env: Option<String>,
-    #[serde(default)]
     provider_key: Option<SecretSourceConfig>,
     #[serde(default, alias = "headers", alias = "upstream_headers")]
     upstream_headers: BTreeMap<String, String>,
@@ -979,10 +1009,6 @@ impl UpstreamConfig {
     pub(crate) fn provider_key_source(
         &self,
     ) -> Result<Option<UpstreamProviderKeySourceRef<'_>>, String> {
-        if self.provider_key_env.is_some() {
-            return Err(provider_key_env_removed_error(&self.name));
-        }
-
         let mut sources = Vec::new();
         if let Some(provider_key) = &self.provider_key {
             match provider_key.source(&format!("upstream `{}` provider_key", self.name))? {
@@ -990,10 +1016,7 @@ impl UpstreamConfig {
                     sources.push(UpstreamProviderKeySourceRef::Inline(value));
                 }
                 SecretSourceRef::Env(value) => {
-                    sources.push(UpstreamProviderKeySourceRef::Env {
-                        name: value,
-                        legacy: false,
-                    });
+                    sources.push(UpstreamProviderKeySourceRef::Env { name: value });
                 }
             }
         }
@@ -1008,10 +1031,28 @@ impl UpstreamConfig {
     }
 }
 
-fn provider_key_env_removed_error(upstream_name: &str) -> String {
-    format!(
-        "upstream `{upstream_name}` provider_key_env was removed before GA; use provider_key: {{ env: ENV }} instead"
-    )
+fn provider_key_env_removed_error(upstream_name: Option<&str>) -> String {
+    match upstream_name {
+        Some(upstream_name) => format!(
+            "upstream `{upstream_name}` provider_key_env was removed before GA; use provider_key: {{ env: ENV }} instead"
+        ),
+        None => {
+            "provider_key_env was removed before GA; use provider_key: { env: ENV } instead"
+                .to_string()
+        }
+    }
+}
+
+fn yaml_config_parse_error(error: serde_yaml::Error) -> String {
+    let message = error.to_string();
+    if message.contains("provider_key_env") {
+        format!(
+            "failed to parse YAML config: {}",
+            provider_key_env_removed_error(None)
+        )
+    } else {
+        format!("failed to parse YAML config: {message}")
+    }
 }
 
 impl Config {
@@ -1026,8 +1067,7 @@ impl Config {
 
     /// Load config from YAML text. Intended for tests.
     pub fn from_yaml_str(raw: &str) -> Result<Self, String> {
-        let parsed: FileConfig =
-            serde_yaml::from_str(raw).map_err(|e| format!("failed to parse YAML config: {e}"))?;
+        let parsed: FileConfig = serde_yaml::from_str(raw).map_err(yaml_config_parse_error)?;
 
         let upstreams = parsed
             .upstreams
@@ -1036,7 +1076,6 @@ impl Config {
                 name,
                 api_root: item.api_root,
                 fixed_upstream_format: item.fixed_upstream_format,
-                provider_key_env: item.provider_key_env,
                 provider_key: item.provider_key,
                 upstream_headers: item.upstream_headers.into_iter().collect(),
                 proxy: item.proxy,
@@ -1111,9 +1150,6 @@ impl Config {
         for upstream in &self.upstreams {
             if upstream.name.trim().is_empty() {
                 return Err("upstream name must not be empty".to_string());
-            }
-            if upstream.provider_key_env.is_some() {
-                return Err(provider_key_env_removed_error(&upstream.name));
             }
             if upstream.api_root.trim().is_empty() {
                 return Err(format!(
@@ -1323,7 +1359,6 @@ impl TryFrom<RuntimeConfigPayload> for Config {
                 name: item.name,
                 api_root: item.api_root,
                 fixed_upstream_format: item.fixed_upstream_format,
-                provider_key_env: item.provider_key_env,
                 provider_key: item.provider_key,
                 upstream_headers: item.upstream_headers,
                 proxy: item.proxy,
@@ -1375,7 +1410,6 @@ impl From<&Config> for RuntimeConfigPayload {
                     name: item.name.clone(),
                     api_root: item.api_root.clone(),
                     fixed_upstream_format: item.fixed_upstream_format,
-                    provider_key_env: item.provider_key_env.clone(),
                     provider_key: item.provider_key.clone(),
                     upstream_headers: item.upstream_headers.clone(),
                     proxy: item.proxy.clone(),
@@ -1877,7 +1911,6 @@ upstreams:
                 name: "default".to_string(),
                 api_root: "https://api.openai.com/v1".to_string(),
                 fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-                provider_key_env: None,
                 provider_key: None,
                 upstream_headers: Vec::new(),
                 proxy: Some(ProxyConfig::Proxy {
@@ -2262,7 +2295,6 @@ upstreams:
                 name: "default".to_string(),
                 api_root: "https://api.openai.com/v1".to_string(),
                 fixed_upstream_format: Some(UpstreamFormat::OpenAiResponses),
-                provider_key_env: None,
                 provider_key: None,
                 upstream_headers: Vec::new(),
                 proxy: None,
@@ -2288,7 +2320,6 @@ upstreams:
                     name: "glm".to_string(),
                     api_root: "https://example.com/v1".to_string(),
                     fixed_upstream_format: Some(UpstreamFormat::Anthropic),
-                    provider_key_env: None,
                     provider_key: None,
                     upstream_headers: Vec::new(),
                     proxy: None,
@@ -2299,7 +2330,6 @@ upstreams:
                     name: "openai".to_string(),
                     api_root: "https://api.openai.com/v1".to_string(),
                     fixed_upstream_format: Some(UpstreamFormat::OpenAiResponses),
-                    provider_key_env: None,
                     provider_key: None,
                     upstream_headers: Vec::new(),
                     proxy: None,
@@ -2321,7 +2351,6 @@ upstreams:
                 name: "glm".to_string(),
                 api_root: "https://example.com/v1".to_string(),
                 fixed_upstream_format: Some(UpstreamFormat::Anthropic),
-                provider_key_env: None,
                 provider_key: None,
                 upstream_headers: Vec::new(),
                 proxy: None,
@@ -2351,7 +2380,6 @@ upstreams:
                 name: "default".to_string(),
                 api_root: "https://api.openai.com/v1".to_string(),
                 fixed_upstream_format: Some(UpstreamFormat::OpenAiResponses),
-                provider_key_env: None,
                 provider_key: None,
                 upstream_headers: Vec::new(),
                 proxy: None,
@@ -2373,7 +2401,6 @@ upstreams:
                     name: "a".to_string(),
                     api_root: "https://a.example.com/v1".to_string(),
                     fixed_upstream_format: Some(UpstreamFormat::Anthropic),
-                    provider_key_env: None,
                     provider_key: None,
                     upstream_headers: Vec::new(),
                     proxy: None,
@@ -2384,7 +2411,6 @@ upstreams:
                     name: "b".to_string(),
                     api_root: "https://b.example.com/v1".to_string(),
                     fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-                    provider_key_env: None,
                     provider_key: None,
                     upstream_headers: Vec::new(),
                     proxy: None,
@@ -2413,8 +2439,8 @@ upstreams:
     }
 
     #[test]
-    fn config_from_yaml_str_parses_hooks_and_provider_key_env_for_migration_error() {
-        let c = Config::from_yaml_str(
+    fn config_from_yaml_str_rejects_provider_key_env_with_migration_hint() {
+        let error = Config::from_yaml_str(
             r#"
 hooks:
   timeout_secs: 8
@@ -2430,26 +2456,8 @@ upstreams:
     provider_key_env: GLM_APIKEY
 "#,
         )
-        .unwrap();
-
-        assert_eq!(
-            c.hooks.exchange.as_ref().unwrap().url,
-            "https://example.com/exchange"
-        );
-        assert_eq!(c.hooks.timeout.as_secs(), 8);
-        assert_eq!(
-            c.hooks.exchange.as_ref().unwrap().authorization.as_deref(),
-            Some("Bearer hook-token")
-        );
-        assert_eq!(
-            c.hooks.usage.as_ref().unwrap().url,
-            "https://example.com/usage"
-        );
-        let upstream = c.upstream("GLM-OFFICIAL").unwrap();
-        assert_eq!(upstream.provider_key_env.as_deref(), Some("GLM_APIKEY"));
-        let error = c
-            .validate()
-            .expect_err("legacy provider_key_env must be rejected");
+        .expect_err("provider_key_env should fail at YAML parse boundary");
+        let error = error.to_string();
         assert!(error.contains("provider_key_env was removed"), "{error}");
         assert!(error.contains("provider_key: { env: ENV }"), "{error}");
     }
@@ -2517,7 +2525,6 @@ upstreams:
             name: "inline".to_string(),
             api_root: "https://api.inline.example/v1".to_string(),
             fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-            provider_key_env: None,
             provider_key: Some(source.clone()),
             upstream_headers: Vec::new(),
             proxy: None,
@@ -2626,20 +2633,18 @@ upstreams:
     }
 
     #[test]
-    fn validate_rejects_provider_key_env_with_migration_hint() {
-        let c = Config::from_yaml_str(
-            r#"
-upstreams:
-  demo:
-    api_root: https://api.openai.com/v1
-    format: openai-chat-completions
-    provider_key_env: DEMO_PROVIDER_KEY
-"#,
-        )
-        .unwrap();
-        let error = c
-            .validate()
-            .expect_err("provider_key_env should be rejected");
+    fn runtime_config_payload_rejects_provider_key_env_with_migration_hint() {
+        let error = serde_json::from_value::<RuntimeConfigPayload>(serde_json::json!({
+            "listen": "127.0.0.1:0",
+            "upstreams": [{
+                "name": "demo",
+                "api_root": "https://api.openai.com/v1",
+                "fixed_upstream_format": "openai-chat-completions",
+                "provider_key_env": "DEMO_PROVIDER_KEY"
+            }]
+        }))
+        .expect_err("provider_key_env should fail at runtime payload parse boundary");
+        let error = error.to_string();
         assert!(error.contains("provider_key_env was removed"), "{error}");
         assert!(error.contains("provider_key: { env: ENV }"), "{error}");
     }
@@ -2687,7 +2692,6 @@ upstreams:
                 name: "default".to_string(),
                 api_root: "https://api.openai.com/v1".to_string(),
                 fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-                provider_key_env: None,
                 provider_key: None,
                 upstream_headers: vec![("openai-api-key".to_string(), "secret".to_string())],
                 proxy: None,
@@ -2749,7 +2753,6 @@ upstreams:
                 name: "demo".to_string(),
                 api_root: "https://api.openai.com/v1".to_string(),
                 fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-                provider_key_env: None,
                 provider_key: None,
                 upstream_headers: Vec::new(),
                 proxy: None,
@@ -2860,7 +2863,6 @@ upstreams:
                 api_root: "https://user:pass@api.openai.com/v1?api_key=inline-secret#frag"
                     .to_string(),
                 fixed_upstream_format: Some(UpstreamFormat::OpenAiResponses),
-                provider_key_env: None,
                 provider_key: Some(SecretSourceConfig {
                     inline: None,
                     env: Some("DEMO_KEY".to_string()),

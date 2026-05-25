@@ -74,7 +74,7 @@ class RealProviderMatrixCase:
     surface: str
     mode: str
     feature: str
-    provider_key_env: str
+    provider_key_env_name: str
     required: bool
     default_model: str
     model_alias: str
@@ -91,10 +91,10 @@ class CompatibleProviderConfig:
     provider_label: str
     openai_base_url: str | None
     openai_model: str | None
-    openai_provider_key_env: str | None
+    openai_provider_key_env_name: str | None
     anthropic_base_url: str | None
     anthropic_model: str | None
-    anthropic_provider_key_env: str | None
+    anthropic_provider_key_env_name: str | None
     missing_config: tuple[str, ...]
 
 
@@ -477,7 +477,7 @@ def build_real_provider_matrix_cases(
         surface: str,
         mode: str,
         feature: str,
-        provider_key_env: str,
+        provider_key_env_name: str,
         default_model: str,
         model_alias: str,
         upstream_format: str,
@@ -496,7 +496,7 @@ def build_real_provider_matrix_cases(
                 surface=surface,
                 mode=mode,
                 feature=feature,
-                provider_key_env=provider_key_env,
+                provider_key_env_name=provider_key_env_name,
                 required=required,
                 default_model=default_model,
                 model_alias=model_alias,
@@ -691,8 +691,8 @@ def build_compatible_provider_matrix_cases(
     *,
     openai_model: str,
     anthropic_model: str,
-    openai_provider_key_env: str,
-    anthropic_provider_key_env: str,
+    openai_provider_key_env_name: str,
+    anthropic_provider_key_env_name: str,
 ) -> list[RealProviderMatrixCase]:
     cases: list[RealProviderMatrixCase] = []
 
@@ -701,7 +701,7 @@ def build_compatible_provider_matrix_cases(
         surface: str,
         mode: str,
         feature: str,
-        provider_key_env: str,
+        provider_key_env_name: str,
         default_model: str,
         model_alias: str,
         upstream_format: str,
@@ -719,7 +719,7 @@ def build_compatible_provider_matrix_cases(
                 surface=surface,
                 mode=mode,
                 feature=feature,
-                provider_key_env=provider_key_env,
+                provider_key_env_name=provider_key_env_name,
                 required=True,
                 default_model=default_model,
                 model_alias=model_alias,
@@ -737,7 +737,7 @@ def build_compatible_provider_matrix_cases(
         "openai_chat_completions",
         "unary",
         "chat_completions_unary",
-        openai_provider_key_env,
+        openai_provider_key_env_name,
         openai_model,
         "compat-openai-chat",
         "openai-chat-completions",
@@ -749,7 +749,7 @@ def build_compatible_provider_matrix_cases(
         "openai_chat_completions",
         "stream",
         "chat_completions_stream",
-        openai_provider_key_env,
+        openai_provider_key_env_name,
         openai_model,
         "compat-openai-chat",
         "openai-chat-completions",
@@ -763,7 +763,7 @@ def build_compatible_provider_matrix_cases(
         "anthropic_messages",
         "unary",
         "messages_unary",
-        anthropic_provider_key_env,
+        anthropic_provider_key_env_name,
         anthropic_model,
         "compat-anthropic-messages",
         "anthropic",
@@ -775,7 +775,7 @@ def build_compatible_provider_matrix_cases(
         "anthropic_messages",
         "stream",
         "messages_stream",
-        anthropic_provider_key_env,
+        anthropic_provider_key_env_name,
         anthropic_model,
         "compat-anthropic-messages",
         "anthropic",
@@ -789,7 +789,7 @@ def build_compatible_provider_matrix_cases(
         "openai_chat_completions",
         "fail_closed",
         "responses_stateful_controls_rejected",
-        openai_provider_key_env,
+        openai_provider_key_env_name,
         openai_model,
         "compat-openai-chat",
         "openai-chat-completions",
@@ -1271,7 +1271,7 @@ def _nonempty(value: str | None) -> str | None:
     return value if value else None
 
 
-def _resolve_compatible_provider_key_env(surface_env: str) -> str | None:
+def _resolve_compatible_provider_key_env_name(surface_env: str) -> str | None:
     if _nonempty(os.environ.get(COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV)):
         return COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV
     if _nonempty(os.environ.get(surface_env)):
@@ -1285,8 +1285,8 @@ def resolve_compatible_provider_config(args: argparse.Namespace) -> CompatiblePr
     anthropic_base_url = _nonempty(args.compat_anthropic_base_url)
     anthropic_model = _nonempty(args.compat_anthropic_model)
     provider_label = _nonempty(args.compat_provider_label) or COMPATIBLE_PROVIDER_DEFAULT_LABEL
-    openai_provider_key_env = _resolve_compatible_provider_key_env(COMPAT_OPENAI_CREDENTIAL_ENV)
-    anthropic_provider_key_env = _resolve_compatible_provider_key_env(COMPAT_ANTHROPIC_CREDENTIAL_ENV)
+    openai_provider_key_env_name = _resolve_compatible_provider_key_env_name(COMPAT_OPENAI_CREDENTIAL_ENV)
+    anthropic_provider_key_env_name = _resolve_compatible_provider_key_env_name(COMPAT_ANTHROPIC_CREDENTIAL_ENV)
 
     missing_config: list[str] = []
     if not openai_base_url:
@@ -1297,19 +1297,19 @@ def resolve_compatible_provider_config(args: argparse.Namespace) -> CompatiblePr
         missing_config.append(COMPAT_ANTHROPIC_BASE_URL_ENV)
     if not anthropic_model:
         missing_config.append(COMPAT_ANTHROPIC_MODEL_ENV)
-    if not openai_provider_key_env:
+    if not openai_provider_key_env_name:
         missing_config.append(f"{COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV} or {COMPAT_OPENAI_CREDENTIAL_ENV}")
-    if not anthropic_provider_key_env:
+    if not anthropic_provider_key_env_name:
         missing_config.append(f"{COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV} or {COMPAT_ANTHROPIC_CREDENTIAL_ENV}")
 
     return CompatibleProviderConfig(
         provider_label=provider_label,
         openai_base_url=openai_base_url,
         openai_model=openai_model,
-        openai_provider_key_env=openai_provider_key_env,
+        openai_provider_key_env_name=openai_provider_key_env_name,
         anthropic_base_url=anthropic_base_url,
         anthropic_model=anthropic_model,
-        anthropic_provider_key_env=anthropic_provider_key_env,
+        anthropic_provider_key_env_name=anthropic_provider_key_env_name,
         missing_config=tuple(missing_config),
     )
 
@@ -1321,15 +1321,15 @@ def compatible_provider_surfaces(config: CompatibleProviderConfig) -> list[dict[
             "format": "openai-chat-completions",
             "base_url_env": COMPAT_OPENAI_BASE_URL_ENV,
             "model_env": COMPAT_OPENAI_MODEL_ENV,
-            "provider_key_env": config.openai_provider_key_env,
-            "provider_key_env_alternatives": [
+            "provider_key_env_name": config.openai_provider_key_env_name,
+            "provider_key_env_name_alternatives": [
                 COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV,
                 COMPAT_OPENAI_CREDENTIAL_ENV,
             ],
             "configured": bool(
                 config.openai_base_url
                 and config.openai_model
-                and config.openai_provider_key_env
+                and config.openai_provider_key_env_name
             ),
         },
         {
@@ -1337,15 +1337,15 @@ def compatible_provider_surfaces(config: CompatibleProviderConfig) -> list[dict[
             "format": "anthropic",
             "base_url_env": COMPAT_ANTHROPIC_BASE_URL_ENV,
             "model_env": COMPAT_ANTHROPIC_MODEL_ENV,
-            "provider_key_env": config.anthropic_provider_key_env,
-            "provider_key_env_alternatives": [
+            "provider_key_env_name": config.anthropic_provider_key_env_name,
+            "provider_key_env_name_alternatives": [
                 COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV,
                 COMPAT_ANTHROPIC_CREDENTIAL_ENV,
             ],
             "configured": bool(
                 config.anthropic_base_url
                 and config.anthropic_model
-                and config.anthropic_provider_key_env
+                and config.anthropic_provider_key_env_name
             ),
         },
     ]
@@ -1362,10 +1362,10 @@ def write_compatible_provider_config(
     if (
         not config.openai_base_url
         or not config.openai_model
-        or not config.openai_provider_key_env
+        or not config.openai_provider_key_env_name
         or not config.anthropic_base_url
         or not config.anthropic_model
-        or not config.anthropic_provider_key_env
+        or not config.anthropic_provider_key_env_name
     ):
         raise RuntimeError("missing compatible provider configuration")
 
@@ -1377,12 +1377,12 @@ upstreams:
     api_root: {json.dumps(config.openai_base_url)}
     format: openai-chat-completions
     provider_key:
-      env: {config.openai_provider_key_env}
+      env: {config.openai_provider_key_env_name}
   COMPAT_ANTHROPIC:
     api_root: {json.dumps(config.anthropic_base_url)}
     format: anthropic
     provider_key:
-      env: {config.anthropic_provider_key_env}
+      env: {config.anthropic_provider_key_env_name}
 model_aliases:
   compat-openai-chat: {json.dumps(f"COMPAT_OPENAI_CHAT:{config.openai_model}")}
   compat-anthropic-messages: {json.dumps(f"COMPAT_ANTHROPIC:{config.anthropic_model}")}
@@ -1431,7 +1431,7 @@ def _real_case_report_base(case: RealProviderMatrixCase) -> dict[str, object]:
         "surface": case.surface,
         "mode": case.mode,
         "feature": case.feature,
-        "provider_key_env": case.provider_key_env,
+        "provider_key_env_name": case.provider_key_env_name,
         "required": case.required,
         "default_model": case.default_model,
         "model_alias": case.model_alias,
@@ -1498,17 +1498,17 @@ def build_real_provider_missing_secret_report(
     missing_env: list[str],
 ) -> dict[str, object]:
     missing = set(missing_env)
-    all_missing = all(case.provider_key_env in missing for case in cases if case.required)
+    all_missing = all(case.provider_key_env_name in missing for case in cases if case.required)
     results: list[dict[str, object]] = []
     missing_text = ", ".join(missing_env)
 
     for case in cases:
-        if case.required and case.provider_key_env in missing:
+        if case.required and case.provider_key_env_name in missing:
             results.append(
                 _real_case_preflight_result(
                     case,
                     status="failed",
-                    error=f"{case.provider_key_env} is required for {case.provider.upper()} provider",
+                    error=f"{case.provider_key_env_name} is required for {case.provider.upper()} provider",
                 )
             )
         elif case.required and not all_missing:
@@ -1524,7 +1524,7 @@ def build_real_provider_missing_secret_report(
                 _real_case_preflight_result(
                     case,
                     status="skipped",
-                    error=f"not run because optional provider secret is missing: {case.provider_key_env}",
+                    error=f"not run because optional provider secret is missing: {case.provider_key_env_name}",
                 )
             )
 
@@ -1659,8 +1659,8 @@ def _compatible_cases_from_config(config: CompatibleProviderConfig) -> list[Real
     return build_compatible_provider_matrix_cases(
         openai_model=config.openai_model or "missing-COMPAT_OPENAI_MODEL",
         anthropic_model=config.anthropic_model or "missing-COMPAT_ANTHROPIC_MODEL",
-        openai_provider_key_env=config.openai_provider_key_env or f"{COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV} or {COMPAT_OPENAI_CREDENTIAL_ENV}",
-        anthropic_provider_key_env=config.anthropic_provider_key_env or f"{COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV} or {COMPAT_ANTHROPIC_CREDENTIAL_ENV}",
+        openai_provider_key_env_name=config.openai_provider_key_env_name or f"{COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV} or {COMPAT_OPENAI_CREDENTIAL_ENV}",
+        anthropic_provider_key_env_name=config.anthropic_provider_key_env_name or f"{COMPAT_PROVIDER_SHARED_CREDENTIAL_ENV} or {COMPAT_ANTHROPIC_CREDENTIAL_ENV}",
     )
 
 
@@ -1744,9 +1744,9 @@ def run_real_provider_smoke(args: argparse.Namespace) -> int:
     )
     missing_env = sorted(
         {
-            case.provider_key_env
+            case.provider_key_env_name
             for case in cases
-            if case.required and not os.environ.get(case.provider_key_env)
+            if case.required and not os.environ.get(case.provider_key_env_name)
         }
     )
     if missing_env:

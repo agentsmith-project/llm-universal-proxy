@@ -218,7 +218,6 @@ fn named_upstream(
         name: name.to_string(),
         api_root: upstream_api_root(upstream_base, format),
         fixed_upstream_format: Some(format),
-        provider_key_env: None,
         provider_key: None,
         upstream_headers: Vec::new(),
         proxy: None,
@@ -793,7 +792,6 @@ fn demo_runtime_config(mock_base: &str) -> RuntimeConfigPayload {
             name: "default".to_string(),
             api_root: upstream_api_root(mock_base, UpstreamFormat::OpenAiChatCompletions),
             fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,
@@ -1134,7 +1132,6 @@ fn auto_discovery_config(upstream_base: &str, api_root_format: UpstreamFormat) -
             name: "AUTO".to_string(),
             api_root: upstream_api_root(upstream_base, api_root_format),
             fixed_upstream_format: None,
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,
@@ -1529,7 +1526,6 @@ fn pinned_responses_plus_auto_discovery_config(
                 name: "AUTO".to_string(),
                 api_root: auto_discovery_base.to_string(),
                 fixed_upstream_format: None,
-                provider_key_env: None,
                 provider_key: None,
                 upstream_headers: Vec::new(),
                 proxy: None,
@@ -1860,7 +1856,6 @@ async fn runtime_namespace_config_can_be_created_from_empty_start_with_null_or_m
             name: "default".to_string(),
             api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
             fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: vec![
                 ("x-tenant".to_string(), "demo".to_string()),
@@ -2469,8 +2464,8 @@ async fn admin_dynamic_config_rejects_provider_key_env_with_migration_hint() {
     let _provider_key = ScopedEnvVar::set(PROVIDER_KEY_ENV, "server-secret");
 
     let client = Client::new();
-    let mut payload = demo_runtime_config("https://example.com");
-    payload.upstreams[0].provider_key_env = Some(PROVIDER_KEY_ENV.to_string());
+    let mut payload = serde_json::to_value(demo_runtime_config("https://example.com")).unwrap();
+    payload["upstreams"][0]["provider_key_env"] = json!(PROVIDER_KEY_ENV);
 
     let (proxy_base, _proxy) =
         start_proxy_with_data_auth(Config::default(), DataAuthConfig::proxy_key("proxy-secret"))
@@ -2777,7 +2772,6 @@ async fn admin_put_data_auth_does_not_overwrite_concurrent_namespace_cas_update(
             name: "AUTO".to_string(),
             api_root: discovery_base,
             fixed_upstream_format: None,
-            provider_key_env: None,
             provider_key: Some(SecretSourceConfig {
                 inline: None,
                 env: Some(PROVIDER_KEY_ENV.to_string()),
@@ -3213,7 +3207,6 @@ async fn admin_namespace_state_redacts_inline_credentials_and_hook_authorization
                     name: "default".to_string(),
                     api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
                     fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-                    provider_key_env: None,
                     provider_key: Some(SecretSourceConfig {
                         inline: None,
                         env: Some("DEMO_KEY".to_string()),
@@ -3415,7 +3408,6 @@ async fn admin_namespace_state_reports_namespace_proxy_source_over_http() {
                     name: "default".to_string(),
                     api_root: upstream_api_root(&mock_base, UpstreamFormat::OpenAiChatCompletions),
                     fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-                    provider_key_env: None,
                     provider_key: None,
                     upstream_headers: Vec::new(),
                     proxy: None,
@@ -3765,7 +3757,7 @@ async fn client_provider_key_auth_allows_forwarding_headers_with_valid_provider_
 }
 
 #[tokio::test]
-async fn proxy_key_auth_uses_provider_key_env_source_and_does_not_forward_or_hook_proxy_key() {
+async fn proxy_key_auth_uses_provider_key_env_name_source_and_does_not_forward_or_hook_proxy_key() {
     let _data_env_guard = DATA_SECURITY_ENV_LOCK.lock().await;
     let _provider_key = ScopedEnvVar::set(PROVIDER_KEY_ENV, "server-secret");
 
@@ -3779,7 +3771,6 @@ async fn proxy_key_auth_uses_provider_key_env_source_and_does_not_forward_or_hoo
             name: "GLM-OFFICIAL".to_string(),
             api_root: upstream_api_root(&mock_base, UpstreamFormat::Anthropic),
             fixed_upstream_format: Some(UpstreamFormat::Anthropic),
-            provider_key_env: None,
             provider_key: Some(SecretSourceConfig {
                 inline: None,
                 env: Some(PROVIDER_KEY_ENV.to_string()),
@@ -3877,7 +3868,6 @@ async fn proxy_key_mode_without_provider_key_fails_closed_at_startup() {
             name: "default".to_string(),
             api_root: "https://example.com/v1".to_string(),
             fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,
@@ -3911,7 +3901,6 @@ fn config_with_upstream_header(header_name: &str) -> Config {
             name: "default".to_string(),
             api_root: "https://example.com/v1".to_string(),
             fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: vec![(header_name.to_string(), "server-held-value".to_string())],
             proxy: None,
@@ -4652,7 +4641,6 @@ async fn discovery_empty_result_does_not_masquerade_as_openai_chat_and_returns_5
             name: "AUTO".to_string(),
             api_root: mock_base.clone(),
             fixed_upstream_format: None,
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,
@@ -4807,7 +4795,6 @@ async fn admin_namespace_state_exposes_unavailable_upstream_discovery_status() {
             name: "AUTO".to_string(),
             api_root: mock_base,
             fixed_upstream_format: None,
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,
@@ -8602,7 +8589,6 @@ async fn gemini_brand_model_can_use_openai_compatible_upstream() {
             name: "gemini-openai-compatible".to_string(),
             api_root: format!("{upstream_base}/v1beta/openai"),
             fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,
@@ -9937,7 +9923,6 @@ async fn proxy_key_auth_ignores_raw_client_provider_key() {
             name: "GLM-OFFICIAL".to_string(),
             api_root: upstream_api_root(&glm_base, UpstreamFormat::Anthropic),
             fixed_upstream_format: Some(UpstreamFormat::Anthropic),
-            provider_key_env: None,
             provider_key: Some(SecretSourceConfig {
                 inline: None,
                 env: Some(PROVIDER_KEY_ENV.to_string()),
@@ -11195,7 +11180,6 @@ async fn upstream_unreachable_returns_502() {
             name: "default".to_string(),
             api_root: "http://127.0.0.1:31999/v1".to_string(),
             fixed_upstream_format: Some(UpstreamFormat::OpenAiChatCompletions),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,

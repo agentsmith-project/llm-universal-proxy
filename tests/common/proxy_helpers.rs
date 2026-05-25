@@ -14,7 +14,6 @@ pub fn proxy_config(upstream_base: &str, format: UpstreamFormat) -> Config {
             name: "default".to_string(),
             api_root: upstream_api_root(upstream_base, format),
             fixed_upstream_format: Some(format),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: Vec::new(),
             proxy: None,

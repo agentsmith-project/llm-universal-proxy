@@ -575,8 +575,9 @@ pub fn init_non_interactive(options: InitOptions, api_key: &str) -> Result<InitR
     parsed.validate()?;
 
     let proxy_key = format!("llmup-local-{}", Uuid::new_v4().simple());
-    let provider_key_env = provider_key_env_name("main");
-    let secrets = format!("LLM_UNIVERSAL_PROXY_KEY={proxy_key}\n{provider_key_env}={api_key}\n");
+    let provider_key_env_name = provider_key_env_name("main");
+    let secrets =
+        format!("LLM_UNIVERSAL_PROXY_KEY={proxy_key}\n{provider_key_env_name}={api_key}\n");
     super::env_file::parse_env_file_str(&secrets)?;
 
     write_text_file(&config_path, &config_yaml, options.force)?;
@@ -793,9 +794,6 @@ fn append_upstream_key_status(
     secrets: Option<&EnvFile>,
 ) {
     let mut env_names = BTreeSet::new();
-    if let Some(name) = upstream.provider_key_env.as_deref() {
-        env_names.insert(name);
-    }
     if let Some(provider_key) = &upstream.provider_key {
         if provider_key
             .inline
@@ -875,9 +873,6 @@ fn provider_api_key_configured(config: &Config, secrets: Option<&EnvFile>) -> bo
     let mut has_inline_provider_key = false;
     let mut provider_env_names = BTreeSet::new();
     for upstream in &config.upstreams {
-        if let Some(name) = upstream.provider_key_env.as_deref() {
-            provider_env_names.insert(name.to_string());
-        }
         if let Some(provider_key) = &upstream.provider_key {
             if provider_key
                 .inline
@@ -917,9 +912,6 @@ fn required_secret_env_names(config: &Config) -> BTreeSet<String> {
     }
 
     for upstream in &config.upstreams {
-        if let Some(name) = upstream.provider_key_env.as_deref() {
-            names.insert(name.to_string());
-        }
         if let Some(provider_key) = &upstream.provider_key {
             if let Some(name) = provider_key.env.as_deref() {
                 names.insert(name.to_string());
@@ -1003,7 +995,7 @@ fn add_model_to_local_config(
         .map_err(|error| format!("failed to parse config {}: {error}", config_path.display()))?;
     let root = yaml_mapping_mut(&mut value, "config root")?;
 
-    let (service_name, service_created, provider_key_env) = match &options.service {
+    let (service_name, service_created, provider_key_env_name) = match &options.service {
         AddModelService::Existing { service_name } => {
             validate_existing_service_name(service_name)?;
             if config.upstream(service_name).is_none() {
@@ -1027,15 +1019,15 @@ fn add_model_to_local_config(
                     .iter()
                     .map(|upstream| upstream.name.as_str()),
             )?;
-            let provider_key_env = provider_key_env_name(service_name);
+            let provider_key_env_name = provider_key_env_name(service_name);
             add_upstream_to_yaml(
                 root,
                 service_name,
                 *interface,
                 model_service_url,
-                &provider_key_env,
+                &provider_key_env_name,
             )?;
-            (service_name.clone(), true, Some(provider_key_env))
+            (service_name.clone(), true, Some(provider_key_env_name))
         }
     };
 
@@ -1054,9 +1046,9 @@ fn add_model_to_local_config(
         .validate()
         .map_err(|error| format!("updated config would be invalid: {error}"))?;
 
-    if let Some(provider_key_env) = provider_key_env.as_deref() {
+    if let Some(provider_key_env_name) = provider_key_env_name.as_deref() {
         let api_key = api_key.ok_or_else(|| "provider API key is required".to_string())?;
-        append_secret_env(secrets_path, provider_key_env, api_key)?;
+        append_secret_env(secrets_path, provider_key_env_name, api_key)?;
     }
     write_config_file_atomic(config_path, &rendered)?;
 
@@ -1082,7 +1074,7 @@ fn add_upstream_to_yaml(
     service_name: &str,
     interface: ProviderInterface,
     model_service_url: &str,
-    provider_key_env: &str,
+    provider_key_env_name: &str,
 ) -> Result<(), String> {
     let upstreams = ensure_yaml_mapping_child(root, "upstreams")?;
     if upstreams.contains_key(yaml_key(service_name)) {
@@ -1090,7 +1082,10 @@ fn add_upstream_to_yaml(
     }
 
     let mut provider_key = Mapping::new();
-    provider_key.insert(yaml_key("env"), Value::String(provider_key_env.to_string()));
+    provider_key.insert(
+        yaml_key("env"),
+        Value::String(provider_key_env_name.to_string()),
+    );
 
     let mut upstream = Mapping::new();
     upstream.insert(

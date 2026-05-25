@@ -1275,7 +1275,6 @@ fn runtime_namespace_config(
             name: "default".to_string(),
             api_root: upstream_api_root(upstream_base, format),
             fixed_upstream_format: Some(format),
-            provider_key_env: None,
             provider_key: None,
             upstream_headers: vec![("x-namespace-tag".to_string(), namespace_tag.to_string())],
             proxy: None,

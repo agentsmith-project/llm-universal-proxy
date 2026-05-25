@@ -364,10 +364,7 @@ fn render_config(
 fn provider_key_source_label(upstream: &UpstreamConfig) -> &'static str {
     match upstream.provider_key_source() {
         Ok(Some(UpstreamProviderKeySourceRef::Inline(_))) => "provider_key=inline",
-        Ok(Some(UpstreamProviderKeySourceRef::Env { legacy: false, .. })) => "provider_key=env",
-        Ok(Some(UpstreamProviderKeySourceRef::Env { legacy: true, .. })) => {
-            "provider_key=legacy-env"
-        }
+        Ok(Some(UpstreamProviderKeySourceRef::Env { .. })) => "provider_key=env",
         Ok(None) => "provider_key=client",
         Err(_) => "provider_key=invalid",
     }
@@ -726,7 +723,6 @@ mod tests {
             upstreams: vec![
                 upstream_with_provider_key(
                     "inline-provider",
-                    None,
                     Some(SecretSourceConfig {
                         inline: Some("inline-provider-secret".to_string()),
                         env: None,
@@ -734,18 +730,19 @@ mod tests {
                 ),
                 upstream_with_provider_key(
                     "env-provider",
-                    None,
                     Some(SecretSourceConfig {
                         inline: None,
                         env: Some("STRUCTURED_PROVIDER_KEY_ENV".to_string()),
                     }),
                 ),
                 upstream_with_provider_key(
-                    "removed-provider-key-env-provider",
-                    Some("LEGACY_PROVIDER_KEY_ENV"),
-                    None,
+                    "invalid-provider",
+                    Some(SecretSourceConfig {
+                        inline: None,
+                        env: Some("   ".to_string()),
+                    }),
                 ),
-                upstream_with_provider_key("client-provider", None, None),
+                upstream_with_provider_key("client-provider", None),
             ],
             ..Config::default()
         };
@@ -779,19 +776,16 @@ mod tests {
         );
         assert!(!rendered.contains("inline-provider-secret"));
         assert!(!rendered.contains("STRUCTURED_PROVIDER_KEY_ENV"));
-        assert!(!rendered.contains("LEGACY_PROVIDER_KEY_ENV"));
     }
 
     fn upstream_with_provider_key(
         name: &str,
-        provider_key_env: Option<&str>,
         provider_key: Option<SecretSourceConfig>,
     ) -> UpstreamConfig {
         UpstreamConfig {
             name: name.to_string(),
             api_root: "https://example.test/v1".to_string(),
             fixed_upstream_format: None,
-            provider_key_env: provider_key_env.map(str::to_string),
             provider_key,
             upstream_headers: Vec::new(),
             proxy: None,

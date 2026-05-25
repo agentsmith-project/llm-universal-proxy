@@ -123,14 +123,14 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
         cases = module.build_compatible_provider_matrix_cases(
             openai_model="compat-openai-contract",
             anthropic_model="compat-anthropic-contract",
-            openai_provider_key_env="COMPAT_PROVIDER_API_KEY",
-            anthropic_provider_key_env="COMPAT_PROVIDER_API_KEY",
+            openai_provider_key_env_name="COMPAT_PROVIDER_API_KEY",
+            anthropic_provider_key_env_name="COMPAT_PROVIDER_API_KEY",
         )
 
         self.assertGreaterEqual(len(cases), 5)
         self.assertEqual({case.provider for case in cases}, {"compatible"})
         self.assertEqual(
-            {case.provider_key_env for case in cases},
+            {case.provider_key_env_name for case in cases},
             {"COMPAT_PROVIDER_API_KEY"},
         )
 
@@ -228,8 +228,8 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
         cases = module.build_compatible_provider_matrix_cases(
             openai_model="compat-openai-contract",
             anthropic_model="compat-anthropic-contract",
-            openai_provider_key_env="COMPAT_PROVIDER_API_KEY",
-            anthropic_provider_key_env="COMPAT_PROVIDER_API_KEY",
+            openai_provider_key_env_name="COMPAT_PROVIDER_API_KEY",
+            anthropic_provider_key_env_name="COMPAT_PROVIDER_API_KEY",
         )
         stream_case = next(
             case
@@ -275,7 +275,7 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             {"openai", "anthropic", "deepseek"},
         )
         self.assertEqual(
-            {case.provider_key_env for case in cases if case.required},
+            {case.provider_key_env_name for case in cases if case.required},
             REQUIRED_REAL_PROVIDER_ENVS,
         )
 
@@ -386,8 +386,8 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             module.write_compatible_provider_config(config_path, 43210, compat_config)
             config_text = config_path.read_text(encoding="utf-8")
 
-        self.assertEqual(compat_config.openai_provider_key_env, "COMPAT_OPENAI_API_KEY")
-        self.assertEqual(compat_config.anthropic_provider_key_env, "COMPAT_ANTHROPIC_API_KEY")
+        self.assertEqual(compat_config.openai_provider_key_env_name, "COMPAT_OPENAI_API_KEY")
+        self.assertEqual(compat_config.anthropic_provider_key_env_name, "COMPAT_ANTHROPIC_API_KEY")
         self.assertIn("env: COMPAT_OPENAI_API_KEY", config_text)
         self.assertIn("env: COMPAT_ANTHROPIC_API_KEY", config_text)
         self.assertNotIn("compat-openai-secret", config_text)
@@ -495,6 +495,10 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             {surface["name"] for surface in report["configured_surfaces"]},
             {"openai_chat_completions", "anthropic_messages"},
         )
+        for surface in report["configured_surfaces"]:
+            with self.subTest(surface=surface["name"]):
+                self.assertIn("provider_key_env_name", surface)
+                self.assertNotIn("provider_key_env", surface)
         self.assertEqual(
             set(report["real_surfaces"]),
             {"openai_chat_completions", "anthropic_messages"},
@@ -618,6 +622,7 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
             "surface",
             "mode",
             "feature",
+            "provider_key_env_name",
             "status",
             "duration_ms",
             "error",
@@ -625,6 +630,7 @@ class RealEndpointMatrixContractTests(unittest.TestCase):
         for result in report["results"]:
             with self.subTest(case=result["case_id"]):
                 self.assertGreaterEqual(set(result), required_result_fields)
+                self.assertNotIn("provider_key_env", result)
                 self.assertEqual(result["status"], "failed")
                 self.assertIn(result["provider"].upper(), result["error"].upper())
 
