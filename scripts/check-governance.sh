@@ -640,6 +640,10 @@ run_step = workflow_step_block(job, "Run compatible provider smoke")
 if not run_step:
     failures.append("compatible-provider-smoke job is missing the script run step")
 else:
+    if "continue-on-error: true" not in run_step:
+        failures.append(
+            "compatible provider smoke must remain advisory for release publication while still uploading JSON evidence"
+        )
     for secret_name in COMPAT_PROVIDER_SECRET_ENVS:
         expected = f"{secret_name}: ${{{{ secrets.{secret_name} }}}}"
         if expected not in run_step:

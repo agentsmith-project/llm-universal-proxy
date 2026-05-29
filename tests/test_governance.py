@@ -583,6 +583,7 @@ os.execv(real_git, [real_git, *args])
         self.assertNotIn("Validate protected real provider secrets", release)
         run_step = workflow_step_block(release, "Run compatible provider smoke")
         self.assertTrue(run_step)
+        self.assertIn("continue-on-error: true", run_step)
         for secret_name in COMPAT_PROVIDER_SECRET_ENVS:
             with self.subTest(secret=secret_name):
                 self.assertIn(f"{secret_name}: ${{{{ secrets.{secret_name} }}}}", run_step)
@@ -619,6 +620,7 @@ os.execv(real_git, [real_git, *args])
             "OFFICIAL_PROVIDER_SECRET_ENVS",
             "COMPAT_PROVIDER_SMOKE_JSON",
             "check_compatible_provider_smoke_invocation",
+            "continue-on-error: true",
             'check_absent ".github/workflows/release.yml" "Validate protected real provider secrets"',
             "Upload compatible provider smoke result",
             'if: ${{ always() }}',

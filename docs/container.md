@@ -19,8 +19,8 @@ ghcr.io/agentsmith-project/llm-universal-proxy:latest
 ghcr.io/agentsmith-project/llm-universal-proxy@sha256:e07021a151e88c35ff08e753464a2449ee13f9e7e8adc86c4bf1f0c5df71fa9a
 ```
 
-Cargo package version `0.2.43` is the next release identity; it is not a published container tag yet.
-Do not bind `v0.2.43` to the digest above until a release workflow has pushed
+Cargo package version `0.2.44` is the next release identity; it is not a published container tag yet.
+Do not bind `v0.2.44` to the digest above until a release workflow has pushed
 that tag and refreshed the manifest with the new digest.
 
 `latest` is a convenience tag for quick trials and local experiments. It moves
@@ -374,9 +374,11 @@ CI uses the same shape as local smoke:
 - `release.yml`: run the same Rust and Python contract test gates as CI, then
   require the mock endpoint matrix, CLI wrapper matrix, perf gate, the protected
   `release-compatible-provider` smoke job, and supply-chain gates before the
-  GHCR publishing job can run. The job builds a local `linux/amd64` image for
-  smoke first, then pushes the multi-arch GHCR image only when the ref is a
-  release tag.
+  GHCR publishing job can run. The compatible provider live smoke step is
+  advisory for release publication and always uploads machine-readable evidence,
+  so external compatible-provider outages do not block deterministic patch
+  releases. The job builds a local `linux/amd64` image for smoke first, then
+  pushes the multi-arch GHCR image only when the ref is a release tag.
 - The mock endpoint matrix runs `scripts/real_endpoint_matrix.py --mock`
   against a local mock upstream and covers unary, stream, tool, and error paths
   before release publication.
@@ -386,7 +388,7 @@ CI uses the same shape as local smoke:
   GA/operator validation when CLIs and provider credentials are available.
 - The perf gate runs `scripts/real_endpoint_matrix.py --mock --perf` against the
   same local mock path and emits threshold-checked JSON.
-- The compatible provider smoke gate is separate from container smoke and runs
+- The compatible provider smoke job is separate from container smoke and runs
   only in the protected `release-compatible-provider` environment. It should run
   as provider-neutral compatible live evidence over the OpenAI-compatible chat-completions route `/openai/v1/chat/completions` and the
   Anthropic-compatible messages route `/anthropic/v1/messages`; it does not
@@ -396,12 +398,15 @@ CI uses the same shape as local smoke:
   surfaces use separate credentials; also set `COMPAT_OPENAI_BASE_URL`,
   `COMPAT_OPENAI_MODEL`, `COMPAT_ANTHROPIC_BASE_URL`, and
   `COMPAT_ANTHROPIC_MODEL`, with optional `COMPAT_PROVIDER_LABEL`. The job
+  uses `continue-on-error` for the live smoke step so deterministic release
+  gates can still publish while retaining failed live evidence for follow-up. It
   uploads `artifacts/compatible-provider-smoke.json` as the
   `compatible-provider-smoke` GitHub Actions artifact for external release evidence; it is not a GitHub Release asset unless the workflow is changed to
   attach it to the release.
 - Official OpenAI Responses and broader compatible-provider live smoke can be
   kept as optional extended evidence, but they do not block portable-core GA
-  once the provider-neutral compatible smoke and deterministic gates pass.
+  once the deterministic release gates pass and the provider-neutral compatible
+  smoke artifact has been uploaded.
 - The GHCR image tags, including `latest`, are published only after those
   release gates pass.
 - Governance runs a local secret scan over tracked fixtures, docs, examples, and

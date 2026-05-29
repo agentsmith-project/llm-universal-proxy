@@ -163,7 +163,9 @@ The protected release compatible-provider smoke lives in
 `.github/workflows/release.yml` as `compatible-provider-smoke`, runs in the
 `release-compatible-provider` environment, invokes
 `scripts/real_endpoint_matrix.py --mode compatible-provider-smoke`, and uploads
-`artifacts/compatible-provider-smoke.json`.
+`artifacts/compatible-provider-smoke.json`. The live provider step is advisory
+for release publication; deterministic gates still decide whether patch releases
+can publish.
 
 ## Where To Start By Task
 

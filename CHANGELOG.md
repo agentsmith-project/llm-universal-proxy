@@ -1,13 +1,14 @@
 # Changelog
 
-## Unreleased / Next v0.2.43 (not published)
+## Unreleased / Next v0.2.44 (not published)
 
 - Disabled Codex `features.multi_agent` automatically for launcher-managed aliases backed by translated upstream formats, avoiding Responses namespace tool failures on OpenAI Chat Completions and other non-native Responses targets while preserving multi-agent on native Responses upstreams.
 - Switched launcher-managed Claude Code authentication from `ANTHROPIC_API_KEY` to gateway-style `ANTHROPIC_AUTH_TOKEN`, so `llmup-claude` can reach the local proxy without entering Claude Code's interactive API-key approval or browser-login path.
 - Documented the researched `multi_agent_v1` namespace-tool bridge design, including a future whitelisted flat-function bridge path and the required unary, streaming, history, and tool-choice regression coverage before enabling it experimentally.
-- Advanced the main-branch release identity to Cargo package version `0.2.43`, the next patch version after the published, occupied `v0.2.40` tag and the unpublished, failed `v0.2.41` / `v0.2.42` tags, without moving, deleting, or reusing the existing tag.
-- Kept the checked-in container publication manifest and container docs anchored to the published `v0.2.40` multi-arch image digest while using `0.2.43` / `v0.2.43` as the next release identity, not a published container tag yet.
-- Recorded `v0.2.41` as an unpublished release attempt blocked by the protected Compatible Provider Smoke gate and `v0.2.42` as an unpublished release attempt blocked by Python contract tests, both before GitHub Release creation.
+- Made the protected compatible provider live smoke advisory for release publication while still always uploading `compatible-provider-smoke.json`, so external compatible-provider outages do not block deterministic patch releases.
+- Advanced the main-branch release identity to Cargo package version `0.2.44`, the next patch version after the published, occupied `v0.2.40` tag and the unpublished, failed `v0.2.41` / `v0.2.42` / `v0.2.43` tags, without moving, deleting, or reusing the existing tag.
+- Kept the checked-in container publication manifest and container docs anchored to the published `v0.2.40` multi-arch image digest while using `0.2.44` / `v0.2.44` as the next release identity, not a published container tag yet.
+- Recorded `v0.2.41` and `v0.2.43` as unpublished release attempts blocked by Compatible Provider Smoke and `v0.2.42` as an unpublished release attempt blocked by Python contract tests, all before GitHub Release creation.
 - Verified the `v0.2.40` release workflow, main/tag CI, GitHub Release assets, online `install.sh` asset, and GHCR `v0.2.40` multi-arch image publication.
 
 ## v0.2.40 - 2026-05-20

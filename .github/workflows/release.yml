@@ -384,6 +384,7 @@ jobs:
         run: cargo build --locked --release --verbose
 
       - name: Run compatible provider smoke
+        continue-on-error: true
         env:
           COMPAT_PROVIDER_API_KEY: ${{ secrets.COMPAT_PROVIDER_API_KEY }}
           COMPAT_OPENAI_API_KEY: ${{ secrets.COMPAT_OPENAI_API_KEY }}

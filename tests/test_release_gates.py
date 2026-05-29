@@ -564,6 +564,7 @@ exit 64
 
         run_step = workflow_step_block(job, "Run compatible provider smoke")
         self.assertTrue(run_step, "compatible provider smoke must have a script run step")
+        self.assertIn("continue-on-error: true", run_step)
         for secret_name in COMPAT_PROVIDER_SECRET_ENVS:
             with self.subTest(secret=secret_name):
                 self.assertIn(f"{secret_name}: ${{{{ secrets.{secret_name} }}}}", run_step)

@@ -96,14 +96,16 @@ specific provider as the GA requirement.
 
 ## GA Release Gates
 
-The GA release gates are split between deterministic local checks and protected
-release-environment checks. The mock endpoint matrix and perf gate run against
-local mock upstreams. The compatible provider smoke gate runs only from the
-protected `release-compatible-provider` GitHub environment, uses provider-neutral
+The GA release checks are split between deterministic local gates and protected
+release-environment evidence. The mock endpoint matrix and perf gate run against
+local mock upstreams. The compatible provider smoke runs only from the protected
+`release-compatible-provider` GitHub environment, uses provider-neutral
 `COMPAT_*` configuration, and uploads
 `artifacts/compatible-provider-smoke.json` as a GitHub Actions artifact for
-external release evidence. It is not a GitHub Release asset unless the workflow
-is changed to attach it to the release.
+external release evidence. Its live provider step is advisory for release
+publication so compatible-provider outages do not block deterministic patch
+releases. It is not a GitHub Release asset unless the workflow is changed to
+attach it to the release.
 
 GA release gating includes:
 
