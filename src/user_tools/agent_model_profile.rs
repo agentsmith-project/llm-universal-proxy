@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 
 use crate::config::{ApplyPatchTransport, ModelLimits, ModelModality, ModelSurface};
+use crate::formats::UpstreamFormat;
 use crate::Config;
 
 const AUTO_COMPACT_NUMERATOR: u128 = 85;
@@ -16,6 +17,7 @@ pub const DEFAULT_AGENT_MODEL_ALIAS: &str = "main";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentModelProfile {
     pub alias: String,
+    pub upstream_format: Option<UpstreamFormat>,
     pub limits: Option<ModelLimits>,
     pub surface: ModelSurface,
     pub codex_auto_compact_token_limit: Option<u64>,
@@ -27,6 +29,9 @@ impl AgentModelProfile {
             .model_aliases
             .get(alias)
             .ok_or_else(|| format!("unknown model alias `{alias}`"))?;
+        let upstream_format = config
+            .upstream(&model_alias.upstream_name)
+            .and_then(|upstream| upstream.fixed_upstream_format);
         let surface = config.effective_model_surface(model_alias);
         let limits = surface.limits.clone();
         let codex_auto_compact_token_limit =
@@ -34,6 +39,7 @@ impl AgentModelProfile {
 
         Ok(Self {
             alias: alias.to_string(),
+            upstream_format,
             limits,
             surface,
             codex_auto_compact_token_limit,

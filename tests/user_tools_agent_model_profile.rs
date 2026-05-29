@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use llm_universal_proxy::config::ModelModality;
+use llm_universal_proxy::formats::UpstreamFormat;
 use llm_universal_proxy::user_tools::agent_model_profile::{
     build_codex_model_catalog, build_codex_model_catalog_for_profiles,
     write_codex_model_catalog_for_profiles, AgentModelCatalog, AgentModelProfile,
@@ -84,6 +85,10 @@ model_aliases:
         AgentModelProfile::from_config(&config, "minimax").expect("profile should resolve alias");
 
     assert_eq!(profile.alias, "minimax");
+    assert_eq!(
+        profile.upstream_format,
+        Some(UpstreamFormat::OpenAiResponses)
+    );
     let limits = profile.limits.as_ref().expect("limits should merge");
     assert_eq!(limits.context_window, Some(200000));
     assert_eq!(limits.max_output_tokens, Some(128000));

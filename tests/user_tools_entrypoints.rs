@@ -156,6 +156,7 @@ with open(log_path, "w", encoding="utf-8") as log:
         log.write(f"ARG={arg}\n")
     for name in [
         "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
@@ -196,7 +197,7 @@ with open(log_path, "a", encoding="utf-8") as log:
     log.write(f"SUBAGENT_MODEL={subagent_model}\n")
 
 base_url = os.environ["ANTHROPIC_BASE_URL"].rstrip("/")
-api_key = os.environ["ANTHROPIC_API_KEY"]
+auth_token = os.environ["ANTHROPIC_AUTH_TOKEN"]
 
 def post_message(request_model, content, error_base):
     body = {
@@ -210,7 +211,7 @@ def post_message(request_model, content, error_base):
         data=json.dumps(body).encode("utf-8"),
         method="POST",
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
         },
@@ -795,7 +796,7 @@ fn claude_managed_launcher_runs_fake_client_with_injection_isolation_and_proxy_l
   for arg in "$@"; do
     printf 'ARG=%s\n' "$arg"
   done
-  printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY"
+  printf 'ANTHROPIC_API_KEY=%s\n' "${ANTHROPIC_API_KEY-unset}"
   printf 'ANTHROPIC_BASE_URL=%s\n' "$ANTHROPIC_BASE_URL"
   printf 'ANTHROPIC_MODEL=%s\n' "${ANTHROPIC_MODEL-unset}"
   printf 'ANTHROPIC_CUSTOM_MODEL_OPTION=%s\n' "${ANTHROPIC_CUSTOM_MODEL_OPTION-unset}"
@@ -898,12 +899,13 @@ exit 9
     assert!(fake.contains("LLMUP_PROVIDER_DEFAULT_API_KEY=unset"));
     assert!(fake.contains("LLMUP_PROVIDER_MAIN_API_KEY=unset"));
     assert!(fake.contains("UNRELATED_SECRET_COPY=unset"));
-    assert!(fake.contains("ANTHROPIC_AUTH_TOKEN=unset"));
+    assert!(!fake.contains("ANTHROPIC_AUTH_TOKEN=parent-auth-token"));
     assert!(fake.contains("ANTHROPIC_BEDROCK_TOKEN=unset"));
     assert!(fake.contains("AWS_ACCESS_KEY_ID=unset"));
 
     let local_proxy_key = local_proxy_key(&llmup_home);
-    assert!(fake.contains(&format!("ANTHROPIC_API_KEY={local_proxy_key}")));
+    assert!(fake.contains("ANTHROPIC_API_KEY=unset"));
+    assert!(fake.contains(&format!("ANTHROPIC_AUTH_TOKEN={local_proxy_key}")));
 
     let user_config = fs::read_to_string(llmup_home.join("config.yaml")).expect("read user config");
     assert!(user_config.contains("listen: 127.0.0.1:8080"));
@@ -1017,7 +1019,8 @@ async fn claude_full_flow_fake_client_reaches_proxy_and_mock_upstream() {
 
     let fake = fs::read_to_string(&fake_log).expect("read fake client log");
     let local_proxy_key = local_proxy_key(&llmup_home);
-    assert!(fake.contains(&format!("ANTHROPIC_API_KEY={local_proxy_key}")));
+    assert!(fake.contains("ANTHROPIC_API_KEY=unset"));
+    assert!(fake.contains(&format!("ANTHROPIC_AUTH_TOKEN={local_proxy_key}")));
     assert!(!fake.contains(PROVIDER_KEY));
     assert!(!fake.contains("parent-provider-key"));
     assert!(!fake.contains("parent-model"));
@@ -1174,7 +1177,10 @@ model_aliases:
         }
 
         let fake = fs::read_to_string(&fake_log).expect("read fake client log");
-        assert!(fake.contains(&format!("ANTHROPIC_API_KEY=local-proxy-key-family-{alias}")));
+        assert!(fake.contains("ANTHROPIC_API_KEY=unset"));
+        assert!(fake.contains(&format!(
+            "ANTHROPIC_AUTH_TOKEN=local-proxy-key-family-{alias}"
+        )));
         assert!(!fake.contains(&provider_key));
         assert!(!fake.contains("parent-provider-key"));
         assert!(!fake.contains("parent-model"));

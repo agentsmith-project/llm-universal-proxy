@@ -82,7 +82,7 @@ V1 要补的不是大架构，而是验证和小修：
 当前实现已经注入：
 
 - `CLAUDE_CONFIG_DIR=<llmup managed dir>`
-- `ANTHROPIC_API_KEY=<local proxy key>`
+- `ANTHROPIC_AUTH_TOKEN=<local proxy key>`
 - `ANTHROPIC_BASE_URL=<llmup>/anthropic`
 - `ANTHROPIC_MODEL=<llmup alias>`
 - `ANTHROPIC_CUSTOM_MODEL_OPTION=<llmup alias>`
@@ -115,7 +115,7 @@ V1 不实现 teammate global config 写入，也不把 agent teams 作为硬保�
 ### Contract tests
 
 - Codex launcher argv/env 包含 proxy provider、base URL、env key、wire API、model catalog、model alias。
-- Claude launcher env 包含 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_MODEL`、`ANTHROPIC_CUSTOM_MODEL_OPTION`。
+- Claude launcher env 包含 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_MODEL`、`ANTHROPIC_CUSTOM_MODEL_OPTION`。
 - Claude launcher env 新增并固定：
   - managed profile projection 开启时，`CLAUDE_CODE_SUBAGENT_MODEL=<alias>`。
   - managed proxy 模式下，`CLAUDE_CODE_ATTRIBUTION_HEADER=0`。

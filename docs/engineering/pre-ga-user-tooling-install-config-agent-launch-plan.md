@@ -313,8 +313,8 @@ runtime YAML 生成要求：
 - Codex/Claude 子进程不能继承 `secrets.env` 里声明的真实 provider key；它们只拿本地 proxy key。
 - 客户端环境从当前 shell 复制，但必须先移除 `secrets.env` 中声明的所有变量名；如能安全实现，也移除值等于 `secrets.env` 中 secret value 的父环境变量。随后显式覆盖注入客户端需要的本地 proxy key。第一版不要承诺清理用户 shell 里所有 unrelated provider secrets，避免误删用户环境且难以测试。
 - Codex 客户端环境必须显式设置 `OPENAI_API_KEY="$LLM_UNIVERSAL_PROXY_KEY"`，并确保同名父环境值不会覆盖它。
-- Claude Code 客户端环境必须显式设置 `ANTHROPIC_API_KEY="$LLM_UNIVERSAL_PROXY_KEY"` 和 `ANTHROPIC_BASE_URL="http://127.0.0.1:<port>/anthropic"`，并确保同名父环境值不会覆盖它。
-- Claude Code 客户端环境还必须移除可能绕过 `ANTHROPIC_BASE_URL` 的 provider routing 和认证 helper 变量，再显式写入 llmup 的 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`。至少包括 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BEDROCK_*`、`ANTHROPIC_VERTEX_*`、`ANTHROPIC_FOUNDRY_*`、`ANTHROPIC_AWS_*`、`ANTHROPIC_WORKSPACE_ID`、`AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS`、`GCLOUD_PROJECT`、`GOOGLE_CLOUD_PROJECT`、`CLAUDE_CODE_USE_BEDROCK`、`CLAUDE_CODE_USE_VERTEX`、`CLAUDE_CODE_USE_FOUNDRY`、`CLAUDE_CODE_USE_MANTLE`、`CLAUDE_CODE_USE_ANTHROPIC_AWS`、`CLAUDE_CODE_SKIP_BEDROCK_AUTH`、`CLAUDE_CODE_SKIP_VERTEX_AUTH`、`CLAUDE_CODE_SKIP_FOUNDRY_AUTH`、`CLAUDE_CODE_SKIP_MANTLE_AUTH`、`CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH`。
+- Claude Code 客户端环境必须显式设置 `ANTHROPIC_AUTH_TOKEN="$LLM_UNIVERSAL_PROXY_KEY"` 和 `ANTHROPIC_BASE_URL="http://127.0.0.1:<port>/anthropic"`，并确保同名父环境值不会覆盖它。
+- Claude Code 客户端环境还必须移除可能绕过 `ANTHROPIC_BASE_URL` 的 provider routing 和认证 helper 变量，再显式写入 llmup 的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`。至少包括父环境中的 `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BEDROCK_*`、`ANTHROPIC_VERTEX_*`、`ANTHROPIC_FOUNDRY_*`、`ANTHROPIC_AWS_*`、`ANTHROPIC_WORKSPACE_ID`、`AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS`、`GCLOUD_PROJECT`、`GOOGLE_CLOUD_PROJECT`、`CLAUDE_CODE_USE_BEDROCK`、`CLAUDE_CODE_USE_VERTEX`、`CLAUDE_CODE_USE_FOUNDRY`、`CLAUDE_CODE_USE_MANTLE`、`CLAUDE_CODE_USE_ANTHROPIC_AWS`、`CLAUDE_CODE_SKIP_BEDROCK_AUTH`、`CLAUDE_CODE_SKIP_VERTEX_AUTH`、`CLAUDE_CODE_SKIP_FOUNDRY_AUTH`、`CLAUDE_CODE_SKIP_MANTLE_AUTH`、`CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH`。
 - Claude Code 默认不设置 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`，避免 llmup 意外改变原生 permission / sandbox 行为；需要该 hardening 的高级用户可在外层环境中自行显式设置。
 - 因为不改 `HOME`，dangerous/yolo 这类原生权限参数仍可能访问用户真实文件和凭据。llmup 不解析这些参数，用户需要按 Codex/Claude 原生文档自行理解风险。
 
@@ -445,7 +445,7 @@ Claude Code 官方文档说明：
 `llmup-claude` 应设置：
 
 ```bash
-ANTHROPIC_API_KEY="$LLM_UNIVERSAL_PROXY_KEY"
+ANTHROPIC_AUTH_TOKEN="$LLM_UNIVERSAL_PROXY_KEY"
 ANTHROPIC_BASE_URL="http://127.0.0.1:<port>/anthropic"
 CLAUDE_CONFIG_DIR="$LLMUP_CLAUDE_CONFIG_DIR"
 ANTHROPIC_CUSTOM_MODEL_OPTION="<alias>"
@@ -592,8 +592,8 @@ Launcher 测试：
 - 真实 CLI smoke 验证 managed projection 注入能被当前 Codex/Claude 接受，至少覆盖默认启动、Codex `resume --last`、Codex `exec ...`、Claude `--resume`、原生 `--help`。不为每个 Codex/Claude 子命令建兼容矩阵；如果当前注入方式在常见命令上不可行，优先改用位置无关的配置注入方式。
 - launcher 自己的 `--llmup-help`、`--llmup-version` 不要求客户端存在；原生 `--help` 走 `NativeArgv`，是否需要 proxy 由 managed/no-proxy 模式统一决定。
 - 客户端子进程不继承 `secrets.env` 中声明的真实 provider key，只收到本地 proxy key。
-- 父环境中的 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY` 不覆盖 llmup 注入给客户端的本地 proxy key；unrelated parent secrets 不作为第一版清理承诺。
-- 父环境中的 Claude provider selector 和 gateway/auth helper 变量不会绕过 llmup：`CLAUDE_CODE_USE_BEDROCK`、`CLAUDE_CODE_USE_VERTEX`、`CLAUDE_CODE_USE_FOUNDRY`、`CLAUDE_CODE_USE_MANTLE`、`ANTHROPIC_BEDROCK_*`、`ANTHROPIC_VERTEX_*`、`ANTHROPIC_FOUNDRY_*`、`ANTHROPIC_AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS` 等被 scrub 后再显式注入 llmup 的 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`。
+- 父环境中的 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN` 不覆盖 llmup 注入给客户端的本地 proxy key；unrelated parent secrets 不作为第一版清理承诺。
+- 父环境中的 Claude provider selector 和 gateway/auth helper 变量不会绕过 llmup：`CLAUDE_CODE_USE_BEDROCK`、`CLAUDE_CODE_USE_VERTEX`、`CLAUDE_CODE_USE_FOUNDRY`、`CLAUDE_CODE_USE_MANTLE`、`ANTHROPIC_BEDROCK_*`、`ANTHROPIC_VERTEX_*`、`ANTHROPIC_FOUNDRY_*`、`ANTHROPIC_AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS` 等被 scrub 后再显式注入 llmup 的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL`。
 
 安装器测试：
 

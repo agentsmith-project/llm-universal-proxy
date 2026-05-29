@@ -111,6 +111,26 @@ model_aliases:
     .expect("profile config should parse")
 }
 
+fn launcher_chat_profile_config() -> Config {
+    Config::from_yaml_str(
+        r#"
+listen: 127.0.0.1:8080
+upstreams:
+  DEFAULT:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    provider_key:
+      env: LLMUP_PROVIDER_DEFAULT_API_KEY
+    surface_defaults:
+      tools:
+        supports_search: false
+model_aliases:
+  main: DEFAULT:test-model
+"#,
+    )
+    .expect("chat profile config should parse")
+}
+
 fn managed_mode(port: u16) -> ProxyMode {
     ProxyMode::Managed {
         port,
@@ -372,6 +392,9 @@ fn managed_projection_injects_codex_multi_alias_catalog_and_selected_model_argv(
     assert!(codex
         .windows(2)
         .any(|pair| pair == os_vec(&["-m", "vision"])));
+    assert!(!codex
+        .windows(2)
+        .any(|pair| pair == os_vec(&["-c", "features.multi_agent=false"])));
     assert!(codex
         .iter()
         .any(|arg| { arg.to_string_lossy().starts_with("model_catalog_json=\"") }));
@@ -463,6 +486,30 @@ fn managed_projection_injects_codex_multi_alias_catalog_and_selected_model_argv(
         .iter()
         .any(|arg| { arg.to_string_lossy().starts_with("model_catalog_json=\"") }));
     assert!(no_profile.ends_with(&os_vec(&["--model", "native", "--help"])));
+}
+
+#[test]
+fn managed_projection_disables_codex_multi_agent_for_translated_upstreams() {
+    let temp = TempDir::new("codex-chat-profile");
+    let projection = prepare_profile_projection(
+        AgentKind::Codex,
+        AgentModelCatalog::from_config(&launcher_chat_profile_config(), "main")
+            .expect("model catalog should resolve"),
+        temp.path(),
+    )
+    .expect("codex projection should prepare");
+
+    let codex = build_client_argv(
+        AgentKind::Codex,
+        &managed_mode(31339),
+        &projection,
+        &os_vec(&["exec", "hello"]),
+    );
+
+    assert!(codex
+        .windows(2)
+        .any(|pair| pair == os_vec(&["-c", "features.multi_agent=false"])));
+    assert!(codex.ends_with(&os_vec(&["exec", "hello"])));
 }
 
 #[test]
@@ -1010,9 +1057,10 @@ LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret
     )
     .expect("claude env should build");
     assert_eq!(
-        claude_env.get(&OsString::from("ANTHROPIC_API_KEY")),
+        claude_env.get(&OsString::from("ANTHROPIC_AUTH_TOKEN")),
         Some(&OsString::from("local-proxy-key"))
     );
+    assert!(!claude_env.contains_key(&OsString::from("ANTHROPIC_API_KEY")));
     assert_eq!(
         claude_env.get(&OsString::from("ANTHROPIC_BASE_URL")),
         Some(&OsString::from("http://127.0.0.1:19002/anthropic"))
@@ -1042,7 +1090,6 @@ LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret
     .expect("secrets should parse");
 
     let scrubbed = [
-        "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_WORKSPACE_ID",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "GCLOUD_PROJECT",
@@ -1068,6 +1115,10 @@ LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret
         (
             OsString::from("ANTHROPIC_API_KEY"),
             OsString::from("parent-anthropic-key"),
+        ),
+        (
+            OsString::from("ANTHROPIC_AUTH_TOKEN"),
+            OsString::from("parent-auth-token"),
         ),
         (
             OsString::from("ANTHROPIC_BASE_URL"),
@@ -1099,9 +1150,10 @@ LLMUP_PROVIDER_DEFAULT_API_KEY=provider-secret
         );
     }
     assert_eq!(
-        env.get(&OsString::from("ANTHROPIC_API_KEY")),
+        env.get(&OsString::from("ANTHROPIC_AUTH_TOKEN")),
         Some(&OsString::from("local-proxy-key"))
     );
+    assert!(!env.contains_key(&OsString::from("ANTHROPIC_API_KEY")));
     assert_eq!(
         env.get(&OsString::from("ANTHROPIC_BASE_URL")),
         Some(&OsString::from("http://127.0.0.1:19004/anthropic"))
@@ -1539,9 +1591,10 @@ model_aliases:
     assert_eq!(plan["projection"]["enabled"], true);
     assert_eq!(plan["projection"]["profile"]["alias"], "main");
     assert_eq!(
-        plan["env"]["ANTHROPIC_API_KEY"],
+        plan["env"]["ANTHROPIC_AUTH_TOKEN"],
         serde_json::json!("matrix-proxy-key")
     );
+    assert!(plan["env"]["ANTHROPIC_API_KEY"].is_null());
     assert_eq!(
         plan["env"]["ANTHROPIC_BASE_URL"],
         serde_json::json!("http://matrix-proxy.local:19091/anthropic")

@@ -266,7 +266,7 @@ class RealCliMatrixTests(unittest.TestCase):
             elif client_name == "claude":
                 env = {
                     "CLAUDE_CONFIG_DIR": str(kwargs["client_home"] / ".claude"),
-                    "ANTHROPIC_API_KEY": kwargs["proxy_key"],
+                    "ANTHROPIC_AUTH_TOKEN": kwargs["proxy_key"],
                     "ANTHROPIC_BASE_URL": f"{kwargs['proxy_base']}/anthropic",
                     "ANTHROPIC_CUSTOM_MODEL_OPTION": kwargs["model"],
                     "ANTHROPIC_MODEL": kwargs["model"],
@@ -2067,7 +2067,7 @@ print(json.dumps({{
             argv=["--bare"],
             env={
                 "CLAUDE_CONFIG_DIR": "/tmp/claude-config",
-                "ANTHROPIC_API_KEY": "matrix-proxy-key",
+                "ANTHROPIC_AUTH_TOKEN": "matrix-proxy-key",
                 "ANTHROPIC_BASE_URL": "http://127.0.0.1:18888/anthropic",
                 "ANTHROPIC_CUSTOM_MODEL_OPTION": "preset-anthropic-compatible",
                 "ANTHROPIC_MODEL": "preset-anthropic-compatible",
@@ -2092,7 +2092,8 @@ print(json.dumps({{
 
         self.assertEqual(env["PATH"], "/usr/bin")
         self.assertNotEqual(env["HOME"], "/home/user")
-        self.assertEqual(env["ANTHROPIC_API_KEY"], "matrix-proxy-key")
+        self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "matrix-proxy-key")
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
         self.assertEqual(
             env["ANTHROPIC_CUSTOM_MODEL_OPTION"],
             "preset-anthropic-compatible",

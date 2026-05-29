@@ -866,6 +866,7 @@ os.execv(real_git, [real_git, *args])
         for forbidden in (
             "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
             "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "ANTHROPIC_AUTH_TOKEN=$LLM_UNIVERSAL_PROXY_KEY",
             "client_provider_key",
             "llm-universal-proxy --config",
         ):
@@ -879,7 +880,7 @@ os.execv(real_git, [real_git, *args])
             "Manual Claude Wiring",
             "llm-universal-proxy --config",
             "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
-            "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "ANTHROPIC_AUTH_TOKEN=$LLM_UNIVERSAL_PROXY_KEY",
             "In `client_provider_key` mode, the client SDK key is the real provider key",
             "env: GEMINI_API_KEY",
             "The provider key belongs to the proxy",

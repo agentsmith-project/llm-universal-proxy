@@ -90,15 +90,15 @@ Use a configured `model_aliases` key as `<llmup-alias>`. Codex appends its Respo
 
 ## Manual Claude Wiring
 
-For Claude Code in `proxy_key` mode, the SDK key is also the local proxy key:
+For Claude Code in `proxy_key` mode, the bearer token is the local proxy key:
 
 ```bash
-ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY \
+ANTHROPIC_AUTH_TOKEN=$LLM_UNIVERSAL_PROXY_KEY \
 ANTHROPIC_BASE_URL=http://127.0.0.1:18888/anthropic \
 claude --model sonnet
 ```
 
-Claude Code appends its Messages path to the configured base URL, so the proxy receives Anthropic-style Messages traffic.
+Claude Code sends `ANTHROPIC_AUTH_TOKEN` as a bearer token, which matches llmup's proxy-key auth and avoids the interactive API-key approval path. Claude Code appends its Messages path to the configured base URL, so the proxy receives Anthropic-style Messages traffic.
 
 ## Google Gemini Through OpenAI Chat Completions
 

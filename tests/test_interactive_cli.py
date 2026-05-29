@@ -728,7 +728,7 @@ model_aliases:
                 argv=[*kwargs["native_args"]],
                 env={
                     "CLAUDE_CONFIG_DIR": str(kwargs["client_home"] / ".claude"),
-                    "ANTHROPIC_API_KEY": kwargs["proxy_key"],
+                    "ANTHROPIC_AUTH_TOKEN": kwargs["proxy_key"],
                     "ANTHROPIC_BASE_URL": f"{kwargs['proxy_base']}/anthropic",
                     "ANTHROPIC_CUSTOM_MODEL_OPTION": kwargs["model"],
                     "ANTHROPIC_MODEL": kwargs["model"],

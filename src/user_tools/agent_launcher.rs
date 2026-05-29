@@ -13,10 +13,12 @@ use serde_yaml::Value as YamlValue;
 use uuid::Uuid;
 
 use super::agent_model_profile::{
-    write_codex_model_catalog_for_profiles, AgentModelCatalog, DEFAULT_AGENT_MODEL_ALIAS,
+    write_codex_model_catalog_for_profiles, AgentModelCatalog, AgentModelProfile,
+    DEFAULT_AGENT_MODEL_ALIAS,
 };
 use super::env_file::{read_env_file, EnvFile};
 use super::{env_path_or_default, home_dir_from_env};
+use crate::formats::UpstreamFormat;
 use crate::Config;
 
 const INTERNAL_LAUNCH_PLAN_ENV: &str = "LLMUP_INTERNAL_LAUNCH_PLAN";
@@ -298,6 +300,10 @@ pub fn build_client_argv(
                         argv.push("-c".into());
                         argv.push("tools.web_search=false".into());
                     }
+                    if codex_should_disable_multi_agent(selected_profile) {
+                        argv.push("-c".into());
+                        argv.push("features.multi_agent=false".into());
+                    }
                     argv.push("-m".into());
                     argv.push(selected_profile.alias.clone().into());
                 }
@@ -325,6 +331,10 @@ pub fn prepare_profile_projection(
         model_catalog: Box::new(model_catalog),
         codex_catalog_path,
     })
+}
+
+fn codex_should_disable_multi_agent(profile: &AgentModelProfile) -> bool {
+    profile.upstream_format != Some(UpstreamFormat::OpenAiResponses)
 }
 
 impl ProxyMode {
@@ -451,7 +461,7 @@ pub fn build_client_environment(
                     "CLAUDE_CONFIG_DIR".into(),
                     homes.claude_config_dir.clone().into_os_string(),
                 );
-                env.insert("ANTHROPIC_API_KEY".into(), OsString::from(proxy_key));
+                env.insert("ANTHROPIC_AUTH_TOKEN".into(), OsString::from(proxy_key));
                 env.insert(
                     "ANTHROPIC_BASE_URL".into(),
                     OsString::from(
@@ -975,6 +985,7 @@ fn should_scrub_claude_env(key: &OsStr) -> bool {
         return false;
     };
     const EXACT: &[&str] = &[
+        "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_WORKSPACE_ID",
         "GOOGLE_APPLICATION_CREDENTIALS",

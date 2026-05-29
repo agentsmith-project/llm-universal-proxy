@@ -542,7 +542,7 @@ class GaDocsContractTests(unittest.TestCase):
                 self.assertIn(snippet, codex)
 
         for snippet in (
-            "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "ANTHROPIC_AUTH_TOKEN=$LLM_UNIVERSAL_PROXY_KEY",
             "`proxy_key` mode",
             "local proxy key",
         ):
@@ -561,6 +561,7 @@ class GaDocsContractTests(unittest.TestCase):
         for manual_snippet in (
             "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
             "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
+            "ANTHROPIC_AUTH_TOKEN=$LLM_UNIVERSAL_PROXY_KEY",
             "llm-universal-proxy --config",
             "provider_key_env:",
         ):
