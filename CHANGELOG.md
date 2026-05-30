@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased / Next v0.2.44 (not published)
+## Unreleased / Next v0.2.45 (not published)
+
+- Advanced the main-branch release identity to Cargo package version `0.2.45`, the next patch version after the published, occupied `v0.2.44` tag, without moving, deleting, or reusing the existing tag.
+- Refreshed the checked-in container publication manifest and container docs around the published `v0.2.44` multi-arch image digest while keeping `0.2.45` / `v0.2.45` as the next release identity, not a published container tag yet.
+- Verified the `v0.2.44` release workflow, main/tag CI, GitHub Release assets, online `install.sh` asset, and GHCR `v0.2.44` multi-arch image publication.
+
+## v0.2.44 - 2026-05-29
 
 - Disabled Codex `features.multi_agent` automatically for launcher-managed aliases backed by translated upstream formats, avoiding Responses namespace tool failures on OpenAI Chat Completions and other non-native Responses targets while preserving multi-agent on native Responses upstreams.
 - Switched launcher-managed Claude Code authentication from `ANTHROPIC_API_KEY` to gateway-style `ANTHROPIC_AUTH_TOKEN`, so `llmup-claude` can reach the local proxy without entering Claude Code's interactive API-key approval or browser-login path.

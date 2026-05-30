@@ -9,18 +9,18 @@ ghcr.io/agentsmith-project/llm-universal-proxy
 
 ## Current Release
 
-The current published container image is `v0.2.40`, as recorded in
+The current published container image is `v0.2.44`, as recorded in
 [docs/release-artifacts/container-image.json](release-artifacts/container-image.json):
 
 ```text
-ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.40
-ghcr.io/agentsmith-project/llm-universal-proxy:0.2.40
+ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.44
+ghcr.io/agentsmith-project/llm-universal-proxy:0.2.44
 ghcr.io/agentsmith-project/llm-universal-proxy:latest
-ghcr.io/agentsmith-project/llm-universal-proxy@sha256:e07021a151e88c35ff08e753464a2449ee13f9e7e8adc86c4bf1f0c5df71fa9a
+ghcr.io/agentsmith-project/llm-universal-proxy@sha256:187394a51950148d696edd5e2d558d835d4238415060b2d5f6a23ea58e620976
 ```
 
-Cargo package version `0.2.44` is the next release identity; it is not a published container tag yet.
-Do not bind `v0.2.44` to the digest above until a release workflow has pushed
+Cargo package version `0.2.45` is the next release identity; it is not a published container tag yet.
+Do not bind `v0.2.45` to the digest above until a release workflow has pushed
 that tag and refreshed the manifest with the new digest.
 
 `latest` is a convenience tag for quick trials and local experiments. It moves
@@ -58,13 +58,13 @@ been made public yet, or your organization requires authenticated package pulls.
 Pull the current release tag:
 
 ```bash
-docker pull ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.40
+docker pull ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.44
 ```
 
 Pull the immutable digest when you need the exact published artifact:
 
 ```bash
-docker pull ghcr.io/agentsmith-project/llm-universal-proxy@sha256:e07021a151e88c35ff08e753464a2449ee13f9e7e8adc86c4bf1f0c5df71fa9a
+docker pull ghcr.io/agentsmith-project/llm-universal-proxy@sha256:187394a51950148d696edd5e2d558d835d4238415060b2d5f6a23ea58e620976
 ```
 
 ## Run the Release Image
@@ -94,7 +94,7 @@ docker run --rm --name llmup \
   -e LLM_UNIVERSAL_PROXY_ADMIN_TOKEN \
   -e LLM_UNIVERSAL_PROXY_AUTH_MODE \
   -e LLM_UNIVERSAL_PROXY_KEY \
-  ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.40
+  ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.44
 ```
 
 Provider/model/resource requests must send the proxy key through the normal
@@ -104,7 +104,7 @@ send provider keys in custom proxy headers.
 ## API Bootstrap
 
 API bootstrap is the control-plane-managed path for container services. It is
-available in the current published `v0.2.40` image, so a container can start
+available in the current published `v0.2.44` image, so a container can start
 without any static namespace config and load namespaces through the Admin API.
 
 The release image includes a built-in empty bootstrap config at
@@ -141,7 +141,7 @@ Important boundaries:
 Minimal API bootstrap run:
 
 ```bash
-docker pull ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.40
+docker pull ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.44
 
 export LLM_UNIVERSAL_PROXY_ADMIN_TOKEN="set-a-random-admin-token"
 export LLM_UNIVERSAL_PROXY_AUTH_MODE=proxy_key
@@ -154,7 +154,7 @@ docker run --rm --name llmup-bootstrap \
   -e LLM_UNIVERSAL_PROXY_AUTH_MODE \
   -e LLM_UNIVERSAL_PROXY_KEY \
   -e OPENAI_COMPATIBLE_API_KEY \
-  ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.40
+  ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.44
 ```
 
 Apply a runtime config:
@@ -202,7 +202,7 @@ curl -fsS http://127.0.0.1:8080/ready
 
 This smoke path checks the published image, `/health`, and `/ready` without
 making a real provider request. It mounts the example config so the process can
-load a static namespace immediately. The current published `v0.2.40` image also
+load a static namespace immediately. The current published `v0.2.44` image also
 supports no-mount API bootstrap through the Admin API path above.
 
 Before starting, complete [GHCR Access](#ghcr-access) if `docker pull` returns
@@ -217,7 +217,7 @@ export LLM_UNIVERSAL_PROXY_ADMIN_TOKEN="local-admin-token"
 export LLM_UNIVERSAL_PROXY_AUTH_MODE=proxy_key
 export LLM_UNIVERSAL_PROXY_KEY="local-proxy-key"
 
-docker pull ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.40
+docker pull ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.44
 
 docker run --rm --name llmup-smoke \
   -p 127.0.0.1:8080:8080 \
@@ -227,7 +227,7 @@ docker run --rm --name llmup-smoke \
   -e LLM_UNIVERSAL_PROXY_ADMIN_TOKEN \
   -e LLM_UNIVERSAL_PROXY_AUTH_MODE \
   -e LLM_UNIVERSAL_PROXY_KEY \
-  ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.40
+  ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.44
 ```
 
 In another terminal:
@@ -244,12 +244,12 @@ Stop the first terminal with `Ctrl-C` when both checks return successfully.
 Pin a release tag or digest for production:
 
 ```text
-ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.40
-ghcr.io/agentsmith-project/llm-universal-proxy@sha256:e07021a151e88c35ff08e753464a2449ee13f9e7e8adc86c4bf1f0c5df71fa9a
+ghcr.io/agentsmith-project/llm-universal-proxy:v0.2.44
+ghcr.io/agentsmith-project/llm-universal-proxy@sha256:187394a51950148d696edd5e2d558d835d4238415060b2d5f6a23ea58e620976
 ```
 
-Use the `v0.2.40` tag when you want a readable release reference. Use the
-`sha256:e07021a151e88c35ff08e753464a2449ee13f9e7e8adc86c4bf1f0c5df71fa9a`
+Use the `v0.2.44` tag when you want a readable release reference. Use the
+`sha256:187394a51950148d696edd5e2d558d835d4238415060b2d5f6a23ea58e620976`
 digest when rollout tooling requires an immutable artifact identity.
 
 Do not use `latest` for production pinning. Keep `latest` to quick trials,
