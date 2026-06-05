@@ -2,8 +2,11 @@
 
 - Status: converged GA scope review
 - Review date: 2026-04-25
-- Release recommendation: portable-core production GA after external release prerequisites are completed
-- Current posture: local gates, security defaults, limits, and release-gate structure are complete; protected provider-neutral compatible live-smoke evidence is still pending
+- Release recommendation: portable-core production GA with deterministic local
+  gates plus a protected advisory compatible-provider evidence slot
+- Current posture: local gates, security defaults, limits, and release-gate
+  structure are complete; protected provider-neutral compatible live-smoke is
+  advisory external evidence, not a hard release blocker
 
 ## Executive Summary
 
@@ -47,13 +50,13 @@ same-protocol traffic still uses compatibility machinery.
   scripted interactive Codex wrapper gate, perf gate, a protected compatible
   provider smoke slot, container smoke, and supply-chain checks.
 
-## Remaining External Prerequisites
+## External Evidence Slot
 
-| Area | Required before final GA release | Non-claim until complete |
+| Area | Release evidence handling | Non-claim boundary |
 | --- | --- | --- |
-| Release environment wiring | Configure the protected `release-compatible-provider` environment for a provider-neutral compatible smoke. If one compatible provider exposes both required surfaces, use `COMPAT_PROVIDER_API_KEY`; if the surfaces use separate credentials, use `COMPAT_OPENAI_API_KEY` and `COMPAT_ANTHROPIC_API_KEY`. In both cases set `COMPAT_OPENAI_BASE_URL`, `COMPAT_OPENAI_MODEL`, `COMPAT_ANTHROPIC_BASE_URL`, and `COMPAT_ANTHROPIC_MODEL`; `COMPAT_PROVIDER_LABEL` is optional. | Do not require MiniMax, GLM, or any fixed provider credential set for the GA gate. |
-| Compatible provider run | Execute the protected provider-neutral compatible live smoke from the protected `release-compatible-provider` environment and retain the uploaded `artifacts/compatible-provider-smoke.json` GitHub Actions artifact with the external release evidence. It is not a GitHub Release asset in the current workflow. The required live coverage is the OpenAI-compatible chat-completions route `/openai/v1/chat/completions` plus the Anthropic-compatible messages route `/anthropic/v1/messages`. | Do not call the release provider-certified or fully cross-provider certified from local mocks alone. |
-| External credential rotation | Rotate any credential that may have existed outside the secret manager and record the operator-side rotation evidence. | Do not claim external credential rotation has already been completed by repository changes. |
+| Release environment wiring | Configure the protected `release-compatible-provider` environment when external evidence is available. If one compatible provider exposes both required surfaces, use `COMPAT_PROVIDER_API_KEY`; if the surfaces use separate credentials, use `COMPAT_OPENAI_API_KEY` and `COMPAT_ANTHROPIC_API_KEY`. In both cases set `COMPAT_OPENAI_BASE_URL`, `COMPAT_OPENAI_MODEL`, `COMPAT_ANTHROPIC_BASE_URL`, and `COMPAT_ANTHROPIC_MODEL`; `COMPAT_PROVIDER_LABEL` is optional. | Do not require MiniMax, GLM, or any fixed provider credential set for the GA gate. |
+| Compatible provider run | The release workflow runs the protected provider-neutral compatible live smoke as an advisory step and retains the uploaded `artifacts/compatible-provider-smoke.json` GitHub Actions artifact with the external release evidence. It is not a GitHub Release asset in the current workflow. The live coverage target is the OpenAI-compatible chat-completions route `/openai/v1/chat/completions` plus the Anthropic-compatible messages route `/anthropic/v1/messages`. | Do not call the release provider-certified or fully cross-provider certified from local mocks alone, and do not make compatible-provider outage a deterministic release blocker. |
+| External credential rotation | Rotate any credential that may have existed outside the secret manager and record the operator-side rotation evidence when applicable. | Do not claim external credential rotation has already been completed by repository changes. |
 
 ## Compatibility Boundaries
 
@@ -107,7 +110,7 @@ publication so compatible-provider outages do not block deterministic patch
 releases. It is not a GitHub Release asset unless the workflow is changed to
 attach it to the release.
 
-GA release gating includes:
+Deterministic GA release gating includes:
 
 - Rust unit, integration, and contract tests.
 - Python SDK/contract tests.
@@ -116,28 +119,32 @@ GA release gating includes:
 - CLI wrapper matrix structure check plus a hermetic scripted interactive Codex wrapper gate.
 - Deterministic local perf gate with machine-readable JSON output and threshold
   checks.
-- Compatible provider smoke tests from the protected `release-compatible-provider`
-  environment, covering the OpenAI-compatible chat-completions route
-  `/openai/v1/chat/completions` and the Anthropic-compatible messages route
-  `/anthropic/v1/messages`.
 - Container image smoke tests.
 - Security, secret, and supply-chain scans.
 - Documentation consistency checks for admin/data-plane boundaries and protocol
   compatibility claims.
 
+The protected compatible provider smoke slot is still part of the release
+workflow and uploads external release evidence for the OpenAI-compatible
+chat-completions route `/openai/v1/chat/completions` and the
+Anthropic-compatible messages route `/anthropic/v1/messages`. Its live result is
+advisory and does not block deterministic patch releases.
+
 The CLI wrapper gate is not a full live multi-client/provider matrix; final
 real live client evidence remains GA/operator validation. Official OpenAI
-Responses live smoke and broader compatible-provider smoke are optional extended
-evidence. They can strengthen a release record, but they do not block
-portable-core GA when the provider-neutral compatible live smoke and
-deterministic contract/mock/structure gates pass.
+Responses live smoke, compatible-provider smoke, and broader provider evidence
+are optional extended evidence. They can strengthen a release record, but they
+do not block portable-core GA when deterministic contract/mock/structure,
+container, and supply-chain gates pass.
 
 ## Baseline GA Definition
 
 GA means a production operator can deploy the portable core with documented
 defaults, predictable failure modes, bounded resource usage, secret-managed
-provider credentials, and release artifacts validated by both local contracts
-and the protected provider-neutral compatible live smoke.
+provider credentials, and release artifacts validated by deterministic local
+contracts, mock/structure gates, container smoke, and supply-chain checks. The
+protected provider-neutral compatible live smoke is retained as advisory
+external release evidence when available.
 
 It does not mean every provider-specific feature is equivalent across every
 target. The promise is maximum safe compatibility with hard fail-closed

@@ -973,6 +973,12 @@ class GaDocsContractTests(unittest.TestCase):
                 self.assertNotIn("completions/chat-completions", text)
                 self.assertNotIn("OpenAI-compatible completions surface", text)
                 self.assertNotIn("OpenAI-compatible completions and", text)
+        ga = docs["ga"]
+        self.assertIn("advisory external evidence", ga)
+        self.assertIn("not a hard release blocker", ga)
+        self.assertIn("does not block deterministic patch releases", ga)
+        self.assertNotIn("live-smoke evidence is still pending", ga)
+        self.assertNotIn("Required before final GA release", ga)
 
     def test_changelog_latest_entry_records_next_release_identity_without_published_heading(self):
         refs = container_refs()
