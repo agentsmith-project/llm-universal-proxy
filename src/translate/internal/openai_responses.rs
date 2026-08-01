@@ -683,6 +683,7 @@ pub(super) fn openai_response_to_responses(
         "id": body.get("id").cloned().unwrap_or(serde_json::Value::Null),
         "object": "response",
         "created_at": created_at,
+        "model": body.get("model").cloned().unwrap_or(serde_json::Value::Null),
         "output": output,
         "status": status,
         "incomplete_details": incomplete_details,

@@ -810,6 +810,36 @@ fn response_with_portability_warning_headers(
     response
 }
 
+/// Set the `openai-model` HTTP response header to the client-facing model
+/// alias. Codex CLI (0.146.0+) reads the served model from this header rather
+/// than the JSON body `model` field (see
+/// `docs/engineering/2026-08-01-codex-compat-feedback-plan.md` §2.1), so it is
+/// stamped on every OpenAI-family (Responses + Chat Completions) response —
+/// streaming and non-streaming, success and inline error-passthrough.
+///
+/// The header is skipped for non-OpenAI clients, for an empty alias, or when
+/// the alias contains bytes that are not valid in an HTTP header value, so an
+/// unusual client `model` value can never break response construction.
+fn set_openai_model_header(
+    response: &mut Response<Body>,
+    client_format: UpstreamFormat,
+    model_alias: &str,
+) {
+    if !matches!(
+        client_format,
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses
+    ) {
+        return;
+    }
+    if model_alias.is_empty() {
+        return;
+    }
+    if let Ok(value) = axum::http::HeaderValue::from_str(model_alias) {
+        response.headers_mut().insert("openai-model", value);
+    }
+}
+
+
 fn upstream_request_body_with_synthesized_prompt_cache_key_redacted(
     upstream_request_body: &Value,
     key_fingerprint: &str,
@@ -1575,6 +1605,7 @@ async fn handle_request_core_with_downstream_cancellation(
                     body_len,
                     &response_header_redactor,
                 );
+                set_openai_model_header(&mut response, client_format, &requested_model);
                 return response_with_portability_warning_headers(response, &portability_warnings);
             }
 
@@ -1652,6 +1683,7 @@ async fn handle_request_core_with_downstream_cancellation(
                 &upstream_response_headers,
                 &response_header_redactor,
             );
+            set_openai_model_header(&mut response, client_format, &requested_model);
             return response_with_portability_warning_headers(response, &portability_warnings);
         }
         if !status.is_success() {
@@ -1816,6 +1848,7 @@ async fn handle_request_core_with_downstream_cancellation(
             &upstream_response_headers,
             &response_header_redactor,
         );
+        set_openai_model_header(&mut response, client_format, &requested_model);
         return response_with_portability_warning_headers(response, &portability_warnings);
     }
 
@@ -1928,6 +1961,7 @@ async fn handle_request_core_with_downstream_cancellation(
             body_len,
             &response_header_redactor,
         );
+        set_openai_model_header(&mut response, client_format, &requested_model);
         return response_with_portability_warning_headers(response, &portability_warnings);
     }
     if !status.is_success() {
@@ -2091,6 +2125,7 @@ async fn handle_request_core_with_downstream_cancellation(
             &response_header_redactor,
         );
     }
+    set_openai_model_header(&mut response, client_format, &requested_model);
     response_with_portability_warning_headers(response, &portability_warnings)
 }
 
