@@ -1024,3 +1024,79 @@ fn translate_sse_event_anthropic_to_responses_preserves_commentary_in_completed_
         "tool-boundary terminal should not mislabel commentary as final_answer: {output:?}"
     );
 }
+
+/// Regression guard for H2: draining many small SSE frames must stay linear.
+///
+/// The original `drain_validated_frames` had two coupled O(frame_count x
+/// buffer_len) costs on a buffer holding many tiny frames: (1) `take_one_sse_frame`
+/// did `Vec::drain(..end)` per frame, memmoving the entire remaining tail each
+/// frame, and (2) the boundary search scanned the whole remaining buffer for
+/// `\r\n\r\n` before falling back to `\n\n`, which for LF-separated frames ran
+/// the full-tail scan every frame. Feeding ~100k tiny LF frames packed into one
+/// upstream chunk therefore burned tens of seconds of CPU on a single chunk.
+///
+/// The fixed drain parses frames read-only (`read_one_sse_frame`, single-pass
+/// boundary search) tracking a consumed offset and compacts the buffer once
+/// (`drop_sse_prefix`), keeping it O(buffer_len + frame_count). This test feeds
+/// that worst case through `GuardedSseStream` and asserts it drains promptly and
+/// yields exactly the right frames.
+///
+/// Release-only: in a debug build the per-frame `serde_json` parse dominates,
+/// so the quadratic signal (and a tight budget) only makes sense under an
+/// optimized build (`cargo test --release --lib streaming`).
+#[cfg(not(debug_assertions))]
+#[tokio::test]
+async fn guarded_sse_stream_drains_many_small_frames_without_quadratic_blowup() {
+    const FRAME_COUNT: usize = 200_000;
+    let mut chunk = Vec::with_capacity(FRAME_COUNT * 12);
+    for i in 0..FRAME_COUNT {
+        chunk.extend_from_slice(format!("data:{i}\n\n").as_bytes());
+    }
+    let inner = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(chunk))]);
+    let mut stream = GuardedSseStream::new(inner, UpstreamFormat::OpenAiChatCompletions)
+        .with_resource_limits(crate::config::ResourceLimits {
+            max_sse_frame_bytes: 8 * 1024 * 1024,
+            stream_max_events: FRAME_COUNT + 10,
+            ..Default::default()
+        });
+
+    // The linear drain finishes in ~1s on typical hardware; a few-seconds
+    // budget catches a quadratic regression (the old code ran tens of seconds)
+    // while leaving ample headroom on slower machines.
+    const TIME_BUDGET: Duration = Duration::from_secs(5);
+    let start = std::time::Instant::now();
+    let mut count = 0usize;
+    let mut first: Option<Vec<u8>> = None;
+    let mut last: Vec<u8> = Vec::new();
+    while let Some(frame) = stream.next().await {
+        let frame = frame.expect("guarded frame");
+        assert!(
+            frame.starts_with(b"data:") && frame.ends_with(b"\n\n"),
+            "unexpected frame: {:?}",
+            String::from_utf8_lossy(&frame)
+        );
+        if count == 0 {
+            first = Some(frame.to_vec());
+        }
+        last.clear();
+        last.extend_from_slice(&frame);
+        count += 1;
+    }
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < TIME_BUDGET,
+        "draining {FRAME_COUNT} small frames took {elapsed:?}; expected linear time (no O(n^2) blowup)"
+    );
+    assert_eq!(count, FRAME_COUNT, "should emit one frame per input frame");
+    assert_eq!(
+        first.expect("at least one frame"),
+        b"data:0\n\n".to_vec(),
+        "first frame should be passed through verbatim"
+    );
+    assert_eq!(
+        last,
+        format!("data:{}\n\n", FRAME_COUNT - 1).into_bytes(),
+        "last frame should be passed through verbatim"
+    );
+}

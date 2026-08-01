@@ -23,14 +23,69 @@ fn parse_sse_event_json(event_bytes: &[u8]) -> Option<Value> {
     serde_json::from_str(&data).ok()
 }
 
-pub(super) fn take_one_sse_frame(buffer: &mut Vec<u8>) -> Option<(Vec<u8>, Option<Value>)> {
-    let end = buffer
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
-        .or_else(|| buffer.windows(2).position(|w| w == b"\n\n").map(|p| p + 2))?;
-    let event_bytes = buffer.drain(..end).collect::<Vec<_>>();
+/// Locate the exclusive end offset of the next complete SSE frame in `buffer`.
+///
+/// A frame ends at the first blank line: the earliest `\r\n\r\n` or `\n\n`,
+/// whichever comes first. A single forward scan finds it in O(frame length).
+///
+/// This replaces the old two-pass search (`windows(4).position(\r\n\r\n)` then
+/// `windows(2).position(\n\n)`), which scanned the ENTIRE remaining buffer for
+/// `\r\n\r\n` before falling back to `\n\n`. For an LF-separated buffer that
+/// fallback ran every frame, making the per-frame boundary search
+/// O(remaining buffer) and the whole drain O(frame_count x buffer_len) — the
+/// same quadratic shape as the removed per-frame `Vec::drain`.
+///
+/// Observable semantics are unchanged: every existing test and every real-world
+/// upstream (which uses a single separator style) gets the identical boundary.
+/// For a buffer that mixes separators within one frame the new scan resolves to
+/// the earliest blank line, which is also what the SSE spec requires.
+fn sse_frame_end(buffer: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    while i + 1 < buffer.len() {
+        if buffer[i] == b'\n' && buffer[i + 1] == b'\n' {
+            return Some(i + 2);
+        }
+        if i + 3 < buffer.len()
+            && buffer[i] == b'\r'
+            && buffer[i + 1] == b'\n'
+            && buffer[i + 2] == b'\r'
+            && buffer[i + 3] == b'\n'
+        {
+            return Some(i + 4);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Read-only equivalent of [`take_one_sse_frame`]: parses the next complete SSE
+/// frame from `buffer` without mutating it, returning the frame bytes, the
+/// parsed event, and the number of leading bytes the frame occupies. Callers
+/// that drain many frames should advance by the returned length and compact the
+/// buffer once after the loop (see [`drop_sse_prefix`]) instead of mutating per
+/// frame, which is O(frame_count x buffer_len) via repeated `Vec::drain`.
+pub(super) fn read_one_sse_frame(buffer: &[u8]) -> Option<(Vec<u8>, Option<Value>, usize)> {
+    let end = sse_frame_end(buffer)?;
+    let event_bytes = buffer[..end].to_vec();
     let event = parse_sse_event_json(&event_bytes);
+    Some((event_bytes, event, end))
+}
+
+/// Drop the already-parsed `consumed`-byte prefix of `buffer` in a single
+/// compaction. This is the one memmove that replaces the per-frame
+/// `Vec::drain(..end)` tail shift which made multi-frame draining O(n^2). If the
+/// buffer was meanwhile cleared (e.g. by a resource-limit reject) this is a
+/// no-op, so it is safe to call unconditionally at the end of a drain loop.
+pub(super) fn drop_sse_prefix(buffer: &mut Vec<u8>, consumed: usize) {
+    let drop_n = consumed.min(buffer.len());
+    if drop_n > 0 {
+        buffer.drain(..drop_n);
+    }
+}
+
+pub(super) fn take_one_sse_frame(buffer: &mut Vec<u8>) -> Option<(Vec<u8>, Option<Value>)> {
+    let (event_bytes, event, end) = read_one_sse_frame(buffer)?;
+    buffer.drain(..end);
     Some((event_bytes, event))
 }
 

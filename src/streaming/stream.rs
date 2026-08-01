@@ -654,7 +654,13 @@ impl<S, E> GuardedSseStream<S, E> {
     }
 
     fn drain_validated_frames(&mut self) {
-        while let Some((frame, event)) = take_one_sse_frame(&mut self.buffer) {
+        // Parse frames read-only while tracking the consumed byte offset, then
+        // compact the buffer once after the loop. Mutating the Vec per frame
+        // (the old `take_one_sse_frame` drain) was O(frame_count x buffer_len)
+        // in memmove traffic; this keeps draining O(buffer_len + frame_count).
+        let mut consumed = 0usize;
+        while let Some((frame, event, end)) = read_one_sse_frame(&self.buffer[consumed..]) {
+            consumed += end;
             if !self.register_sse_event_or_reject() {
                 break;
             }
@@ -719,6 +725,7 @@ impl<S, E> GuardedSseStream<S, E> {
                 break;
             }
         }
+        drop_sse_prefix(&mut self.buffer, consumed);
     }
 
     fn reject_oversized_sse_frame(&mut self) {
@@ -1102,7 +1109,12 @@ impl<S, E> TranslateSseStream<S, E> {
     }
 
     fn drain_translated_frames(&mut self) {
-        while let Some((frame, event)) = take_one_sse_frame(&mut self.buffer) {
+        // Parse frames read-only while tracking the consumed byte offset, then
+        // compact the buffer once after the loop (see `drain_validated_frames`
+        // for the rationale): the old per-frame `Vec::drain` made this O(n^2).
+        let mut consumed = 0usize;
+        while let Some((frame, event, end)) = read_one_sse_frame(&self.buffer[consumed..]) {
+            consumed += end;
             if !self.register_sse_event_or_reject() {
                 break;
             }
@@ -1142,6 +1154,7 @@ impl<S, E> TranslateSseStream<S, E> {
                 break;
             }
         }
+        drop_sse_prefix(&mut self.buffer, consumed);
     }
 
     fn reject_oversized_sse_frame(&mut self) {
