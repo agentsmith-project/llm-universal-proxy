@@ -144,7 +144,7 @@ fn openai_to_claude_merges_tool_results_into_single_user_message() {
         ]
     });
 
-    openai_to_claude(&mut body).expect("translate to claude");
+    openai_to_claude(&mut body, "claude-sonnet-4-6").expect("translate to claude");
     let messages = body["messages"].as_array().expect("messages array");
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["role"], "assistant");
@@ -184,7 +184,7 @@ fn openai_to_claude_puts_user_text_after_tool_results() {
         ]
     });
 
-    openai_to_claude(&mut body).expect("translate to claude");
+    openai_to_claude(&mut body, "claude-sonnet-4-6").expect("translate to claude");
     let messages = body["messages"].as_array().expect("messages array");
     assert_eq!(messages.len(), 2);
     let user_content = messages[1]["content"].as_array().expect("user content");
@@ -212,7 +212,7 @@ fn assistant_tool_use_block_does_not_get_cache_control() {
         ]
     });
 
-    openai_to_claude(&mut body).expect("translate to claude");
+    openai_to_claude(&mut body, "claude-sonnet-4-6").expect("translate to claude");
     let messages = body["messages"].as_array().expect("messages array");
     let assistant_content = messages[0]["content"]
         .as_array()

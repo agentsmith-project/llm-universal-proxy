@@ -1600,13 +1600,93 @@ pub(crate) fn assess_request_translation_with_surface(
     upstream_format: UpstreamFormat,
     body: &Value,
     surface: &ModelSurface,
+    resolved_upstream_model: &str,
 ) -> TranslationAssessment {
     let mut assessment = TranslationAssessment::default();
     assess_surface_request_policy(&mut assessment, client_format, body, surface);
     assessment
         .issues
         .extend(assess_request_translation(client_format, upstream_format, body).issues);
+    assess_anthropic_nondefault_sampling_withhold(
+        &mut assessment,
+        client_format,
+        upstream_format,
+        body,
+        resolved_upstream_model,
+    );
     assessment
+}
+
+/// Records a portability warning for each non-default OpenAI sampling control
+/// (`temperature`/`top_p`, default `1.0`) that the resolved Anthropic upstream
+/// model rejects. This is the single decision point that the cross-protocol
+/// OpenAI -> Anthropic body-building path (`openai_to_claude`) honors, so the
+/// emitted warning can never diverge from what is actually withheld.
+fn assess_anthropic_nondefault_sampling_withhold(
+    assessment: &mut TranslationAssessment,
+    client_format: UpstreamFormat,
+    upstream_format: UpstreamFormat,
+    body: &Value,
+    resolved_upstream_model: &str,
+) {
+    if !openai_family_format(client_format) || upstream_format != UpstreamFormat::Anthropic {
+        return;
+    }
+    let client_label = translation_target_label(client_format);
+    for field in anthropic_nondefault_sampling_withhold_fields(resolved_upstream_model, body) {
+        assessment.warning(format!(
+            "{client_label} sampling control `{field}` is not accepted by the resolved Anthropic upstream model and will be withheld to avoid a 400 response"
+        ));
+    }
+}
+
+/// Returns the subset of `["temperature", "top_p"]` that is present, non-default
+/// (not equal to the OpenAI default of `1.0`), and rejected by the resolved
+/// Anthropic upstream model. Shared by the assessment warning above and the
+/// `openai_to_claude` forwarding decision so both stay in lockstep.
+pub(super) fn anthropic_nondefault_sampling_withhold_fields(
+    resolved_upstream_model: &str,
+    body: &Value,
+) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if anthropic_upstream_rejects_nondefault_sampling(resolved_upstream_model) {
+        for field in ["temperature", "top_p"] {
+            if openai_sampling_field_is_nondefault(body.get(field)) {
+                fields.push(field);
+            }
+        }
+    }
+    fields
+}
+
+/// Whether the given OpenAI sampling control value is present and non-default.
+/// The OpenAI default for both `temperature` and `top_p` is `1.0`; absent or
+/// non-numeric values are treated as default and never withheld.
+fn openai_sampling_field_is_nondefault(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Number(number)) => number.as_f64().is_some_and(|value| value != 1.0),
+        _ => false,
+    }
+}
+
+/// Prefix/range predicate (not an enumeration) over the resolved Anthropic
+/// upstream model id. Matches the refreshed Anthropic baseline of models that
+/// reject non-default sampling params with HTTP 400: Opus 4.7+
+/// (`claude-opus-4-{n}` with `n >= 7`), Sonnet 5 (`claude-sonnet-5*`),
+/// Fable 5 (`claude-fable-5*`), and Opus 5 (`claude-opus-5*`).
+pub(super) fn anthropic_upstream_rejects_nondefault_sampling(
+    resolved_upstream_model: &str,
+) -> bool {
+    let model = resolved_upstream_model.trim();
+    if let Some(rest) = model.strip_prefix("claude-opus-4-") {
+        let leading_digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        return leading_digits
+            .parse::<u32>()
+            .is_ok_and(|minor| minor >= 7);
+    }
+    model.starts_with("claude-sonnet-5")
+        || model.starts_with("claude-fable-5")
+        || model.starts_with("claude-opus-5")
 }
 
 pub(super) fn anthropic_warning_only_request_controls_for_translate(

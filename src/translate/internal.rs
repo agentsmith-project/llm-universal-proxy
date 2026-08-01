@@ -78,6 +78,7 @@ pub fn translate_request_with_policy(
             upstream_format,
             body,
             &policy.surface,
+            model,
         )
         .decision()
     {
@@ -677,7 +678,7 @@ fn client_to_openai_completion(
 
 fn openai_completion_to_upstream(
     to: UpstreamFormat,
-    _target_model: &str,
+    target_model: &str,
     body: &mut Value,
 ) -> Result<(), String> {
     match to {
@@ -686,7 +687,7 @@ fn openai_completion_to_upstream(
             messages_to_responses(body)?;
         }
         UpstreamFormat::Anthropic => {
-            openai_to_claude(body)?;
+            openai_to_claude(body, target_model)?;
         }
     }
     Ok(())
@@ -2296,9 +2297,16 @@ fn collapse_claude_text_parts_for_openai(parts: &[Value]) -> Value {
     collapse_openai_text_parts(parts)
 }
 
-fn openai_to_claude(body: &mut Value) -> Result<(), String> {
+fn openai_to_claude(body: &mut Value, target_model: &str) -> Result<(), String> {
     let controls = openai_normalized_request_controls(body)?;
     let request_scoped_tool_bridge_context = request_scoped_tool_bridge_context_from_body(body);
+    // Honor the assessment/policy decision for non-default sampling params: the
+    // resolved Anthropic upstream may reject non-default `temperature`/`top_p`
+    // with HTTP 400, so withhold exactly the fields the assessment flagged. The
+    // shared predicate keeps this body-building step in lockstep with the
+    // portability warning recorded in `assess_anthropic_nondefault_sampling_withhold`.
+    let withheld_sampling_fields =
+        assessment::anthropic_nondefault_sampling_withhold_fields(target_model, body);
     let mut result = serde_json::json!({
         "model": body.get("model").cloned().unwrap_or(serde_json::Value::Null),
         "max_tokens": body
@@ -2310,10 +2318,14 @@ fn openai_to_claude(body: &mut Value) -> Result<(), String> {
         "stream": body.get("stream").cloned().unwrap_or(serde_json::json!(false))
     });
     if let Some(t) = body.get("temperature") {
-        result["temperature"] = t.clone();
+        if !withheld_sampling_fields.contains(&"temperature") {
+            result["temperature"] = t.clone();
+        }
     }
     if let Some(tp) = body.get("top_p") {
-        result["top_p"] = tp.clone();
+        if !withheld_sampling_fields.contains(&"top_p") {
+            result["top_p"] = tp.clone();
+        }
     }
     if let Some(stop) = body.get("stop") {
         result["stop_sequences"] = if stop.is_array() {

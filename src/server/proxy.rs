@@ -1142,6 +1142,7 @@ async fn handle_request_core_with_downstream_cancellation(
         upstream_format,
         &original_body,
         &request_translation_policy,
+        &resolved_model.upstream_model,
     ) {
         RequestBoundaryDecision::Allow => Vec::new(),
         RequestBoundaryDecision::AllowWithWarnings(warnings) => warnings
@@ -2811,6 +2812,7 @@ pub(super) fn classify_request_boundary(
         &RequestTranslationPolicy {
             surface: crate::config::ModelSurface::default(),
         },
+        "",
     )
 }
 
@@ -2819,12 +2821,14 @@ fn classify_request_boundary_with_policy(
     upstream_format: UpstreamFormat,
     body: &Value,
     policy: &RequestTranslationPolicy,
+    resolved_upstream_model: &str,
 ) -> RequestBoundaryDecision {
     match assess_request_translation_with_surface(
         client_format,
         upstream_format,
         body,
         &policy.surface,
+        resolved_upstream_model,
     )
     .decision()
     {

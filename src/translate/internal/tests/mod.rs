@@ -11570,3 +11570,288 @@ fn translate_response_claude_plain_thinking_without_provenance_still_translates(
     assert_eq!(out["choices"][0]["message"]["reasoning_content"], "think");
     assert_eq!(out["choices"][0]["message"]["content"], "Hi");
 }
+
+// --- P0: cross-protocol OpenAI -> Anthropic non-default sampling-param withhold ---
+
+fn assess_openai_to_anthropic_with_model(
+    body: &serde_json::Value,
+    resolved_upstream_model: &str,
+) -> super::models::TranslationAssessment {
+    super::assessment::assess_request_translation_with_surface(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+        body,
+        &crate::config::ModelSurface::default(),
+        resolved_upstream_model,
+    )
+}
+
+fn translate_openai_to_anthropic_with_model(
+    resolved_upstream_model: &str,
+    mut body: serde_json::Value,
+) -> serde_json::Value {
+    translate_request_with_policy(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+        resolved_upstream_model,
+        &mut body,
+        request_translation_policy_with_surface(crate::config::ModelSurface::default()),
+        false,
+    )
+    .expect("OpenAI -> Anthropic translation should succeed");
+    body
+}
+
+fn assess_openai_responses_to_anthropic_with_model(
+    body: &serde_json::Value,
+    resolved_upstream_model: &str,
+) -> super::models::TranslationAssessment {
+    super::assessment::assess_request_translation_with_surface(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::Anthropic,
+        body,
+        &crate::config::ModelSurface::default(),
+        resolved_upstream_model,
+    )
+}
+
+fn translate_openai_responses_to_anthropic_with_model(
+    resolved_upstream_model: &str,
+    mut body: serde_json::Value,
+) -> serde_json::Value {
+    translate_request_with_policy(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::Anthropic,
+        resolved_upstream_model,
+        &mut body,
+        request_translation_policy_with_surface(crate::config::ModelSurface::default()),
+        false,
+    )
+    .expect("OpenAI Responses -> Anthropic translation should succeed");
+    body
+}
+
+fn assessment_portability_warnings(
+    assessment: &super::models::TranslationAssessment,
+) -> Vec<String> {
+    match assessment.decision() {
+        TranslationDecision::AllowWithWarnings(warnings) => warnings,
+        _ => Vec::new(),
+    }
+}
+
+fn portability_warning_mentions(warnings: &[String], field: &str) -> bool {
+    warnings
+        .iter()
+        .any(|warning| warning.contains(&format!("`{field}`")))
+}
+
+#[test]
+fn openai_to_anthropic_withholds_nondefault_temperature_for_claude_sonnet_5() {
+    let body = json!({
+        "model": "gpt-4o",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "temperature": 0.5
+    });
+
+    let warnings = assessment_portability_warnings(&assess_openai_to_anthropic_with_model(
+        &body,
+        "claude-sonnet-5-20250929",
+    ));
+    assert!(
+        portability_warning_mentions(&warnings, "temperature"),
+        "expected a portability warning for temperature, got {warnings:?}"
+    );
+
+    let translated =
+        translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
+    assert!(
+        translated.get("temperature").is_none(),
+        "non-default temperature should be withheld, body = {translated:?}"
+    );
+}
+
+#[test]
+fn openai_responses_to_anthropic_withholds_nondefault_temperature_for_claude_sonnet_5() {
+    let body = json!({
+        "model": "gpt-4o",
+        "input": [{ "role": "user", "content": "Hi" }],
+        "temperature": 0.5
+    });
+
+    let warnings = assessment_portability_warnings(
+        &assess_openai_responses_to_anthropic_with_model(&body, "claude-sonnet-5"),
+    );
+    assert!(
+        portability_warning_mentions(&warnings, "temperature"),
+        "expected a portability warning for temperature, got {warnings:?}"
+    );
+
+    let translated =
+        translate_openai_responses_to_anthropic_with_model("claude-sonnet-5", body);
+    assert!(
+        translated.get("temperature").is_none(),
+        "non-default temperature should be withheld, body = {translated:?}"
+    );
+}
+
+#[test]
+fn openai_to_anthropic_withholds_nondefault_temperature_for_claude_opus_4_8() {
+    let body = json!({
+        "model": "gpt-4o",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "temperature": 0.5
+    });
+
+    let warnings = assessment_portability_warnings(&assess_openai_to_anthropic_with_model(
+        &body,
+        "claude-opus-4-8",
+    ));
+    assert!(
+        portability_warning_mentions(&warnings, "temperature"),
+        "expected a portability warning for temperature, got {warnings:?}"
+    );
+
+    let translated = translate_openai_to_anthropic_with_model("claude-opus-4-8", body);
+    assert!(
+        translated.get("temperature").is_none(),
+        "non-default temperature should be withheld, body = {translated:?}"
+    );
+}
+
+#[test]
+fn openai_to_anthropic_forwards_nondefault_temperature_for_legacy_claude_sonnet_4_6() {
+    let body = json!({
+        "model": "gpt-4o",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "temperature": 0.5
+    });
+
+    let warnings = assessment_portability_warnings(&assess_openai_to_anthropic_with_model(
+        &body,
+        "claude-sonnet-4-6",
+    ));
+    assert!(
+        !portability_warning_mentions(&warnings, "temperature"),
+        "legacy model should not produce a sampling warning, got {warnings:?}"
+    );
+
+    let translated = translate_openai_to_anthropic_with_model("claude-sonnet-4-6", body);
+    assert_eq!(
+        translated["temperature"],
+        serde_json::json!(0.5),
+        "legacy model should forward temperature, body = {translated:?}"
+    );
+}
+
+#[test]
+fn openai_to_anthropic_does_not_withhold_default_temperature_for_claude_sonnet_5() {
+    for body in [
+        json!({
+            "model": "gpt-4o",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "temperature": 1.0
+        }),
+        json!({
+            "model": "gpt-4o",
+            "messages": [{ "role": "user", "content": "Hi" }]
+        }),
+    ] {
+        let warnings = assessment_portability_warnings(&assess_openai_to_anthropic_with_model(
+            &body,
+            "claude-sonnet-5-20250929",
+        ));
+        assert!(
+            !portability_warning_mentions(&warnings, "temperature"),
+            "default/absent temperature should not warn, body = {body:?}, warnings = {warnings:?}"
+        );
+
+        let translated =
+            translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
+        assert!(
+            translated.get("temperature").map_or(true, |v| v.as_f64() == Some(1.0)),
+            "default temperature should not be withheld, body = {translated:?}"
+        );
+    }
+}
+
+#[test]
+fn openai_to_anthropic_withholds_nondefault_top_p_for_claude_sonnet_5() {
+    let body = json!({
+        "model": "gpt-4o",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "top_p": 0.5
+    });
+
+    let warnings = assessment_portability_warnings(&assess_openai_to_anthropic_with_model(
+        &body,
+        "claude-sonnet-5-20250929",
+    ));
+    assert!(
+        portability_warning_mentions(&warnings, "top_p"),
+        "expected a portability warning for top_p, got {warnings:?}"
+    );
+
+    let translated =
+        translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
+    assert!(
+        translated.get("top_p").is_none(),
+        "non-default top_p should be withheld, body = {translated:?}"
+    );
+}
+
+#[test]
+fn openai_to_anthropic_forwards_nondefault_top_p_for_legacy_claude_sonnet_4_6() {
+    let body = json!({
+        "model": "gpt-4o",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "top_p": 0.5
+    });
+
+    let warnings = assessment_portability_warnings(&assess_openai_to_anthropic_with_model(
+        &body,
+        "claude-sonnet-4-6",
+    ));
+    assert!(
+        !portability_warning_mentions(&warnings, "top_p"),
+        "legacy model should not produce a sampling warning, got {warnings:?}"
+    );
+
+    let translated = translate_openai_to_anthropic_with_model("claude-sonnet-4-6", body);
+    assert_eq!(
+        translated["top_p"],
+        serde_json::json!(0.5),
+        "legacy model should forward top_p, body = {translated:?}"
+    );
+}
+
+#[test]
+fn openai_to_anthropic_does_not_withhold_default_top_p_for_claude_sonnet_5() {
+    for body in [
+        json!({
+            "model": "gpt-4o",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "top_p": 1.0
+        }),
+        json!({
+            "model": "gpt-4o",
+            "messages": [{ "role": "user", "content": "Hi" }]
+        }),
+    ] {
+        let warnings = assessment_portability_warnings(&assess_openai_to_anthropic_with_model(
+            &body,
+            "claude-sonnet-5-20250929",
+        ));
+        assert!(
+            !portability_warning_mentions(&warnings, "top_p"),
+            "default/absent top_p should not warn, body = {body:?}, warnings = {warnings:?}"
+        );
+
+        let translated =
+            translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
+        assert!(
+            translated.get("top_p").map_or(true, |v| v.as_f64() == Some(1.0)),
+            "default top_p should not be withheld, body = {translated:?}"
+        );
+    }
+}
