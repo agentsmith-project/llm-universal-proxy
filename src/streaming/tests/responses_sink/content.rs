@@ -282,6 +282,44 @@ fn openai_chunk_to_responses_sse_dedupes_minimax_cumulative_text() {
 }
 
 #[test]
+fn normalize_openai_stream_text_handles_large_cumulative_stream_linearly() {
+    // Simulate a CUMULATIVE upstream (e.g. MiniMax): every delta resends all
+    // prior text plus a few new bytes, producing a ~2 MiB final payload. With
+    // the bounded implementation this is O(N); an O(N^2) implementation would
+    // take many seconds on this much cumulative text. Inputs are constructed
+    // directly; no process-global state is touched.
+    let step = "abcd";
+    let target_bytes = 1usize << 21; // 2 MiB
+
+    let mut full = String::new();
+    let mut seen = String::new();
+    let mut emitted = String::new();
+
+    let start = std::time::Instant::now();
+    while full.len() < target_bytes {
+        full.push_str(step);
+        if let Some(delta) = normalize_openai_stream_text(full.as_str(), &mut seen) {
+            emitted.push_str(&delta);
+        }
+    }
+    let elapsed = start.elapsed();
+
+    // The dedup must reconstruct exactly the cumulative payload ...
+    assert_eq!(emitted, full);
+    // ... and `seen` must track it verbatim.
+    assert_eq!(seen, full);
+    assert!(full.len() >= target_bytes);
+    // Bounded, not an O(N^2) hang. The bounded implementation finishes in a
+    // small fraction of a second; an O(N^2) regression on ~2 MiB of cumulative
+    // text would take many seconds. Generous bound to stay non-flaky.
+    assert!(
+        elapsed.as_secs() < 10,
+        "cumulative dedup took too long: {:?}",
+        elapsed
+    );
+}
+
+#[test]
 fn openai_chunk_to_responses_sse_adds_empty_annotations_to_text_parts() {
     let mut state = StreamState::default();
     let text_chunk = serde_json::json!({

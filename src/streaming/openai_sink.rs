@@ -68,6 +68,15 @@ pub(super) fn is_minimax_chunk(chunk: &Value, state: &StreamState) -> bool {
         .unwrap_or(false)
 }
 
+/// Bound on how many leading bytes we compare when detecting a cumulative
+/// resend. Cumulative upstreams (e.g. MiniMax) echo the full text seen so far,
+/// so they always match within this probe; the cap only prevents re-scanning
+/// O(seen) bytes on every event, which would make a large cumulative stream
+/// O(N^2). Incremental senders never reach this comparison: their per-event
+/// deltas are shorter than the accumulated text, so the length gate below skips
+/// it entirely.
+const OPENAI_STREAM_CUMULATIVE_PROBE: usize = 4096;
+
 pub(super) fn normalize_openai_stream_text(incoming: &str, seen: &mut String) -> Option<String> {
     if incoming.is_empty() {
         return None;
@@ -76,18 +85,31 @@ pub(super) fn normalize_openai_stream_text(incoming: &str, seen: &mut String) ->
         return None;
     }
 
-    let delta = if incoming.starts_with(seen.as_str()) {
-        incoming[seen.len()..].to_string()
-    } else {
-        incoming.to_string()
-    };
+    // Some upstreams (e.g. MiniMax) send CUMULATIVE deltas: each event repeats
+    // everything already seen plus a few new bytes. A genuine cumulative
+    // extension must be strictly longer than what we have, so gating on length
+    // keeps the common incremental case (short deltas appended to a longer
+    // accumulated string) out of this branch entirely. We then confirm the
+    // prefix with a bounded probe: a real cumulative sender always echoes the
+    // whole prefix, so it matches within the probe, keeping the per-event work
+    // bounded so a large cumulative stream is O(N) overall instead of O(N^2).
+    let seen_len = seen.len();
+    let probe = seen_len.min(OPENAI_STREAM_CUMULATIVE_PROBE);
+    let is_cumulative = incoming.len() > seen_len
+        && incoming.is_char_boundary(seen_len)
+        && incoming.as_bytes()[..probe] == seen.as_bytes()[..probe];
 
-    if incoming.starts_with(seen.as_str()) {
-        *seen = incoming.to_string();
-    } else {
-        seen.push_str(incoming);
+    if is_cumulative {
+        // Append only the new suffix rather than reallocating and copying the
+        // whole accumulated string each event; that per-event full reallocation
+        // is what made this O(N^2) for cumulative senders.
+        let delta = incoming[seen_len..].to_string();
+        seen.push_str(&incoming[seen_len..]);
+        return (!delta.is_empty()).then_some(delta);
     }
 
+    let delta = incoming.to_string();
+    seen.push_str(incoming);
     (!delta.is_empty()).then_some(delta)
 }
 
