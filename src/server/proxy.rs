@@ -839,7 +839,6 @@ fn set_openai_model_header(
     }
 }
 
-
 fn upstream_request_body_with_synthesized_prompt_cache_key_redacted(
     upstream_request_body: &Value,
     key_fingerprint: &str,

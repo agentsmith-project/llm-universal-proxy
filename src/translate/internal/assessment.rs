@@ -764,7 +764,9 @@ pub(super) fn responses_nonportable_tool_choice_message(
 
 pub(super) fn responses_nonportable_tool_definition_message(body: &Value) -> Option<String> {
     let tools = body.get("tools").and_then(Value::as_array)?;
-    tools.iter().find_map(|tool| normalized_responses_tool_definition(tool).err())
+    tools
+        .iter()
+        .find_map(|tool| normalized_responses_tool_definition(tool).err())
 }
 
 pub(super) fn responses_has_warning_only_nonportable_tool_definitions(body: &Value) -> bool {

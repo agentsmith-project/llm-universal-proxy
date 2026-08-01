@@ -1916,7 +1916,9 @@ fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_g
             false,
         )
         .unwrap_or_else(|err| {
-            panic!("namespace tool group `{namespace_name}` should warn-and-omit, not reject: {err}")
+            panic!(
+                "namespace tool group `{namespace_name}` should warn-and-omit, not reject: {err}"
+            )
         });
 
         // The entire namespace group (including its nested tools) is dropped from the
@@ -1935,7 +1937,8 @@ fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_g
             })
             .unwrap_or(0);
         assert_eq!(
-            remaining_namespace, 0,
+            remaining_namespace,
+            0,
             "namespace group `{namespace_name}` should be fully omitted: {:?}",
             body.get("tools")
         );
@@ -1943,7 +1946,8 @@ fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_g
 }
 
 #[test]
-fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_choice_allowed_tools() {
+fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_choice_allowed_tools(
+) {
     // Site 2: a `namespace` entry inside `tool_choice.allowed_tools` must not fail-closed.
     // Codex may emit these when multi-agent/MCP is enabled; they are dropped/passed-through
     // (warn-and-omit) like namespace tool definitions rather than rejecting the whole request.
@@ -11114,7 +11118,10 @@ fn translate_response_openai_to_responses_model_defaults_to_null_when_absent() {
         &body,
     )
     .unwrap();
-    assert!(out.get("model").is_some(), "model key must always be present");
+    assert!(
+        out.get("model").is_some(),
+        "model key must always be present"
+    );
     assert_eq!(out["model"], serde_json::Value::Null);
 }
 
