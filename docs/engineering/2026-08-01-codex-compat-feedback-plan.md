@@ -76,6 +76,8 @@ Findings from `reference/codex/codex-rs/` (in-tree). These pin the exact wire co
 
 **Scope note — namespaced input items.** The user-reported failure is tool **definitions** (the `tools` array). Namespaced tool-call **input items** in history are governed by a separate function, `responses_nonportable_input_item_message` (`assessment.rs:976-1019`), covered by test `translate_request_responses_to_non_responses_rejects_namespaced_tool_calls` (`src/translate/internal/tests/mod.rs:1919-1942`). With multi-agent disabled, no such history is sent, so P0's primary fix is definitions only. During implementation, verify whether namespaced input items also need warn-and-omit and record the finding; do not expand P0 silently.
 
+**Scope check — `tool_choice.allowed_tools`:** `responses_nonportable_tool_choice_message` (`assessment.rs:709-765`, namespace arm at `:746-751`) hard-rejects any `allowed_tools` entry of `type:"namespace"`. This check runs at `assessment.rs:2452-2454` — **before** the tool-definition check. Codex MAY emit namespace entries inside `allowed_tools` when multi-agent/MCP is enabled. The implementer must either extend warn-and-omit to `allowed_tools` namespace entries (same pattern: drop + warn), or verify that Codex 0.146.0 does not emit them in `allowed_tools` and record the finding. Do not silently leave this path fail-closed if it would reject the same requests P0 is meant to unblock.
+
 **TDD — see §5.**
 
 ### P1 — Non-streaming Responses `model` field + `openai-model` header (TDD bug fix, confirmed)
