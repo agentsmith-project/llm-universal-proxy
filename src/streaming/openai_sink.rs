@@ -37,6 +37,11 @@ pub(super) fn stop_text_block_claude(state: &mut StreamState, out: &mut Vec<Vec<
         return;
     }
     state.text_block_closed = true;
+    // PF-3: reset `text_block_started` so a later content delta (e.g. after an
+    // intervening reasoning block in text -> reasoning -> text) opens a fresh
+    // content_block at a new index instead of emitting a delta against this
+    // already-closed block. Mirrors `stop_thinking_block_claude`.
+    state.text_block_started = false;
     out.push(format_sse_event(
         "content_block_stop",
         &serde_json::json!({ "type": "content_block_stop", "index": state.text_block_index }),
@@ -572,6 +577,66 @@ fn emit_responses_message_done(
     Some(ResponsesCompletedMessageState { output_index, item })
 }
 
+/// Prefix/wire-format for the Anthropic thinking-replay carrier. Mirrors the
+/// non-streaming `encode_anthropic_reasoning_carrier` path in
+/// `translate::internal::openai_responses` (kept private there, so it is
+/// re-emitted here for the streaming Responses sink).
+const ANTHROPIC_REASONING_CARRIER_PREFIX_STREAM: &str = "anthropic-thinking-v1:";
+
+fn encode_streaming_anthropic_reasoning_carrier(blocks: &[Value]) -> Option<String> {
+    if blocks.is_empty() {
+        return None;
+    }
+    let payload = serde_json::json!({
+        "format": "anthropic-thinking-replay",
+        "version": 1,
+        "blocks": blocks
+    });
+    let encoded = serde_json::to_vec(&payload).ok()?;
+    Some(format!(
+        "{ANTHROPIC_REASONING_CARRIER_PREFIX_STREAM}{}",
+        hex::encode(encoded)
+    ))
+}
+
+/// Builds the Anthropic thinking-replay carrier for the streaming Responses
+/// reasoning item from the signature provenance captured by the streaming
+/// Anthropic source (`state.claude_thinking_provenance`). Mirrors the
+/// non-streaming `encode_anthropic_reasoning_carrier` path so the local bridge
+/// can replay a SIGNED thinking block on the next turn. Without it the bridge
+/// captures a carrier-less reasoning item and produces an UNSIGNED thinking
+/// block -> Anthropic 400 under extended thinking.
+///
+/// The streaming source captures the per-block signature and `omitted` flag but
+/// not the per-block text boundary, so the accumulated reasoning text is
+/// attached to the first non-omitted block (the common single-block case is
+/// exact); each block still carries its own signature, which is the
+/// load-bearing field for replay.
+fn streaming_anthropic_reasoning_carrier(state: &StreamState) -> Option<String> {
+    if state.claude_thinking_provenance.is_empty() {
+        return None;
+    }
+    let reasoning_text = state.responses_reasoning_text.clone();
+    let mut text_assigned = false;
+    let mut blocks = Vec::with_capacity(state.claude_thinking_provenance.len());
+    for entry in &state.claude_thinking_provenance {
+        let mut block = serde_json::json!({ "type": "thinking" });
+        if entry.omitted {
+            block["thinking"] = serde_json::json!({ "display": "omitted" });
+        } else if !text_assigned {
+            block["thinking"] = Value::String(reasoning_text.clone());
+            text_assigned = true;
+        } else {
+            block["thinking"] = Value::String(String::new());
+        }
+        if let Some(signature) = entry.signature.as_ref() {
+            block["signature"] = Value::String(signature.clone());
+        }
+        blocks.push(block);
+    }
+    encode_streaming_anthropic_reasoning_carrier(&blocks)
+}
+
 pub(super) fn emit_openai_responses_terminal(
     state: &mut StreamState,
     response_id: &str,
@@ -582,6 +647,9 @@ pub(super) fn emit_openai_responses_terminal(
     let finish_reason = state.finish_reason.clone();
     let finish_reason = finish_reason.as_deref();
     let terminated_without_finish_reason = finish_reason.is_none();
+    // PF-2: encode the captured thinking-signature carrier once so it can be
+    // attached to every emitted streaming reasoning item below.
+    let reasoning_carrier = streaming_anthropic_reasoning_carrier(state);
 
     let incomplete_reason = match finish_reason {
         Some("length") => Some("max_output_tokens"),
@@ -650,7 +718,7 @@ pub(super) fn emit_openai_responses_terminal(
             &part_done_ev,
         ));
 
-        let output_item_done_ev = serde_json::json!({
+        let mut output_item_done_ev = serde_json::json!({
             "type": "response.output_item.done",
             "sequence_number": next_responses_seq(state),
             "response_id": response_id,
@@ -661,6 +729,9 @@ pub(super) fn emit_openai_responses_terminal(
                 "summary": [{ "type": "summary_text", "text": state.responses_reasoning_text }]
             }
         });
+        if let Some(carrier) = reasoning_carrier.clone() {
+            output_item_done_ev["item"]["encrypted_content"] = Value::String(carrier);
+        }
         out.push(format_sse_event(
             "response.output_item.done",
             &output_item_done_ev,
@@ -708,14 +779,15 @@ pub(super) fn emit_openai_responses_terminal(
         let output_index = state
             .responses_reasoning_output_index
             .unwrap_or_else(|| responses_reasoning_output_index(state));
-        output_items.push((
-            output_index,
-            serde_json::json!({
-                "id": state.responses_reasoning_id,
-                "type": "reasoning",
-                "summary": [{ "type": "summary_text", "text": state.responses_reasoning_text }]
-            }),
-        ));
+        let mut reasoning_item = serde_json::json!({
+            "id": state.responses_reasoning_id,
+            "type": "reasoning",
+            "summary": [{ "type": "summary_text", "text": state.responses_reasoning_text }]
+        });
+        if let Some(carrier) = reasoning_carrier.clone() {
+            reasoning_item["encrypted_content"] = Value::String(carrier);
+        }
+        output_items.push((output_index, reasoning_item));
     }
     output_items.extend(
         state
@@ -868,6 +940,14 @@ pub(super) fn openai_chunk_to_claude_sse(chunk: &Value, state: &mut StreamState)
     if state.fatal_rejection.is_some() && chunk.get("error").is_none() {
         return out;
     }
+    // PF-6: capture usage BEFORE the `choices` early-return below. Gateways such
+    // as MiniMax (include_usage) and many vLLM deployments emit a trailing
+    // usage-only chunk with `choices: []`; capturing it here (mirroring the
+    // parallel Responses sink) keeps the subsequent message_delta from reporting
+    // `{input_tokens:0, output_tokens:0}`.
+    if let Some(usage) = chunk.get("usage") {
+        state.usage = Some(openai_usage_to_anthropic_usage_stream(usage));
+    }
     let choices = match chunk.get("choices").and_then(Value::as_array) {
         Some(c) if !c.is_empty() => c,
         _ => return out,
@@ -1019,10 +1099,6 @@ pub(super) fn openai_chunk_to_claude_sse(chunk: &Value, state: &mut StreamState)
                 }
             }
         }
-    }
-
-    if let Some(usage) = chunk.get("usage") {
-        state.usage = Some(openai_usage_to_anthropic_usage_stream(usage));
     }
 
     if let Some(fr) = finish_reason {

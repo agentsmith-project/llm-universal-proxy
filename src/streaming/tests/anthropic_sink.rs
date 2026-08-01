@@ -398,3 +398,122 @@ fn openai_chunk_to_claude_sse_preserves_standard_function_tool_use() {
     assert!(joined.contains("input_json_delta"), "{joined}");
     assert!(!joined.contains("event: error"), "{joined}");
 }
+
+#[test]
+fn openai_chunk_to_claude_sse_reopens_text_block_after_reasoning() {
+    // PF-3: after text -> reasoning -> text (common for reasoning models), the
+    // second text delta must open a NEW content_block at a fresh index. The bug
+    // left `text_block_started=true` after closing, so the trailing text emitted
+    // a content_block_delta against an already-closed block index.
+    let text1 = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "choices": [{ "index": 0, "delta": { "content": "Hello" }, "finish_reason": null }]
+    });
+    let reasoning = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "choices": [{ "index": 0, "delta": { "reasoning_content": "think" }, "finish_reason": null }]
+    });
+    let text2 = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "choices": [{ "index": 0, "delta": { "content": "World" }, "finish_reason": null }]
+    });
+    let finish = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+    });
+
+    let mut state = StreamState::default();
+    let events = parse_sse_events(
+        openai_chunk_to_claude_sse(&text1, &mut state)
+            .into_iter()
+            .chain(openai_chunk_to_claude_sse(&reasoning, &mut state))
+            .chain(openai_chunk_to_claude_sse(&text2, &mut state))
+            .chain(openai_chunk_to_claude_sse(&finish, &mut state))
+            .collect(),
+    );
+
+    let text_block_starts: Vec<u64> = events
+        .iter()
+        .filter(|e| e["type"] == "content_block_start" && e["content_block"]["type"] == "text")
+        .map(|e| e["index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        text_block_starts.len(),
+        2,
+        "expected two text content_block_start events, got {text_block_starts:?} in {events:?}"
+    );
+    let (first_text_idx, second_text_idx) = (text_block_starts[0], text_block_starts[1]);
+    assert!(
+        second_text_idx > first_text_idx,
+        "second text block should open at a new, higher index"
+    );
+
+    // The "World" delta must target the new text block, and a
+    // content_block_start for that index must precede its first delta.
+    let world_delta = events
+        .iter()
+        .find(|e| e["type"] == "content_block_delta" && e["delta"]["text"] == "World")
+        .expect("text_delta for World");
+    let world_idx = world_delta["index"].as_u64().unwrap();
+    assert_eq!(
+        world_idx, second_text_idx,
+        "second text delta should target the new text block"
+    );
+
+    let start_position = events
+        .iter()
+        .position(|e| e["type"] == "content_block_start" && e["index"].as_u64() == Some(world_idx))
+        .expect("content_block_start for second text block");
+    let delta_position = events
+        .iter()
+        .position(|e| e["type"] == "content_block_delta" && e["delta"]["text"] == "World")
+        .expect("content_block_delta for World");
+    assert!(start_position < delta_position);
+
+    // The first text block must have been closed before the second one opened.
+    let first_stop_position = events
+        .iter()
+        .position(|e| {
+            e["type"] == "content_block_stop" && e["index"].as_u64() == Some(first_text_idx)
+        })
+        .expect("content_block_stop for first text block");
+    assert!(first_stop_position < start_position);
+    assert!(events.iter().all(|e| e["type"] != "error"));
+}
+
+#[test]
+fn openai_chunk_to_claude_sse_captures_usage_from_choices_empty_chunk() {
+    // PF-6: a trailing usage-only chunk (`choices: []` + `usage`), as emitted by
+    // MiniMax/vLLM-style gateways, must still populate state.usage so the
+    // subsequent message_delta reports real token counts instead of zeros. The
+    // bug early-returned on empty choices before capturing usage.
+    let content = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "choices": [{ "index": 0, "delta": { "content": "Hi" }, "finish_reason": null }]
+    });
+    let usage_only = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "usage": { "prompt_tokens": 5, "completion_tokens": 9, "total_tokens": 14 },
+        "choices": []
+    });
+    let finish = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+    });
+
+    let mut state = StreamState::default();
+    let events = parse_sse_events(
+        openai_chunk_to_claude_sse(&content, &mut state)
+            .into_iter()
+            .chain(openai_chunk_to_claude_sse(&usage_only, &mut state))
+            .chain(openai_chunk_to_claude_sse(&finish, &mut state))
+            .collect(),
+    );
+
+    let message_delta = events
+        .iter()
+        .find(|e| e["type"] == "message_delta")
+        .expect("message_delta event");
+    assert_eq!(message_delta["usage"]["input_tokens"], 5);
+    assert_eq!(message_delta["usage"]["output_tokens"], 9);
+}

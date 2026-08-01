@@ -381,3 +381,110 @@ fn anthropic_error_event_maps_to_responses_failed() {
     assert!(joined.contains("\"type\":\"server_error\""));
     assert!(joined.contains("\"code\":\"server_is_overloaded\""));
 }
+
+#[test]
+fn anthropic_thinking_stream_to_responses_carries_encrypted_content_carrier() {
+    // PF-2: a streaming Anthropic reasoning response translated to Responses
+    // must attach `encrypted_content` (encoding the captured thinking
+    // signature) on the reasoning output item, mirroring the non-streaming
+    // encode_anthropic_reasoning_carrier path. Without it the local bridge
+    // captures a carrier-less reasoning item and the next turn produces an
+    // UNSIGNED thinking block -> Anthropic 400 under extended thinking.
+    let mut state = StreamState::default();
+    let send = |state: &mut StreamState, event: serde_json::Value| -> Vec<Vec<u8>> {
+        translate_sse_event(
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiResponses,
+            &event,
+            state,
+        )
+    };
+
+    let _ = send(
+        &mut state,
+        serde_json::json!({
+            "type": "message_start",
+            "message": { "id": "msg_1", "model": "claude-3" }
+        }),
+    );
+    let _ = send(
+        &mut state,
+        serde_json::json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": { "type": "thinking", "thinking": "ponder" }
+        }),
+    );
+    let _ = send(
+        &mut state,
+        serde_json::json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "signature_delta", "signature": "sig_stream_abc" }
+        }),
+    );
+    let _ = send(
+        &mut state,
+        serde_json::json!({ "type": "content_block_stop", "index": 0 }),
+    );
+    let _ = send(
+        &mut state,
+        serde_json::json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": { "input_tokens": 3, "output_tokens": 2 }
+        }),
+    );
+    let terminal = send(&mut state, serde_json::json!({ "type": "message_stop" }));
+
+    let events: Vec<Value> = terminal.iter().map(|bytes| parse_sse_json(bytes)).collect();
+
+    // The streamed output_item.done for the reasoning item must carry the carrier.
+    let reasoning_done = events
+        .iter()
+        .find(|event| {
+            event.get("type").and_then(Value::as_str) == Some("response.output_item.done")
+                && event["item"]["type"] == "reasoning"
+        })
+        .expect("reasoning response.output_item.done event");
+    let carrier = reasoning_done["item"]["encrypted_content"]
+        .as_str()
+        .expect("encrypted_content on reasoning output_item.done");
+
+    // The final response.completed payload must carry it too.
+    let completed = events
+        .iter()
+        .find(|event| event.get("type").and_then(Value::as_str) == Some("response.completed"))
+        .expect("response.completed event");
+    let reasoning_output = completed["response"]["output"]
+        .as_array()
+        .expect("response output array")
+        .iter()
+        .find(|item| item["type"] == "reasoning")
+        .expect("reasoning output item");
+    let final_carrier = reasoning_output["encrypted_content"]
+        .as_str()
+        .expect("encrypted_content on final reasoning output");
+
+    for carrier in [carrier, final_carrier] {
+        assert!(
+            carrier.starts_with("anthropic-thinking-v1:"),
+            "carrier should use the documented prefix: {carrier}"
+        );
+        let hex_part = carrier
+            .strip_prefix("anthropic-thinking-v1:")
+            .expect("prefix stripped");
+        assert!(!hex_part.is_empty(), "carrier payload should be non-empty");
+        let decoded = hex::decode(hex_part).expect("carrier hex decodes");
+        let payload: Value = serde_json::from_slice(&decoded).expect("carrier json decodes");
+        assert_eq!(payload["format"], "anthropic-thinking-replay");
+        assert_eq!(payload["version"], 1);
+        let blocks = payload["blocks"].as_array().expect("carrier blocks array");
+        assert!(!blocks.is_empty(), "carrier should carry at least one block");
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(
+            blocks[0]["signature"], "sig_stream_abc",
+            "carrier must encode the captured thinking signature"
+        );
+    }
+}
