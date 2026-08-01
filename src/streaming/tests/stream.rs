@@ -1100,3 +1100,75 @@ async fn guarded_sse_stream_drains_many_small_frames_without_quadratic_blowup() 
         "last frame should be passed through verbatim"
     );
 }
+
+#[tokio::test]
+async fn anthropic_error_event_to_responses_marks_stream_terminal_so_drain_stops() {
+    // PF-4: an Anthropic `error` event translated to a Responses client must
+    // emit a terminal `response.failed` AND mark the stream fatal/terminal, so
+    // frames buffered in the same coalesced segment are not translated and
+    // emitted after the terminal event.
+    const SENTINEL: &str = "SAFE_AFTER_ANTHROPIC_ERROR_RESPONSES_TERMINAL";
+
+    let coalesced = [
+        format_sse_event(
+            "message_start",
+            &serde_json::json!({
+                "type": "message_start",
+                "message": { "id": "msg_err_terminal", "model": "claude-test" }
+            }),
+        ),
+        format_sse_event(
+            "content_block_start",
+            &serde_json::json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": { "type": "text", "text": "" }
+            }),
+        ),
+        format_sse_event(
+            "error",
+            &serde_json::json!({
+                "type": "error",
+                "error": { "type": "overloaded_error", "message": "Provider overloaded" }
+            }),
+        ),
+        format_sse_event(
+            "content_block_delta",
+            &serde_json::json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "text_delta", "text": SENTINEL }
+            }),
+        ),
+    ]
+    .concat();
+
+    let frames = collect_translated_sse_strings(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiResponses,
+        vec![coalesced],
+    )
+    .await;
+    let joined = frames.join("\n");
+
+    assert!(
+        joined.contains("\"type\":\"response.failed\""),
+        "terminal response.failed should be emitted: {joined}"
+    );
+
+    // The Responses protocol treats `response.failed` as terminal; nothing may
+    // follow it in the same coalesced segment.
+    let terminal_idx = frames
+        .iter()
+        .position(|frame| frame.contains("\"type\":\"response.failed\""))
+        .expect("response.failed frame emitted");
+    let trailing: Vec<&String> = frames.iter().skip(terminal_idx + 1).collect();
+    assert!(
+        trailing.is_empty(),
+        "frames emitted after terminal response.failed: {trailing:?}"
+    );
+    assert!(
+        !joined.contains(SENTINEL),
+        "post-terminal frame leaked into output: {joined}"
+    );
+}

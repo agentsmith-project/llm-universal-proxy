@@ -856,6 +856,12 @@ pub(super) fn anthropic_error_event_to_client_sse(
     match client_format {
         UpstreamFormat::OpenAiResponses => {
             state.responses_seq += 1;
+            // `response.failed` is terminal for the Responses API: mark the
+            // stream fatal/terminal exactly as `reject_openai_responses_stream`
+            // does so `drain_translated_frames` stops after emitting it and no
+            // frames buffered in the same coalesced segment leak out afterward.
+            let message = mark_stream_fatal_rejection(state, message);
+            state.responses_terminal_sent = true;
             let fallback = state
                 .message_id
                 .as_deref()
