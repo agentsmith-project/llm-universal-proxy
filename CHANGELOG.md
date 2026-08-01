@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased / Next v0.3.1 (not published)
+## Unreleased / Next v0.3.2 (not published)
+
+- Advanced the main-branch release identity to Cargo package version `0.3.2` (release tag `v0.3.2`, not published), the next patch version after the published, occupied `v0.3.1` tag, without moving, deleting, or reusing the existing tag.
+
+## v0.3.1 - 2026-08-01
 
 - Fixed 25+ high-risk defects across protocol translation correctness, streaming stability (timeout/cancellation gaps, O(n²) algorithmic-complexity DoS, mid-stream error handling), security (proxy-credential leak in error bodies, forgeable tool-call attestation), and error-response shaping (200-on-error, finish-reason mapping, tool-result validation).
 - Added unified reasoning effort with per-upstream `dialect` parameter: accept the union vocabulary (none→ultra) and map to each provider's native format (OpenAI reasoning_effort, Anthropic output_config.effort / thinking). Named presets (deepseek-openai, glm-openai, glm-anthropic, qwen-openai) for one-word config. Optional and additive — no behavior change without dialect.
