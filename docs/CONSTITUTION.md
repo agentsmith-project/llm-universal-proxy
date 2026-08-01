@@ -65,6 +65,17 @@ The proxy does not favor any particular LLM provider. It works equally well with
 - Self-hosted local models (vLLM, Ollama, llama.cpp, etc.)
 - Other endpoints that implement one of the supported protocols, within documented portability boundaries
 
+### 7. Maximum Client Compatibility
+
+The proxy proactively absorbs client-specific compatibility needs rather than passing them through to fail. When a real client (Codex CLI, Claude Code, or any standard SDK) sends a request the proxy can handle — even if the upstream cannot natively support every field — the proxy should adapt, warn, or omit non-portable detail to let the request succeed, rather than rejecting it outright.
+
+This includes:
+- Detecting client-specific expectations (e.g., model catalog formats, response field conventions) and serving compatible shapes.
+- Warn-and-omitting non-portable tools or fields that would otherwise cause a hard rejection, so the core request proceeds.
+- Setting response fields and headers that clients use for metadata, even when the proxy's internal pivot format does not naturally produce them.
+
+The proxy does not silently drop information: omissions are signaled via `x-llmup-portability-warning` headers. But the default posture is "make it work," not "fail closed on the first non-portable field."
+
 ## Invariants
 
 These are non-negotiable properties that all future development must preserve:
@@ -77,6 +88,7 @@ These are non-negotiable properties that all future development must preserve:
 6. **Single product goal**: Adding a new protocol or feature must preserve maximum safe compatibility rather than adding user-facing compatibility switches.
 7. **Portability omissions are visible**: When the proxy must omit non-portable request/response detail, it must emit portability warnings rather than silently losing information.
 8. **Typed media fails closed on conflicting identity**: If MIME provenance disagrees across explicit metadata, data URIs, or filename hints, the proxy must reject before contacting the upstream.
+9. **Maximum compatibility is the default posture**: when a field, tool, or convention is non-portable but the core request can succeed without it, the proxy warns and omits rather than rejecting the entire request. Hard rejection is reserved for cases where no safe representation exists.
 
 Locked tool identity contract:
 
@@ -127,6 +139,8 @@ imports external provider IDs. Unknown IDs, expired entries, process restart,
 namespace or owner mismatch, route/config drift, `store:false`, and external provider IDs fail closed.
 This is not persistent conversation state, not provider-owned lifecycle reconstruction,
 not a response cache, not user-selectable behavior, and not another product goal.
+
+Per-request compatibility state (such as tool-mapping context, model-metadata caches, or response-field enrichment) is acceptable and is not constrained by this exception. The exception governs provider-owned conversation lifecycle state, not the proxy's own request-scoped compatibility work.
 
 ## Design Philosophy
 

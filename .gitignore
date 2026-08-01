@@ -9,3 +9,4 @@ test-codex-config.toml
 proxy-test-*.yaml
 __pycache__/
 *.py[co]
+reference/
