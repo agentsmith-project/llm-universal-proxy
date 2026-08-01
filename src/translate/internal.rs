@@ -1663,31 +1663,30 @@ fn claude_response_to_openai_internal(
             append_openai_message_anthropic_reasoning_replay_blocks(&mut message, thinking_blocks);
         }
     }
-    let mut finish_reason = body
+    let stop_reason = body
         .get("stop_reason")
         .and_then(Value::as_str)
-        .unwrap_or("stop")
-        .to_string();
-    if finish_reason == "end_turn" {
-        finish_reason = "stop".to_string();
-    }
-    if finish_reason == "tool_use" {
-        finish_reason = "tool_calls".to_string();
-    }
-    if finish_reason == "model_context_window_exceeded" {
-        finish_reason = "context_length_exceeded".to_string();
-    }
-    if finish_reason == "pause_turn" {
-        finish_reason = "pause_turn".to_string();
-    }
-    if finish_reason == "refusal" {
+        .unwrap_or("stop");
+    if stop_reason == "refusal" {
         let refusal = extract_openai_content_text(message.get("content"));
         if !refusal.is_empty() {
             message["refusal"] = Value::String(refusal);
         }
         message["content"] = Value::Null;
-        finish_reason = "content_filter".to_string();
     }
+    // Map Anthropic stop_reason to OpenAI finish_reason (symmetric with the
+    // reverse direction in classify_openai_finish_for_anthropic). Any
+    // still-unmapped value falls back to "stop" so we never emit an invalid
+    // OpenAI finish_reason (e.g. leaking Anthropic's "max_tokens").
+    let finish_reason = match stop_reason {
+        "end_turn" | "stop_sequence" => "stop",
+        "tool_use" => "tool_calls",
+        "max_tokens" => "length",
+        "model_context_window_exceeded" => "context_length_exceeded",
+        "pause_turn" => "pause_turn",
+        "refusal" => "content_filter",
+        _ => "stop",
+    };
     let mut result = serde_json::json!({
         "id": body.get("id").cloned().unwrap_or_else(|| serde_json::json!(format!("chatcmpl-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()))),
         "object": "chat.completion",
@@ -2447,7 +2446,7 @@ fn openai_to_claude(body: &mut Value, target_model: &str) -> Result<(), String> 
                 serde_json::json!({
                     "name": t.get("function").and_then(|f| f.get("name")),
                     "description": t.get("function").and_then(|f| f.get("description")),
-                    "input_schema": t.get("function").and_then(|f| f.get("parameters"))
+                    "input_schema": t.get("function").and_then(|f| f.get("parameters")).unwrap_or(&serde_json::json!({ "type": "object", "properties": {} }))
                 })
             })
             .collect();

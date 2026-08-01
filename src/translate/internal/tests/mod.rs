@@ -3895,6 +3895,36 @@ fn translate_request_openai_allowed_tools_to_claude_filters_function_subset() {
 }
 
 #[test]
+fn translate_request_openai_function_tool_without_parameters_defaults_input_schema() {
+    let mut body = json!({
+        "model": "claude-3",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "tools": [
+            {
+                "type": "function",
+                "function": { "name": "get_time" }
+            }
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .unwrap();
+
+    let tools = body["tools"].as_array().expect("claude tools");
+    assert_eq!(tools.len(), 1, "body = {body:?}");
+    assert_eq!(
+        tools[0]["input_schema"],
+        json!({ "type": "object", "properties": {} })
+    );
+}
+
+#[test]
 fn translate_request_responses_allowed_tools_to_claude_filters_function_subset() {
     let mut body = json!({
         "model": "gpt-4o",
@@ -9586,6 +9616,40 @@ fn translate_response_claude_context_window_stop_maps_to_openai_error_reason() {
         out["choices"][0]["finish_reason"],
         "context_length_exceeded"
     );
+}
+
+#[test]
+fn translate_response_claude_max_tokens_stop_maps_to_openai_length() {
+    let body = json!({
+        "id": "msg_1",
+        "content": [{ "type": "text", "text": "Truncated" }],
+        "stop_reason": "max_tokens",
+        "model": "claude-3"
+    });
+    let out = translate_response(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+    )
+    .unwrap();
+    assert_eq!(out["choices"][0]["finish_reason"], "length");
+}
+
+#[test]
+fn translate_response_claude_stop_sequence_maps_to_openai_stop() {
+    let body = json!({
+        "id": "msg_1",
+        "content": [{ "type": "text", "text": "Done" }],
+        "stop_reason": "stop_sequence",
+        "model": "claude-3"
+    });
+    let out = translate_response(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+    )
+    .unwrap();
+    assert_eq!(out["choices"][0]["finish_reason"], "stop");
 }
 
 #[test]
