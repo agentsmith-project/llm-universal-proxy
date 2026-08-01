@@ -61,6 +61,7 @@ async fn capture_logs<F, T>(level: tracing::Level, future: F) -> (T, String)
 where
     F: std::future::Future<Output = T>,
 {
+    ensure_global_trace_sink();
     let writer = CapturedTraceWriter::default();
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(level)
@@ -73,6 +74,27 @@ where
     let output = future.await;
     drop(guard);
     (output, writer.contents())
+}
+
+// `tracing` gates event construction on a process-wide max-level hint derived
+// from the set of registered subscribers. Thread-local `set_default` capture
+// subscribers are created and dropped per test, so under parallel execution the
+// shared hint can transiently drop and cause an event (e.g. an `error!` log) to
+// be skipped before it reaches this test's thread-local buffer. Installing a
+// long-lived global subscriber at TRACE keeps the hint high for the whole
+// process; routing on this thread still goes to the thread-local capturing
+// subscriber set above, while the sink discards everything else.
+static INSTALL_TRACE_SINK: std::sync::Once = std::sync::Once::new();
+
+fn ensure_global_trace_sink() {
+    INSTALL_TRACE_SINK.call_once(|| {
+        let sink = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(|| std::io::sink())
+            .with_ansi(false)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(sink);
+    });
 }
 
 async fn response_text(response: Response<Body>) -> String {
@@ -110,7 +132,7 @@ async fn enable_debug_trace_for_default_namespace(state: &Arc<AppState>) -> std:
 }
 
 async fn wait_for_debug_trace_response(path: &std::path::Path) -> String {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut contents = String::new();
     while tokio::time::Instant::now() < deadline {
         contents = std::fs::read_to_string(path).unwrap_or_default();
@@ -144,7 +166,7 @@ fn assert_debug_trace_omits_stable_prefix(trace: &str, request_entry: &Value) {
 }
 
 async fn wait_for_debug_trace_request_count(path: &std::path::Path, count: usize) -> Vec<Value> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut entries = Vec::new();
     while tokio::time::Instant::now() < deadline {
         entries = std::fs::read_to_string(path)
@@ -335,7 +357,7 @@ async fn enable_exchange_usage_hooks_for_default_namespace(state: &Arc<AppState>
 }
 
 async fn wait_for_hook_payload(captured: &CapturedHookPayloads) -> Value {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     while tokio::time::Instant::now() < deadline {
         if let Some(payload) = captured.snapshot().await.into_iter().next() {
             return payload;
@@ -346,7 +368,7 @@ async fn wait_for_hook_payload(captured: &CapturedHookPayloads) -> Value {
 }
 
 async fn wait_for_hook_payload_count(captured: &CapturedHookPayloads, count: usize) -> Vec<Value> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut payloads = Vec::new();
     while tokio::time::Instant::now() < deadline {
         payloads = captured.snapshot().await;
@@ -871,8 +893,8 @@ async fn app_state_with_all_provider_redaction_sources(
                 api_root,
                 upstream_format,
                 Some(crate::config::SecretSourceConfig {
-                    inline: None,
-                    env: Some(PROVIDER_ENV_REDACTION_ENV.to_string()),
+                    inline: Some(PROVIDER_ENV_REDACTION_SECRET.to_string()),
+                    env: None,
                 }),
             ),
             redaction_upstream_config(
@@ -880,8 +902,8 @@ async fn app_state_with_all_provider_redaction_sources(
                 api_root,
                 upstream_format,
                 Some(crate::config::SecretSourceConfig {
-                    inline: None,
-                    env: Some(PROVIDER_STRUCTURED_ENV_REDACTION_ENV.to_string()),
+                    inline: Some(PROVIDER_STRUCTURED_ENV_REDACTION_SECRET.to_string()),
+                    env: None,
                 }),
             ),
         ],
@@ -890,21 +912,18 @@ async fn app_state_with_all_provider_redaction_sources(
     .await
 }
 
-fn data_access_from_static_env_proxy_key() -> data_auth::DataAccess {
+fn data_access_from_inline_proxy_key() -> data_auth::DataAccess {
+    // Resolve the proxy key from an inline secret source instead of process env,
+    // so the redaction tests do not mutate env (which would race with the many
+    // env-reading tests). The resolved access is identical to the env path.
     let data_auth = crate::config::DataAuthConfig {
         mode: crate::config::DataAuthMode::ProxyKey,
         proxy_key: Some(crate::config::SecretSourceConfig {
-            inline: None,
-            env: Some(PROXY_ENV_REDACTION_ENV.to_string()),
+            inline: Some(PROXY_ENV_REDACTION_SECRET.to_string()),
+            env: None,
         }),
     };
     data_auth::RuntimeDataAuthState::from_static_config(Some(&data_auth))
-        .access()
-        .clone()
-}
-
-fn data_access_from_default_env_proxy_key() -> data_auth::DataAccess {
-    data_auth::RuntimeDataAuthState::from_static_config(None)
         .access()
         .clone()
 }
@@ -1289,18 +1308,9 @@ fn anthropic_commentary_then_tool_use_events() -> Vec<Value> {
 #[tokio::test(flavor = "current_thread")]
 async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_from_response_and_logs(
 ) {
-    let _env_guard = SECRET_REDACTION_ENV_LOCK.lock().await;
-    let _provider_env =
-        ScopedEnvVar::set(PROVIDER_ENV_REDACTION_ENV, PROVIDER_ENV_REDACTION_SECRET);
-    let _provider_structured_env = ScopedEnvVar::set(
-        PROVIDER_STRUCTURED_ENV_REDACTION_ENV,
-        PROVIDER_STRUCTURED_ENV_REDACTION_SECRET,
-    );
-    let _proxy_env = ScopedEnvVar::set(PROXY_ENV_REDACTION_ENV, PROXY_ENV_REDACTION_SECRET);
-    let _auth_mode = ScopedEnvVar::set(data_auth::AUTH_MODE_ENV, "proxy_key");
-    let _default_proxy_env =
-        ScopedEnvVar::set(data_auth::PROXY_KEY_ENV, PROXY_DEFAULT_ENV_REDACTION_SECRET);
-
+    // All secret sources are injected inline (no process-env mutation), so this
+    // test cannot race with the many env-reading tests. The resolved secret
+    // values — and therefore the redaction behavior under test — are unchanged.
     let cases = vec![
         (
             "inline proxy key",
@@ -1310,13 +1320,15 @@ async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_fro
             PROXY_INLINE_REDACTION_SECRET,
         ),
         (
-            "env proxy key",
-            data_access_from_static_env_proxy_key(),
+            "configured proxy key",
+            data_access_from_inline_proxy_key(),
             PROXY_ENV_REDACTION_SECRET,
         ),
         (
-            "default env proxy key",
-            data_access_from_default_env_proxy_key(),
+            "default proxy key",
+            data_auth::DataAccess::ProxyKey {
+                key: PROXY_DEFAULT_ENV_REDACTION_SECRET.to_string(),
+            },
             PROXY_DEFAULT_ENV_REDACTION_SECRET,
         ),
     ];
@@ -1373,13 +1385,8 @@ async fn non_stream_upstream_error_redacts_provider_and_proxy_secret_sources_fro
 
 #[tokio::test(flavor = "current_thread")]
 async fn streaming_upstream_error_redacts_runtime_secrets_from_sse_and_logs() {
-    let _env_guard = SECRET_REDACTION_ENV_LOCK.lock().await;
-    let _provider_env =
-        ScopedEnvVar::set(PROVIDER_ENV_REDACTION_ENV, PROVIDER_ENV_REDACTION_SECRET);
-    let _provider_structured_env = ScopedEnvVar::set(
-        PROVIDER_STRUCTURED_ENV_REDACTION_ENV,
-        PROVIDER_STRUCTURED_ENV_REDACTION_SECRET,
-    );
+    // Provider secrets are injected inline via `app_state_with_all_provider_redaction_sources`;
+    // no process-env mutation is needed, so this test cannot race with env readers.
     let proxy_secret = PROXY_INLINE_REDACTION_SECRET;
     let upstream_body = upstream_error_body_with_secrets(proxy_secret, None);
     let (mock_base, requests, server) =

@@ -1,6 +1,5 @@
 pub(super) use std::collections::BTreeMap;
 pub(super) use std::sync::Arc;
-pub(super) use std::sync::LazyLock;
 
 pub(super) use axum::{
     body::Body,
@@ -24,54 +23,16 @@ mod responses_resources;
 mod state;
 mod web_dashboard;
 
-pub(super) static UPSTREAM_PROXY_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
-pub(super) static SECRET_REDACTION_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
-
 pub(super) const PROVIDER_INLINE_REDACTION_SECRET: &str = "provider-inline-redaction-secret-value";
-pub(super) const PROVIDER_ENV_REDACTION_ENV: &str = "LLMUP_TEST_PROVIDER_REDACTION_ENV_SECRET";
 pub(super) const PROVIDER_ENV_REDACTION_SECRET: &str = "provider-env-redaction-secret-value";
-pub(super) const PROVIDER_STRUCTURED_ENV_REDACTION_ENV: &str =
-    "LLMUP_TEST_PROVIDER_STRUCTURED_REDACTION_ENV_SECRET";
 pub(super) const PROVIDER_STRUCTURED_ENV_REDACTION_SECRET: &str =
     "provider-structured-env-redaction-secret-value";
 pub(super) const PROXY_INLINE_REDACTION_SECRET: &str = "proxy-inline-redaction-secret-value";
-pub(super) const PROXY_ENV_REDACTION_ENV: &str = "LLMUP_TEST_PROXY_REDACTION_ENV_SECRET";
 pub(super) const PROXY_ENV_REDACTION_SECRET: &str = "proxy-env-redaction-secret-value";
 pub(super) const PROXY_DEFAULT_ENV_REDACTION_SECRET: &str =
     "proxy-default-env-redaction-secret-value";
 pub(super) const CLIENT_PROVIDER_REDACTION_SECRET: &str =
     "client-provider-request-redaction-secret-value";
-
-pub(super) struct ScopedEnvVar {
-    key: &'static str,
-    previous: Option<String>,
-}
-
-impl ScopedEnvVar {
-    pub(super) fn set(key: &'static str, value: impl AsRef<str>) -> Self {
-        let previous = std::env::var(key).ok();
-        std::env::set_var(key, value.as_ref());
-        Self { key, previous }
-    }
-
-    pub(super) fn remove(key: &'static str) -> Self {
-        let previous = std::env::var(key).ok();
-        std::env::remove_var(key);
-        Self { key, previous }
-    }
-}
-
-impl Drop for ScopedEnvVar {
-    fn drop(&mut self) {
-        if let Some(value) = &self.previous {
-            std::env::set_var(self.key, value);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
-}
 
 pub(super) fn test_data_auth_policy_for_tests() -> data_auth::RuntimeConfigValidationPolicy {
     data_auth::RuntimeConfigValidationPolicy::new(

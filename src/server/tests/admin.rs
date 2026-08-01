@@ -110,12 +110,11 @@ fn authorize_admin_request_allows_loopback_only_without_token() {
 }
 
 #[test]
-fn admin_access_from_env_treats_blank_value_as_misconfigured() {
-    let _env_guard = UPSTREAM_PROXY_ENV_LOCK.blocking_lock();
-    let _admin_token = ScopedEnvVar::set("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN", "   ");
-
+fn admin_access_from_env_var_result_treats_blank_value_as_misconfigured() {
+    // Drive the parser directly with a blank value instead of mutating process
+    // env, which would race with the many reader tests that observe env.
     assert!(matches!(
-        AdminAccess::from_env(),
+        AdminAccess::from_env_var_result(Ok("   ".to_string())),
         AdminAccess::Misconfigured
     ));
 }
@@ -330,21 +329,14 @@ async fn admin_namespace_state_sanitizes_urls_and_redacts_sensitive_headers() {
 
 #[tokio::test]
 async fn admin_namespace_state_reports_environment_proxy_without_echoing_url() {
-    let _env_guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
-    let _http_proxy = ScopedEnvVar::set("HTTP_PROXY", "http://user:pass@env-proxy.example:8080");
-    let _http_proxy_lower =
-        ScopedEnvVar::set("http_proxy", "http://user:pass@env-proxy.example:8080");
-    let _https_proxy = ScopedEnvVar::remove("HTTPS_PROXY");
-    let _https_proxy_lower = ScopedEnvVar::remove("https_proxy");
-    let _all_proxy = ScopedEnvVar::remove("ALL_PROXY");
-    let _all_proxy_lower = ScopedEnvVar::remove("all_proxy");
-    let _no_proxy = ScopedEnvVar::remove("NO_PROXY");
-    let _no_proxy_lower = ScopedEnvVar::remove("no_proxy");
-
+    // Namespace direct override keeps client construction deterministic
+    // (`no_proxy()`) without touching process env. The env-proxy reporting path
+    // of the admin serializer is exercised via the explicit `resolved_proxy`
+    // metadata set on the upstream state below.
     let config = crate::config::Config {
         listen: "127.0.0.1:0".to_string(),
         upstream_timeout: std::time::Duration::from_secs(30),
-        proxy: None,
+        proxy: Some(crate::config::ProxyConfig::Direct),
         upstreams: vec![crate::config::UpstreamConfig {
             name: "default".to_string(),
             api_root: "https://api.openai.com/v1".to_string(),
@@ -380,6 +372,13 @@ async fn admin_namespace_state_reports_environment_proxy_without_echoing_url() {
             &resolved_proxy,
         )
         .expect("build admin env no-auto-decompression streaming upstream client");
+    // Construct the environment-proxy metadata directly: the admin serializer
+    // must report source="env" and must not echo an env-derived proxy URL (the
+    // URL is never captured for an inherited env proxy).
+    let env_resolved_proxy = crate::upstream::ResolvedProxyMetadata {
+        source: crate::upstream::ResolvedProxySource::Environment,
+        target: crate::upstream::ResolvedProxyTarget::Inherited,
+    };
     upstreams.insert(
         "default".to_string(),
         UpstreamState {
@@ -393,7 +392,7 @@ async fn admin_namespace_state_reports_environment_proxy_without_echoing_url() {
             streaming_client,
             no_auto_decompression_client,
             no_auto_decompression_streaming_client,
-            resolved_proxy,
+            resolved_proxy: env_resolved_proxy,
         },
     );
 

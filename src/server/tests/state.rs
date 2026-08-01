@@ -2,16 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn build_runtime_namespace_state_exposes_resolved_per_upstream_clients() {
-    let _env_guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
-    let _http_proxy = ScopedEnvVar::remove("HTTP_PROXY");
-    let _http_proxy_lower = ScopedEnvVar::remove("http_proxy");
-    let _https_proxy = ScopedEnvVar::remove("HTTPS_PROXY");
-    let _https_proxy_lower = ScopedEnvVar::remove("https_proxy");
-    let _all_proxy = ScopedEnvVar::remove("ALL_PROXY");
-    let _all_proxy_lower = ScopedEnvVar::remove("all_proxy");
-    let _no_proxy = ScopedEnvVar::remove("NO_PROXY");
-    let _no_proxy_lower = ScopedEnvVar::remove("no_proxy");
-
+    // An explicit namespace `ProxyConfig::Direct` makes `build_upstream_clients`
+    // call `no_proxy()`, so the resolved per-upstream clients reach the mock
+    // deterministically regardless of ambient proxy env (no env mutation).
     let (api_root, requests, server) = spawn_openai_completion_mock(serde_json::json!({
         "id": "chatcmpl_test",
         "object": "chat.completion",
@@ -27,7 +20,7 @@ async fn build_runtime_namespace_state_exposes_resolved_per_upstream_clients() {
     let config = crate::config::Config {
         listen: "127.0.0.1:0".to_string(),
         upstream_timeout: std::time::Duration::from_secs(30),
-        proxy: None,
+        proxy: Some(crate::config::ProxyConfig::Direct),
         upstreams: vec![crate::config::UpstreamConfig {
             name: "primary".to_string(),
             api_root: api_root.clone(),
@@ -97,8 +90,8 @@ async fn build_runtime_namespace_state_exposes_resolved_per_upstream_clients() {
     assert_eq!(
         &upstream_state.resolved_proxy,
         &crate::upstream::ResolvedProxyMetadata {
-            source: crate::upstream::ResolvedProxySource::None,
-            target: crate::upstream::ResolvedProxyTarget::Inherited,
+            source: crate::upstream::ResolvedProxySource::Namespace,
+            target: crate::upstream::ResolvedProxyTarget::Direct,
         }
     );
     let recorded = requests.lock().await;

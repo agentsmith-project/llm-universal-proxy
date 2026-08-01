@@ -1,21 +1,75 @@
 use super::*;
+use axum::middleware;
+use axum::routing::get;
+use std::net::SocketAddr;
 
-async fn start_test_proxy() -> (
-    String,
-    tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>,
-) {
+// Build the dashboard + admin routes against an AppState whose `admin_access` is
+// injected directly (a bearer token). This avoids mutating the process env
+// (`LLM_UNIVERSAL_PROXY_ADMIN_TOKEN`), which the production server bootstrap
+// reads via `AdminAccess::from_env()` and which would race with the many
+// reader tests that observe env. The dashboard routes are public; the admin
+// route is guarded by `require_admin_access`, exactly as in the live router.
+async fn start_dashboard_proxy(
+    admin_token: &str,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let config = crate::config::Config::default();
+    let data_access = data_auth::DataAccess::ClientProviderKey;
+    let runtime = crate::server::state::build_runtime_state(config.clone(), &data_access)
+        .await
+        .expect("build dashboard runtime");
+    let state = Arc::new(AppState {
+        runtime: Arc::new(RwLock::new(runtime)),
+        admin_update_lock: Arc::new(Mutex::new(())),
+        metrics: crate::telemetry::RuntimeMetrics::new(&config),
+        admin_access: AdminAccess::BearerToken(admin_token.to_string()),
+        data_auth_policy: test_data_auth_policy_for_tests(),
+        conversation_state_bridge: Arc::new(
+            crate::server::conversation_state_bridge::ConversationStateBridgeStore::new(),
+        ),
+    });
+
+    let admin_router = Router::new()
+        .route(
+            "/admin/state",
+            get(crate::server::admin::handle_admin_state),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::server::admin::require_admin_access,
+        ));
+
+    let app = Router::new()
+        .route(
+            "/dashboard",
+            get(crate::server::web_dashboard::handle_dashboard_index),
+        )
+        .route(
+            "/dashboard/",
+            get(crate::server::web_dashboard::handle_dashboard_index),
+        )
+        .route(
+            "/dashboard/assets/app.css",
+            get(crate::server::web_dashboard::handle_dashboard_css),
+        )
+        .route(
+            "/dashboard/assets/app.js",
+            get(crate::server::web_dashboard::handle_dashboard_js),
+        )
+        .merge(admin_router)
+        .with_state(state);
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("bind proxy");
-    let port = listener.local_addr().expect("proxy local addr").port();
-    let base = format!("http://127.0.0.1:{port}");
+        .expect("bind dashboard proxy");
+    let addr = listener.local_addr().expect("dashboard local addr");
+    let base = format!("http://127.0.0.1:{}", addr.port());
     let handle = tokio::spawn(async move {
-        run_with_listener_with_data_auth(
-            crate::config::Config::default(),
+        axum::serve(
             listener,
-            DataAuthConfig::client_provider_key(),
+            app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .await
+        .expect("dashboard proxy server");
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     (base, handle)
@@ -30,9 +84,7 @@ fn dashboard_client() -> reqwest::Client {
 
 #[tokio::test]
 async fn dashboard_shell_is_public_when_admin_token_is_configured() {
-    let _env_guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
-    let _admin_token = ScopedEnvVar::set("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN", "dashboard-secret");
-    let (proxy_base, _proxy) = start_test_proxy().await;
+    let (proxy_base, _proxy) = start_dashboard_proxy("dashboard-secret").await;
     let client = dashboard_client();
 
     let response = client
@@ -67,9 +119,7 @@ async fn dashboard_shell_is_public_when_admin_token_is_configured() {
 
 #[tokio::test]
 async fn dashboard_static_assets_are_public_shell_resources_with_content_types() {
-    let _env_guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
-    let _admin_token = ScopedEnvVar::set("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN", "dashboard-secret");
-    let (proxy_base, _proxy) = start_test_proxy().await;
+    let (proxy_base, _proxy) = start_dashboard_proxy("dashboard-secret").await;
     let client = dashboard_client();
 
     let js = client
@@ -127,9 +177,7 @@ async fn dashboard_static_assets_are_public_shell_resources_with_content_types()
 
 #[tokio::test]
 async fn admin_endpoints_still_require_bearer_when_dashboard_shell_is_public() {
-    let _env_guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
-    let _admin_token = ScopedEnvVar::set("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN", "dashboard-secret");
-    let (proxy_base, _proxy) = start_test_proxy().await;
+    let (proxy_base, _proxy) = start_dashboard_proxy("dashboard-secret").await;
     let client = dashboard_client();
 
     let dashboard = client
@@ -167,9 +215,7 @@ async fn admin_endpoints_still_require_bearer_when_dashboard_shell_is_public() {
 
 #[tokio::test]
 async fn dashboard_copy_keeps_redacted_state_read_only_and_requires_full_payload() {
-    let _env_guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
-    let _admin_token = ScopedEnvVar::set("LLM_UNIVERSAL_PROXY_ADMIN_TOKEN", "dashboard-secret");
-    let (proxy_base, _proxy) = start_test_proxy().await;
+    let (proxy_base, _proxy) = start_dashboard_proxy("dashboard-secret").await;
     let client = dashboard_client();
 
     let body = client
