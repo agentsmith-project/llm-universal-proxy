@@ -7593,6 +7593,30 @@ fn translate_request_claude_to_openai_maps_extra_body_openai_prompt_cache_contro
 }
 
 #[test]
+fn translate_request_claude_to_openai_maps_max_tokens_to_max_completion_tokens() {
+    let mut body = json!({
+        "model": "claude-3",
+        "max_tokens": 128,
+        "messages": [{ "role": "user", "content": "Hi" }]
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiChatCompletions,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .expect("Anthropic request should map to OpenAI Chat Completions");
+
+    assert_eq!(body["max_completion_tokens"], 128);
+    assert!(
+        body.get("max_tokens").is_none(),
+        "deprecated max_tokens should not be emitted, body = {body:?}"
+    );
+}
+
+#[test]
 fn translate_request_claude_to_responses_maps_extra_body_openai_prompt_cache_controls() {
     let mut body = json!({
         "model": "claude-3",

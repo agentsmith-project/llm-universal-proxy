@@ -1919,7 +1919,7 @@ fn claude_to_openai(body: &mut Value, decode_custom_bridge: bool) -> Result<(), 
         "stream": body.get("stream").cloned().unwrap_or(serde_json::json!(false))
     });
     if let Some(max_tokens) = body.get("max_tokens") {
-        result["max_tokens"] = max_tokens.clone();
+        result["max_completion_tokens"] = max_tokens.clone();
     }
     if let Some(t) = body.get("temperature") {
         result["temperature"] = t.clone();
