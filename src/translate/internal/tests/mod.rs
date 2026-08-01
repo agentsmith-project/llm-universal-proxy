@@ -6730,7 +6730,7 @@ fn translate_request_claude_structured_tool_result_content_round_trips() {
                     "tool_use_id": "toolu_1",
                     "content": [
                         { "type": "text", "text": "done" },
-                        { "type": "json", "json": { "temperature": 22 } }
+                        { "type": "text", "text": "{\"temperature\":22}" }
                     ]
                 }]
             }
@@ -6768,7 +6768,96 @@ fn translate_request_claude_structured_tool_result_content_round_trips() {
     assert_eq!(content[0]["type"], "tool_result");
     assert!(content[0]["content"].is_array(), "body = {body:?}");
     assert_eq!(content[0]["content"][0]["type"], "text");
-    assert_eq!(content[0]["content"][1]["type"], "json");
+    assert_eq!(content[0]["content"][1]["type"], "text");
+}
+
+#[test]
+fn translate_request_claude_tool_result_with_image_block_to_openai_chat_is_rejected() {
+    let mut body = json!({
+        "model": "claude-3",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "take_screenshot",
+                    "input": {}
+                }]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        { "type": "text", "text": "screenshot attached" },
+                        { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=" } }
+                    ]
+                }]
+            }
+        ]
+    });
+
+    let err = translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiChatCompletions,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .expect_err("image tool_result content must be rejected for OpenAI Chat");
+    assert!(
+        err.contains("text"),
+        "error should explain the text-only constraint: {err}"
+    );
+    assert!(
+        err.contains("image"),
+        "error should identify the offending block type: {err}"
+    );
+}
+
+#[test]
+fn translate_request_claude_tool_result_with_null_content_to_openai_chat_emits_empty_string() {
+    let mut body = json!({
+        "model": "claude-3",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "lookup_weather",
+                    "input": { "city": "Tokyo" }
+                }]
+            },
+            {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": null
+                }]
+            }
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiChatCompletions,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .unwrap();
+
+    let messages = body["messages"].as_array().expect("openai messages");
+    assert_eq!(messages[1]["role"], "tool");
+    assert_eq!(
+        messages[1]["content"].as_str().unwrap_or("not a string"),
+        "",
+        "null tool_result content should become empty string, body = {body:?}"
+    );
 }
 
 #[test]

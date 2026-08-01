@@ -2901,7 +2901,7 @@ async fn anthropic_claude_code_second_round_thinking_context_management_reaches_
                             "tool_use_id": "toolu_lookup_context_1",
                             "content": [
                                 { "type": "text", "text": "tool says ready" },
-                                { "type": "json", "json": { "status": "ready", "attempt": 2 } }
+                                { "type": "text", "text": "{\"status\":\"ready\",\"attempt\":2}" }
                             ]
                         }
                     ]
@@ -2999,7 +2999,7 @@ async fn anthropic_claude_code_second_round_thinking_context_management_reaches_
         tool_result_message["content"],
         serde_json::json!([
             { "type": "text", "text": "tool says ready" },
-            { "type": "json", "json": { "status": "ready", "attempt": 2 } }
+            { "type": "text", "text": "{\"status\":\"ready\",\"attempt\":2}" }
         ])
     );
 

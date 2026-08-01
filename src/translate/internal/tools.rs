@@ -95,6 +95,9 @@ pub(crate) fn semantic_tool_result_content_from_value(
 ) -> SemanticToolResultContent {
     match content {
         Some(Value::String(text)) => SemanticToolResultContent::Text(text.clone()),
+        // An explicit `content: null` is treated like an absent content field: OpenAI Chat
+        // tool messages require a string (or text parts), and `null` would surface upstream.
+        Some(Value::Null) => SemanticToolResultContent::Text(String::new()),
         Some(Value::Array(items))
             if items.iter().all(|item| {
                 item.get("type")
@@ -115,6 +118,34 @@ pub(crate) fn semantic_tool_result_content_to_value(content: &SemanticToolResult
         SemanticToolResultContent::Text(text) => Value::String(text.clone()),
         SemanticToolResultContent::Json(value) => value.clone(),
         SemanticToolResultContent::TypedBlocks(items) => Value::Array(items.clone()),
+    }
+}
+
+/// Convert an Anthropic `tool_result`'s semantic content into the `content` of an OpenAI Chat
+/// Completions `role: "tool"` message. Unlike the lossless `semantic_tool_result_content_to_value`,
+/// this guards the Chat direction: a Chat tool message only accepts a string or an array of TEXT
+/// parts, so non-text typed blocks (e.g. an image screenshot result) are rejected with a clear
+/// portability error rather than silently passed through (which would trigger an upstream 400).
+/// This mirrors the Responses guard in `openai_tool_result_content_to_responses_output`.
+pub(crate) fn semantic_tool_result_content_to_openai_chat_tool_content(
+    content: &SemanticToolResultContent,
+) -> Result<Value, String> {
+    match content {
+        SemanticToolResultContent::Text(text) => Ok(Value::String(text.clone())),
+        SemanticToolResultContent::Json(value) => Ok(value.clone()),
+        SemanticToolResultContent::TypedBlocks(items) => {
+            for item in items {
+                if item.get("type").and_then(Value::as_str) != Some("text") {
+                    return Err(format!(
+                        "OpenAI Chat Completions tool message content arrays can only contain text parts when translating an Anthropic tool_result; found `{}`.",
+                        item.get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown")
+                    ));
+                }
+            }
+            Ok(Value::Array(items.clone()))
+        }
     }
 }
 

@@ -746,7 +746,8 @@ use tools::{
     request_scoped_tool_bridge_context_from_body, semantic_text_part_from_claude_block,
     semantic_text_part_from_openai_part, semantic_text_part_to_openai_value,
     semantic_tool_kind_from_value, semantic_tool_result_content_from_value,
-    semantic_tool_result_content_to_value, tool_call_is_marked_non_replayable,
+    semantic_tool_result_content_to_openai_chat_tool_content, semantic_tool_result_content_to_value,
+    tool_call_is_marked_non_replayable,
     validate_openai_public_tool_choice_identity, validate_openai_public_tool_identity,
     validate_public_selector_visible_identities, validate_public_selector_visible_identity,
     validate_public_tool_name_not_reserved,
@@ -2193,10 +2194,12 @@ fn convert_claude_message_to_openai_impl(
             "tool_result" => {
                 let semantic_content =
                     semantic_tool_result_content_from_value(block.get("content"));
+                let content =
+                    semantic_tool_result_content_to_openai_chat_tool_content(&semantic_content)?;
                 tool_results.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": block.get("tool_use_id"),
-                    "content": semantic_tool_result_content_to_value(&semantic_content)
+                    "content": content
                 }));
             }
             "thinking" => {
