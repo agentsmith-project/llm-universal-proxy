@@ -73,6 +73,46 @@ async fn spawn_raw_responses_resource_mock(
     (format!("http://{addr}"), server)
 }
 
+/// Spawn a mock Responses-resource upstream that returns the given error
+/// `status` and headers immediately, but whose body stream NEVER yields a
+/// chunk. This emulates an upstream that sends headers then stalls mid-body —
+/// the condition that used to hang the proxy's streaming resource error-body
+/// read on `stream.next().await`.
+async fn spawn_hanging_responses_resource_error_mock(
+    status: StatusCode,
+) -> (String, tokio::task::JoinHandle<()>) {
+    #[derive(Clone)]
+    struct HangingErrorState {
+        status: StatusCode,
+    }
+
+    async fn handle_resource(State(state): State<HangingErrorState>) -> Response<Body> {
+        let hanging = futures_util::stream::pending::<Result<bytes::Bytes, std::io::Error>>();
+        Response::builder()
+            .status(state.status)
+            .header("Content-Type", "application/json")
+            .body(Body::from_stream(hanging))
+            .expect("hanging resource error body mock response")
+    }
+
+    let app = Router::new()
+        .route("/responses/:id", axum::routing::get(handle_resource))
+        .with_state(HangingErrorState { status });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind hanging resource error body mock");
+    let addr = listener
+        .local_addr()
+        .expect("hanging resource error body mock addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("hanging resource error body mock server");
+    });
+
+    (format!("http://{addr}"), server)
+}
+
 async fn spawn_recorded_responses_resource_stream_mock(
     status: StatusCode,
     content_type: impl Into<String>,
@@ -699,6 +739,51 @@ async fn handle_openai_responses_resource_upstream_error_body_limit_fails_closed
         "{body_text}"
     );
     assert!(!body_text.contains(upstream_sentinel), "{body_text}");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn handle_openai_responses_resource_streaming_error_body_read_is_time_bound_when_upstream_stalls(
+) {
+    // The Responses-resource upstream returns error status + headers within the
+    // first-response timeout, then NEVER sends the error body. The streaming
+    // resource error-body read must be bounded by the same upstream timeout used
+    // for headers so the proxy task does not hang; on timeout it must surface an
+    // error instead of hanging forever.
+    let (mock_base, server) =
+        spawn_hanging_responses_resource_error_mock(StatusCode::BAD_GATEWAY).await;
+    let upstream_timeout = std::time::Duration::from_millis(150);
+    let state = app_state_for_single_upstream_with_timeout(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiResponses,
+        upstream_timeout,
+    );
+
+    let proxied = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        handle_openai_responses_resource(
+            state,
+            DEFAULT_NAMESPACE.to_string(),
+            HeaderMap::new(),
+            reqwest::Method::GET,
+            "responses/resp_stalled".to_string(),
+            None,
+            Some("stream=true".to_string()),
+        ),
+    )
+    .await;
+
+    let response = proxied.expect("proxy must not hang reading streaming resource error body");
+    // For OpenAiResponses the streaming error is delivered as an SSE
+    // `response.failed` event with HTTP 200; what matters is that the proxy
+    // produced a complete error response instead of hanging on the body read.
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_text = response_body_text(response).await;
+    assert!(
+        body_text.contains("response.failed"),
+        "expected a streaming resource error indication, body = {body_text}"
+    );
 
     server.abort();
 }

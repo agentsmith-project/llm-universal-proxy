@@ -1412,20 +1412,23 @@ async fn handle_request_core_with_downstream_cancellation(
         debug!("Upstream streaming response status: {}", status);
         if llmup.zero_transform_forwarding_active {
             if !status.is_success() {
-                let bytes = match upstream::read_response_bytes_limited_with_cancellation(
-                    res,
-                    namespace_state
-                        .config
-                        .resource_limits
-                        .max_upstream_error_body_bytes,
-                    &downstream_cancellation,
+                let bytes = match tokio::time::timeout(
+                    namespace_state.config.upstream_timeout,
+                    upstream::read_response_bytes_limited_with_cancellation(
+                        res,
+                        namespace_state
+                            .config
+                            .resource_limits
+                            .max_upstream_error_body_bytes,
+                        &downstream_cancellation,
+                    ),
                 )
                 .await
                 {
-                    Ok(body) => body,
-                    Err(upstream::DownstreamAwareError::Inner(
+                    Ok(Ok(body)) => body,
+                    Ok(Err(upstream::DownstreamAwareError::Inner(
                         upstream::ResponseBodyLimitError::LimitExceeded { limit },
-                    )) => {
+                    ))) => {
                         tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
                         return response_with_portability_warning_headers(
                             redacted_streaming_error_response(
@@ -1439,9 +1442,9 @@ async fn handle_request_core_with_downstream_cancellation(
                             &portability_warnings,
                         );
                     }
-                    Err(upstream::DownstreamAwareError::Inner(
+                    Ok(Err(upstream::DownstreamAwareError::Inner(
                         upstream::ResponseBodyLimitError::Inner(error),
-                    )) => {
+                    ))) => {
                         tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
                         return response_with_portability_warning_headers(
                             redacted_streaming_error_response(
@@ -1453,9 +1456,29 @@ async fn handle_request_core_with_downstream_cancellation(
                             &portability_warnings,
                         );
                     }
-                    Err(upstream::DownstreamAwareError::DownstreamCancelled) => {
+                    Ok(Err(upstream::DownstreamAwareError::DownstreamCancelled)) => {
                         tracker.finish_cancelled();
                         return client_closed_response(client_format);
+                    }
+                    // The streaming client only bounds connect + headers, so a
+                    // stalled upstream (crash / LB timeout mid-response) would
+                    // otherwise hang the proxy task on the error-body read
+                    // forever. Bound it with the same budget used for headers and
+                    // treat an elapsed read as an upstream read failure.
+                    Err(_elapsed) => {
+                        tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
+                        return response_with_portability_warning_headers(
+                            redacted_streaming_error_response(
+                                client_format,
+                                StatusCode::BAD_GATEWAY,
+                                &format!(
+                                    "failed to read upstream error body: timed out after {:?}",
+                                    namespace_state.config.upstream_timeout
+                                ),
+                                &request_redactor,
+                            ),
+                            &portability_warnings,
+                        );
                     }
                 };
                 tracker.finish_error(status.as_u16());
@@ -1550,20 +1573,23 @@ async fn handle_request_core_with_downstream_cancellation(
             return response_with_portability_warning_headers(response, &portability_warnings);
         }
         if !status.is_success() {
-            let error_body = match upstream::read_response_text_limited_with_cancellation(
-                res,
-                namespace_state
-                    .config
-                    .resource_limits
-                    .max_upstream_error_body_bytes,
-                &downstream_cancellation,
+            let error_body = match tokio::time::timeout(
+                namespace_state.config.upstream_timeout,
+                upstream::read_response_text_limited_with_cancellation(
+                    res,
+                    namespace_state
+                        .config
+                        .resource_limits
+                        .max_upstream_error_body_bytes,
+                    &downstream_cancellation,
+                ),
             )
             .await
             {
-                Ok(body) => body,
-                Err(upstream::DownstreamAwareError::Inner(
+                Ok(Ok(body)) => body,
+                Ok(Err(upstream::DownstreamAwareError::Inner(
                     upstream::ResponseBodyLimitError::LimitExceeded { limit },
-                )) => {
+                ))) => {
                     tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
                     return response_with_portability_warning_headers(
                         redacted_streaming_error_response(
@@ -1577,13 +1603,21 @@ async fn handle_request_core_with_downstream_cancellation(
                         &portability_warnings,
                     );
                 }
-                Err(upstream::DownstreamAwareError::Inner(
+                Ok(Err(upstream::DownstreamAwareError::Inner(
                     upstream::ResponseBodyLimitError::Inner(_),
-                )) => "Unknown error".to_string(),
-                Err(upstream::DownstreamAwareError::DownstreamCancelled) => {
+                ))) => "Unknown error".to_string(),
+                Ok(Err(upstream::DownstreamAwareError::DownstreamCancelled)) => {
                     tracker.finish_cancelled();
                     return client_closed_response(client_format);
                 }
+                // Bound the streaming error-body read with the same budget used
+                // for headers; a stalled upstream would otherwise hang the proxy
+                // task on the read forever. Treat an elapsed read as an upstream
+                // read failure.
+                Err(_elapsed) => format!(
+                    "failed to read upstream error body: timed out after {:?}",
+                    namespace_state.config.upstream_timeout
+                ),
             };
             let redacted_error_body = redact_text_with_prompt_cache_key(
                 &request_redactor,

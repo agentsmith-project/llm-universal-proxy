@@ -795,6 +795,51 @@ async fn spawn_header_delayed_openai_completion_stream_mock(
     (format!("http://{addr}"), server)
 }
 
+/// Spawn a mock upstream that returns the given error `status` and headers
+/// immediately, but whose body stream NEVER yields a chunk. This emulates an
+/// upstream that sends the error status line + headers within the
+/// first-response timeout and then stalls mid-body (upstream crash, LB
+/// timeout mid-response) — the exact condition that used to hang the proxy's
+/// streaming error-body read on `stream.next().await`.
+async fn spawn_hanging_openai_error_upstream_mock(
+    status: StatusCode,
+) -> (String, tokio::task::JoinHandle<()>) {
+    #[derive(Clone)]
+    struct HangingErrorState {
+        status: StatusCode,
+    }
+
+    async fn handle_openai_endpoint(
+        State(state): State<HangingErrorState>,
+        Json(_body): Json<Value>,
+    ) -> Response<Body> {
+        let hanging = futures_util::stream::pending::<Result<bytes::Bytes, std::io::Error>>();
+        Response::builder()
+            .status(state.status)
+            .header("Content-Type", "application/json")
+            .body(Body::from_stream(hanging))
+            .expect("hanging error body mock response")
+    }
+
+    let app = Router::new()
+        .route("/chat/completions", post(handle_openai_endpoint))
+        .route("/responses", post(handle_openai_endpoint))
+        .with_state(HangingErrorState { status });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind hanging error body mock upstream");
+    let addr = listener
+        .local_addr()
+        .expect("hanging error body mock local addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("hanging error body mock server");
+    });
+
+    (format!("http://{addr}"), server)
+}
+
 async fn set_resource_limits(state: &Arc<AppState>, limits: crate::config::ResourceLimits) {
     let mut runtime = state.runtime.write().await;
     runtime
@@ -6764,6 +6809,55 @@ async fn streaming_requests_are_not_cut_off_by_unary_upstream_timeout() {
     let body = String::from_utf8(body.to_vec()).expect("utf8 stream body");
     assert!(body.contains("\"content\":\"Hi\""), "body = {body}");
     assert!(body.contains("data: [DONE]"), "body = {body}");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn streaming_upstream_error_body_read_is_time_bound_when_upstream_stalls() {
+    // The upstream returns the error status + headers within the first-response
+    // timeout, then NEVER sends the error body. Reading the streaming error body
+    // must be bounded by the same upstream timeout used for headers so the proxy
+    // task does not hang on `stream.next().await`; on timeout it must surface an
+    // error instead of hanging forever.
+    let (mock_base, server) =
+        spawn_hanging_openai_error_upstream_mock(StatusCode::BAD_GATEWAY).await;
+    let upstream_timeout = std::time::Duration::from_millis(150);
+    let state = app_state_for_single_upstream_with_timeout(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        upstream_timeout,
+    );
+
+    let proxied = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        handle_request_core(
+            state,
+            DEFAULT_NAMESPACE.to_string(),
+            HeaderMap::new(),
+            "/openai/v1/chat/completions".to_string(),
+            serde_json::json!({
+                "model": "gpt-4o-mini",
+                "messages": [{ "role": "user", "content": "Hi" }],
+                "stream": true
+            }),
+            "gpt-4o-mini".to_string(),
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
+            None,
+        ),
+    )
+    .await;
+
+    let response = proxied.expect("proxy must not hang reading streaming error body");
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("error body bytes");
+    let body_text = String::from_utf8(body.to_vec()).expect("utf8 error body");
+    assert!(
+        body_text.contains("upstream error body"),
+        "expected a streaming error-body read failure indication, body = {body_text}"
+    );
 
     server.abort();
 }

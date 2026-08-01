@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     body::Body,
@@ -1592,6 +1593,7 @@ async fn handle_openai_responses_resource_with_downstream_cancellation(
             request_redactor,
             tracker,
             downstream_cancellation,
+            namespace_state.config.upstream_timeout,
         )
         .await;
     }
@@ -1770,19 +1772,23 @@ async fn handle_openai_responses_resource_stream_response(
     request_redactor: SecretRedactor,
     mut tracker: crate::telemetry::RequestTracker,
     downstream_cancellation: DownstreamCancellation,
+    upstream_timeout: Duration,
 ) -> Response<Body> {
     if !status.is_success() {
-        let error_body = match upstream::read_resource_response_text_limited_with_cancellation(
-            response,
-            resource_limits.max_upstream_error_body_bytes,
-            &downstream_cancellation,
+        let error_body = match tokio::time::timeout(
+            upstream_timeout,
+            upstream::read_resource_response_text_limited_with_cancellation(
+                response,
+                resource_limits.max_upstream_error_body_bytes,
+                &downstream_cancellation,
+            ),
         )
         .await
         {
-            Ok(body) => body,
-            Err(upstream::DownstreamAwareError::Inner(
+            Ok(Ok(body)) => body,
+            Ok(Err(upstream::DownstreamAwareError::Inner(
                 upstream::ResponseBodyLimitError::LimitExceeded { limit },
-            )) => {
+            ))) => {
                 tracker.finish_error(StatusCode::BAD_GATEWAY.as_u16());
                 let mut response = redacted_streaming_error_response(
                     UpstreamFormat::OpenAiResponses,
@@ -1797,12 +1803,19 @@ async fn handle_openai_responses_resource_stream_response(
                 );
                 return response;
             }
-            Err(upstream::DownstreamAwareError::Inner(
+            Ok(Err(upstream::DownstreamAwareError::Inner(
                 upstream::ResponseBodyLimitError::Inner(_),
-            )) => "Unknown error".to_string(),
-            Err(upstream::DownstreamAwareError::DownstreamCancelled) => {
+            ))) => "Unknown error".to_string(),
+            Ok(Err(upstream::DownstreamAwareError::DownstreamCancelled)) => {
                 tracker.finish_cancelled();
                 return client_closed_response(UpstreamFormat::OpenAiResponses);
+            }
+            // Bound the streaming resource error-body read with the same budget
+            // used for headers; a stalled upstream would otherwise hang the
+            // proxy task on the read forever. Treat an elapsed read as an
+            // upstream read failure.
+            Err(_elapsed) => {
+                format!("failed to read upstream error body: timed out after {upstream_timeout:?}")
             }
         };
         tracker.finish_error(status.as_u16());
