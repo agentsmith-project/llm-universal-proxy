@@ -2989,6 +2989,90 @@ fn translate_request_responses_to_openai_maps_shared_controls_and_drops_response
 }
 
 #[test]
+fn translate_request_responses_same_wire_preserves_reasoning_effort_max() {
+    let mut body = json!({
+        "model": "gpt-5",
+        "input": "Hello",
+        "reasoning": { "effort": "max" }
+    });
+
+    translate_request_with_policy(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiResponses,
+        "gpt-5",
+        &mut body,
+        request_translation_policy(None),
+        false,
+    )
+    .expect("same-wire Responses passthrough must accept reasoning.effort \"max\"");
+
+    assert_eq!(body["reasoning"]["effort"], "max");
+}
+
+#[test]
+fn translate_request_chat_same_wire_preserves_reasoning_effort_max() {
+    let mut body = json!({
+        "model": "gpt-5",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "reasoning_effort": "max"
+    });
+
+    translate_request_with_policy(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-5",
+        &mut body,
+        request_translation_policy(None),
+        false,
+    )
+    .expect("same-wire Chat passthrough must accept reasoning_effort \"max\"");
+
+    assert_eq!(body["reasoning_effort"], "max");
+}
+
+#[test]
+fn translate_request_responses_to_chat_preserves_reasoning_effort_max() {
+    let mut body = json!({
+        "model": "gpt-5",
+        "input": "Hello",
+        "reasoning": { "effort": "max" }
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-5",
+        &mut body,
+        true,
+    )
+    .expect("Responses->Chat translation must preserve reasoning effort \"max\"");
+
+    assert_eq!(body["reasoning_effort"], "max");
+    assert!(body.get("reasoning").is_none());
+}
+
+#[test]
+fn translate_request_chat_to_responses_preserves_reasoning_effort_max() {
+    let mut body = json!({
+        "model": "gpt-5",
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "reasoning_effort": "max"
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiResponses,
+        "gpt-5",
+        &mut body,
+        false,
+    )
+    .expect("Chat->Responses translation must preserve reasoning effort \"max\"");
+
+    assert_eq!(body["reasoning"]["effort"], "max");
+    assert!(body.get("reasoning_effort").is_none());
+}
+
+#[test]
 fn translate_request_responses_to_openai_drops_stop_request_extension() {
     let mut body = json!({
         "model": "gpt-4o",
