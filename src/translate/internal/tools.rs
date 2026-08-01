@@ -938,7 +938,20 @@ const INTERNAL_NON_REPLAYABLE_TOOL_CALL_VERSION: u64 = 1;
 const INTERNAL_NON_REPLAYABLE_TOOL_CALL_SIGNATURE_FIELD: &str = "sig";
 const INTERNAL_REPLAY_MARKER_KEY_ENV: &str = "LLMUP_INTERNAL_REPLAY_MARKER_KEY";
 
-fn internal_replay_marker_key() -> &'static str {
+/// Single process-local source of truth for the non-replayable tool-call /
+/// proxied-tool-kind attestation key.
+///
+/// This is the ONLY key source: the streaming emitter (`openai_sink`) and the
+/// hooks/request paths call this getter via `crate::translate::internal_replay_marker_key`
+/// so every module sees the same key, even under concurrent first-touch.
+///
+/// We honor a pre-set `LLMUP_INTERNAL_REPLAY_MARKER_KEY` override but otherwise
+/// generate a random key once. We deliberately do NOT write the env var: the old
+/// design had three independent `OnceLock`s that each generated a key and published
+/// it with `std::env::set_var` on the live request path, which is a process-global
+/// data race (and `unsafe` under Rust 2024) and could leave the locks holding
+/// divergent keys.
+pub(crate) fn internal_replay_marker_key() -> &'static str {
     static KEY: OnceLock<String> = OnceLock::new();
     KEY.get_or_init(|| {
         if let Some(existing) = std::env::var(INTERNAL_REPLAY_MARKER_KEY_ENV)
@@ -947,9 +960,7 @@ fn internal_replay_marker_key() -> &'static str {
         {
             return existing;
         }
-        let generated = Uuid::new_v4().to_string();
-        std::env::set_var(INTERNAL_REPLAY_MARKER_KEY_ENV, &generated);
-        generated
+        Uuid::new_v4().to_string()
     })
 }
 

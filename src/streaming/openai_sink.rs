@@ -2,7 +2,6 @@ use super::state::*;
 use super::wire::*;
 use super::*;
 use sha2::{Digest, Sha256};
-use std::sync::OnceLock;
 
 pub(super) fn stop_thinking_block_claude(state: &mut StreamState, out: &mut Vec<Vec<u8>>) {
     if !state.thinking_block_started {
@@ -155,22 +154,6 @@ pub(super) const INTERNAL_NON_REPLAYABLE_TOOL_CALL_FIELD: &str = "_llmup_non_rep
 const INTERNAL_NON_REPLAYABLE_TOOL_CALL_REASON: &str = "incomplete_arguments";
 const INTERNAL_NON_REPLAYABLE_TOOL_CALL_VERSION: u64 = 1;
 const INTERNAL_NON_REPLAYABLE_TOOL_CALL_SIGNATURE_FIELD: &str = "sig";
-const INTERNAL_REPLAY_MARKER_KEY_ENV: &str = "LLMUP_INTERNAL_REPLAY_MARKER_KEY";
-
-fn internal_replay_marker_key_stream() -> &'static str {
-    static KEY: OnceLock<String> = OnceLock::new();
-    KEY.get_or_init(|| {
-        if let Some(existing) = std::env::var(INTERNAL_REPLAY_MARKER_KEY_ENV)
-            .ok()
-            .filter(|value| !value.is_empty())
-        {
-            return existing;
-        }
-        let generated = uuid::Uuid::new_v4().to_string();
-        std::env::set_var(INTERNAL_REPLAY_MARKER_KEY_ENV, &generated);
-        generated
-    })
-}
 
 fn raw_json_is_valid_object_stream(raw: &str) -> bool {
     !raw.trim().is_empty()
@@ -186,7 +169,7 @@ pub(super) fn non_replayable_tool_call_signature_stream(name: &str, raw: &str) -
     });
     let encoded = serde_json::to_vec(&payload).unwrap_or_default();
     let mut hasher = Sha256::new();
-    hasher.update(internal_replay_marker_key_stream().as_bytes());
+    hasher.update(crate::translate::internal_replay_marker_key().as_bytes());
     hasher.update([0]);
     hasher.update(encoded);
     hex::encode(hasher.finalize())

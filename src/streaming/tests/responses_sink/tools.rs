@@ -579,3 +579,46 @@ fn openai_chunk_to_responses_sse_closes_custom_tool_call_before_minimax_usage_te
         "usage types = {usage_types:?}"
     );
 }
+
+#[test]
+fn non_replayable_marker_key_is_shared_between_streaming_and_request_paths() {
+    // Regression for the concurrency bug where the streaming emitter
+    // (`openai_sink`) and the request-side validator (`translate::internal::tools`)
+    // each held an INDEPENDENT `OnceLock` key source that, when
+    // `LLMUP_INTERNAL_REPLAY_MARKER_KEY` was not pre-set, generated a random key
+    // and published it via `std::env::set_var` on the live request path. Under
+    // concurrent first-touch the locks could mint divergent keys, so a marker
+    // signed on a streaming response then failed validation on the next
+    // non-streaming request. Both paths now call one shared process-local key
+    // getter, so a marker signed on one path must validate on the other. This
+    // test does NOT touch process-global env.
+    let name = "exec_command";
+    let raw = "{\"command\":\"cat > /tmp/spec.rs\"}";
+
+    // Streaming path signs the marker; request path must validate it.
+    let streaming_marker = signed_non_replayable_tool_call_marker_stream(name, raw);
+    let mut streaming_signed = serde_json::json!({
+        "id": "call_stream",
+        "type": "function",
+        "function": { "name": name, "arguments": raw }
+    });
+    streaming_signed["_llmup_non_replayable_tool_call"] = streaming_marker.clone();
+    assert!(
+        crate::translate::tool_call_is_marked_non_replayable(&streaming_signed),
+        "streaming-signed marker must validate on the request path (shared key): {streaming_signed:?}"
+    );
+
+    // Request path signs the marker; it must equal the streaming path's marker
+    // for the same name/raw (identical key + payload -> identical signature).
+    let mut request_signed = serde_json::json!({
+        "id": "call_request",
+        "type": "function",
+        "function": { "name": name, "arguments": raw }
+    });
+    crate::translate::mark_tool_call_as_non_replayable(&mut request_signed);
+    assert_eq!(
+        request_signed["_llmup_non_replayable_tool_call"],
+        streaming_marker,
+        "request-signed and streaming-signed markers must match (shared key): {request_signed:?}"
+    );
+}

@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1684,22 +1684,6 @@ const INTERNAL_NON_REPLAYABLE_TOOL_CALL_FIELD: &str = "_llmup_non_replayable_too
 const INTERNAL_NON_REPLAYABLE_TOOL_CALL_REASON: &str = "incomplete_arguments";
 const INTERNAL_NON_REPLAYABLE_TOOL_CALL_VERSION: u64 = 1;
 const INTERNAL_NON_REPLAYABLE_TOOL_CALL_SIGNATURE_FIELD: &str = "sig";
-const INTERNAL_REPLAY_MARKER_KEY_ENV: &str = "LLMUP_INTERNAL_REPLAY_MARKER_KEY";
-
-fn internal_replay_marker_key() -> &'static str {
-    static KEY: OnceLock<String> = OnceLock::new();
-    KEY.get_or_init(|| {
-        if let Some(existing) = std::env::var(INTERNAL_REPLAY_MARKER_KEY_ENV)
-            .ok()
-            .filter(|value| !value.is_empty())
-        {
-            return existing;
-        }
-        let generated = Uuid::new_v4().to_string();
-        std::env::set_var(INTERNAL_REPLAY_MARKER_KEY_ENV, &generated);
-        generated
-    })
-}
 
 fn raw_json_is_valid_object(raw: &str) -> bool {
     !raw.trim().is_empty()
@@ -1715,7 +1699,7 @@ fn non_replayable_tool_call_signature(name: &str, raw: &str) -> String {
     });
     let encoded = serde_json::to_vec(&payload).unwrap_or_default();
     let mut hasher = Sha256::new();
-    hasher.update(internal_replay_marker_key().as_bytes());
+    hasher.update(crate::translate::internal_replay_marker_key().as_bytes());
     hasher.update([0]);
     hasher.update(encoded);
     hex::encode(hasher.finalize())
