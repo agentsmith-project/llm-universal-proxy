@@ -47,8 +47,12 @@ them exported in the shell that launches the proxy.
 |---|---|---|---|---|
 | DeepSeek | OpenAI Chat | `DEEPSEEK_OPENAI_BASE_URL` | `DEEPSEEK_API_KEY` | `DEEPSEEK_DEFAULT_MODEL` (`deepseek-v4-flash`), `DEEPSEEK_PRO_MODEL` (`deepseek-v4-pro`) |
 | Qwen | OpenAI Chat (compatible-mode) | `QWEN_OPENAI_BASE_URL` | `QWEN_API_KEY` | `QWEN_VISION_MODEL` (`qwen-vl-plus`) |
-| GLM | OpenAI Chat | `GLM_OPENAI_BASE_URL` | `GLM_API_KEY` | `GLM_MODEL` (`glm-5.2[1m]`) |
-| GLM | Anthropic | `GLM_ANTHROPIC_BASE_URL` | `GLM_API_KEY` | `GLM_MODEL` (`glm-5.2[1m]`) |
+| GLM | OpenAI Chat | `GLM_OPENAI_BASE_URL` | `GLM_API_KEY` | `GLM_MODEL` (`glm-5.2`) |
+| GLM | Anthropic | `GLM_ANTHROPIC_BASE_URL` | `GLM_API_KEY` | `GLM_MODEL` (`glm-5.2`) |
+
+> **Verify the GLM model id** — `glm-5.2[1m]` is rejected by GLM (HTTP 400 code 1211 "模型不存在"); use
+> `glm-5.2` (or `glm-4.6` / `glm-4.5`). The `[1m]` context-window suffix is an internal tag, not a
+> valid GLM model id.
 | ~~Z_AI~~ | — | — | `Z_AI_API_KEY` only | **EXCLUDED** — no confirmed base URL / model id. Do not invent one. |
 
 **Pre-run env check.** Before generating the config, confirm the base-URL env *values* are intact —
@@ -96,7 +100,7 @@ upstreams:
       modalities: { input: ["text"], output: ["text"] }
       tools: { supports_search: false, supports_view_image: false, apply_patch_transport: freeform, supports_parallel_calls: false }
   GLM_ANTHROPIC:
-    api_root: ${GLM_ANTHROPIC_BASE_URL}
+    api_root: ${GLM_ANTHROPIC_BASE_URL}/v1   # proxy appends /messages, NOT /v1/messages
     format: anthropic
     provider_key: { env: GLM_API_KEY }
     surface_defaults:
@@ -107,8 +111,8 @@ model_aliases:
   ds-flash:        DEEPSEEK:deepseek-v4-flash
   ds-pro:          DEEPSEEK:deepseek-v4-pro
   qwen-vl:         QWEN:qwen-vl-plus
-  glm-chat:        GLM_OPENAI:glm-5.2[1m]
-  glm-anthropic:   GLM_ANTHROPIC:glm-5.2[1m]
+  glm-chat:        GLM_OPENAI:glm-5.2
+  glm-anthropic:   GLM_ANTHROPIC:glm-5.2
 EOF
 
 # 2. launch the proxy in proxy_key auth mode
@@ -121,6 +125,11 @@ cargo run --bin llm-universal-proxy -- --config /tmp/llmup-e2e.yaml
 > shell at generation time. Provider keys use `{ env: NAME }` indirection and are resolved by the
 > proxy at runtime — no secret ever appears in the yaml. Auth is **proxy_key** mode (single shared
 > key `llmup-e2e-local` for all clients); there is no IP/loopback passwordless mode.
+>
+> **Anthropic api_root must include `/v1`** — the proxy builds the Anthropic upstream URL as
+> `{api_root}/messages` (NOT `/v1/messages`); see `src/config.rs` `build_upstream_url`. So GLM's
+> anthropic base `${GLM_ANTHROPIC_BASE_URL}/v1` is required, mirroring the official
+> `https://api.anthropic.com/v1`. A truncated root silently 404s every Anthropic-routed row.
 
 ### 2.3 Point each client at the proxy
 
@@ -142,9 +151,12 @@ export XDG_CONFIG_HOME="$E2E_HOME/.config" XDG_CACHE_HOME="$E2E_HOME/.cache" \
        XDG_DATA_HOME="$E2E_HOME/.local/share" XDG_STATE_HOME="$E2E_HOME/.local/state"
 export CODEX_HOME="$E2E_HOME/.codex"          # empty -> no ChatGPT login
 export CLAUDE_CONFIG_DIR="$E2E_HOME/.claude"  # empty -> no saved claude login
+mkdir -p "$E2E_HOME/.codex" "$E2E_HOME/.claude" "$E2E_HOME/.config" "$E2E_HOME/.cache"
+# codex errors if CODEX_HOME points at a path that does not exist ("CODEX_HOME points to ... but that
+# path does not exist"); create all client dirs up front.
 unset ANTHROPIC_API_KEY OPENAI_API_KEY ANTHROPIC_AUTH_TOKEN  # scrub real keys from ~/.zshrc
 export NO_PROXY=127.0.0.1,localhost
-# THEN set the proxy-pointing vars (PROXY_KEY / OPENAI_BASE_URL / etc.) from below
+# THEN set the proxy-pointing vars (PROXY_KEY / the codex -c flags / etc.) from below
 ```
 
 Then set the per-client vars:
@@ -154,9 +166,21 @@ PROXY_KEY=llmup-e2e-local
 PROXY=http://127.0.0.1:8080
 
 # codex (OpenAI Responses client) → proxy /openai/v1/*
-export OPENAI_BASE_URL="$PROXY/openai/v1"
-export OPENAI_API_KEY="$PROXY_KEY"
-codex exec -m <alias> "<prompt>"
+# NOTE: codex 0.146 IGNORES OPENAI_BASE_URL — setting just OPENAI_BASE_URL+OPENAI_API_KEY makes codex
+# hit api.openai.com directly (401). codex needs a CONFIG-BASED provider via -c flags. The project's
+# own launcher (src/user_tools/agent_launcher.rs build_client_argv) wires codex exactly this way.
+export OPENAI_API_KEY="$PROXY_KEY"   # proxy auth token; codex reads it via env_key below
+codex exec \
+  -c model_provider=proxy \
+  -c "openai_base_url=$PROXY/openai/v1" \
+  -c model_providers.proxy.name=proxy \
+  -c "model_providers.proxy.base_url=$PROXY/openai/v1" \
+  -c model_providers.proxy.env_key=OPENAI_API_KEY \
+  -c model_providers.proxy.wire_api=responses \
+  -c model_providers.proxy.supports_websockets=false \
+  -c features.multi_agent=false \
+  -c tools.web_search=false \
+  -m <alias> "<prompt>"
 
 # claude / Claude Code (Anthropic Messages client) → proxy /anthropic/v1/*
 export ANTHROPIC_BASE_URL="$PROXY/anthropic"
@@ -171,7 +195,13 @@ BOTIFIED_PROXY_KEY="$PROXY_KEY" botified serve --config /tmp/botified-e2e.yaml
 ```
 
 Notes:
-- codex appends `/responses` to `OPENAI_BASE_URL` → route `/openai/v1/responses`. ✓
+- codex appends `/responses` to the configured provider `base_url` (`$PROXY/openai/v1`) → route
+  `/openai/v1/responses`. ✓ It does NOT read `OPENAI_BASE_URL` (see the codex block above).
+- `features.multi_agent=false` + `tools.web_search=false` are REQUIRED when the upstream is NOT
+  OpenAI Responses — codex otherwise sends the non-portable `multi_agent_v1` namespace tool, which
+  the proxy correctly rejects → the whole request fails. The project launcher disables them for
+  non-Responses upstreams. `supports_websockets=false` is also required (the proxy is HTTP/SSE;
+  without it codex attempts a websocket and fails).
 - claude appends `/v1/messages` to `ANTHROPIC_BASE_URL` → route `/anthropic/v1/messages`. ✓
 - botified appends `/chat/completions` to its `base_url` → route `/openai/v1/chat/completions`. ✓
 
@@ -226,13 +256,32 @@ Standard task shapes (DRY — reuse across rows):
 # of a pair. Observe incremental chunk rendering for the stream row (2,4); the completed output
 # satisfies the non-stream row (1,3). There is no --no-stream flag (disregard any old "non-streaming
 # by default" wording — codex streams).
-codex exec -m <alias> "Count slowly from 1 to 5, one number per line."
+#
+# codex IGNORES OPENAI_BASE_URL (§2.3) — EVERY codex invocation needs the config-based provider
+# flags below. Define them once (matches src/user_tools/agent_launcher.rs build_client_argv) and
+# reuse across rows:
+PROXY=http://127.0.0.1:8080
+CODEX_CFG=(
+  -c model_provider=proxy
+  -c "openai_base_url=$PROXY/openai/v1"
+  -c model_providers.proxy.name=proxy
+  -c "model_providers.proxy.base_url=$PROXY/openai/v1"
+  -c model_providers.proxy.env_key=OPENAI_API_KEY
+  -c model_providers.proxy.wire_api=responses
+  -c model_providers.proxy.supports_websockets=false
+  -c features.multi_agent=false
+  -c tools.web_search=false
+)
+
+# rows 1–4: text completion
+codex exec "${CODEX_CFG[@]}" -m <alias> "Count slowly from 1 to 5, one number per line."
 # tool (row 9): use the built-in shell tool under a WRITABLE sandbox (read-only blocks execution;
-# codex has no echo tool)
-codex exec -m glm-chat --sandbox workspace-write -C /tmp/llmup-e2e-codex \
+# codex has no echo tool). --skip-git-repo-check is needed because the sandbox dir is not a git repo.
+codex exec "${CODEX_CFG[@]}" -m glm-chat \
+  --sandbox workspace-write -C /tmp/llmup-e2e-codex --skip-git-repo-check \
   "Run this shell command: echo hi . Then report the exact stdout you observed."
 # error (row 14): unknown alias -> client must receive a well-formed error in its native wire format
-codex exec -m this-alias-does-not-exist "Reply with exactly the word PONG."
+codex exec "${CODEX_CFG[@]}" -m this-alias-does-not-exist "Reply with exactly the word PONG."
 ```
 
 ### 4.2 claude rows (5–8, 10, 11)
@@ -241,9 +290,22 @@ codex exec -m this-alias-does-not-exist "Reply with exactly the word PONG."
 # rows of a pair. Observe incremental chunk rendering for the stream row (6,8); the completed output
 # satisfies the non-stream row (5,7). There is no --no-stream flag.
 ANTHROPIC_MODEL=<alias> claude --print "Reply with exactly the word PONG."
-# tool (row 10): allow one tool and require its use
-ANTHROPIC_MODEL=glm-anthropic claude --print --allowed-tools "Bash(echo *)" "Use echo to print hi, then report it."
-# vision (row 11): attach an image file
+# tool (row 10): allow one tool and require its use.
+# NOTE: --allowedTools/--allowed-tools is VARIADIC (<tools...>) — the space form
+# `--allowed-tools "Bash(echo *)" "prompt"` consumes the prompt as a tool name ("no input" error).
+# Use the equals form with a single value (--allowedTools=Bash), OR pipe the prompt via stdin.
+ANTHROPIC_MODEL=glm-anthropic claude --print --allowedTools=Bash "Use echo to print hi, then report it."
+# vision (row 11): attach an image file. Driving an image through `claude --print <file>` is
+# unreliable; the image-translation path can instead be verified by a direct curl to
+# /anthropic/v1/messages with an Anthropic image block -> Qwen (this is what execution used
+# successfully):
+#   curl -s "$PROXY/anthropic/v1/messages" \
+#     -H "x-api-key: $PROXY_KEY" -H "anthropic-version: 2023-06-01" \
+#     -H "content-type: application/json" \
+#     -d "{\"model\":\"qwen-vl\",\"max_tokens\":256,\"messages\":[{\"role\":\"user\",\"content\":[
+#          {\"type\":\"text\",\"text\":\"Describe this image in one sentence.\"},
+#          {\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",
+#           \"data\":\"$(base64 -w0 /tmp/sample.png)\"}}]}]}"
 ANTHROPIC_MODEL=qwen-vl claude --print "Describe this image in one sentence." /tmp/sample.png
 ```
 If Claude Code rejects the unknown model alias, also export
