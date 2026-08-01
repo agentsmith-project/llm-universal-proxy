@@ -1219,9 +1219,9 @@ impl Config {
                 surface_defaults.validate(&format!("upstream `{}`", upstream.name))?;
             }
             if let Some(dialect) = &upstream.dialect {
-                dialect.resolve().map_err(|error| {
-                    format!("upstream `{}` dialect: {}", upstream.name, error)
-                })?;
+                dialect
+                    .resolve()
+                    .map_err(|error| format!("upstream `{}` dialect: {}", upstream.name, error))?;
             }
         }
 
@@ -3155,8 +3155,9 @@ upstreams:
 "#,
         )
         .expect("unknown preset string still parses as PresetName");
-        let error =
-            config.validate().expect_err("unknown preset must fail validation");
+        let error = config
+            .validate()
+            .expect_err("unknown preset must fail validation");
         assert!(error.contains("unknown dialect preset"), "{error}");
         assert!(error.contains("no-such-preset"), "{error}");
     }
@@ -3175,8 +3176,9 @@ upstreams:
 "#,
         )
         .expect("out-of-order levels still parse as a Detailed block");
-        let error =
-            config.validate().expect_err("out-of-order levels must fail validation");
+        let error = config
+            .validate()
+            .expect_err("out-of-order levels must fail validation");
         assert!(error.contains("reasoning_levels"), "{error}");
     }
 
@@ -3269,8 +3271,7 @@ upstreams:
             "model_aliases": {}
         }))
         .expect("unknown preset string parses as PresetName");
-        let error = Config::try_from(payload)
-            .expect_err("unknown preset must fail validation");
+        let error = Config::try_from(payload).expect_err("unknown preset must fail validation");
         assert!(error.contains("unknown dialect preset"), "{error}");
     }
 }

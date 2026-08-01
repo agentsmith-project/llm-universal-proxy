@@ -1160,9 +1160,9 @@ async fn handle_request_core_with_downstream_cancellation(
         .and_then(|dialect| dialect.resolve().ok());
     // The client's reasoning effort only matters when a dialect is configured (it feeds the
     // dialect-aware emit pass below), so skip parsing on the no-dialect hot path.
-    let client_reasoning_effort = resolved_dialect
-        .as_ref()
-        .and_then(|_| crate::translate::parse_client_reasoning_effort(&original_body, client_format));
+    let client_reasoning_effort = resolved_dialect.as_ref().and_then(|_| {
+        crate::translate::parse_client_reasoning_effort(&original_body, client_format)
+    });
     let dialect_reasoning_emit_applies = client_reasoning_effort.is_some();
     // Symmetric with the emit gate: when the dialect suppresses the reasoning echo
     // (`reasoning_echo: Some(false)`), force the JSON/translate path regardless of whether the
@@ -3169,7 +3169,10 @@ mod zero_transform_redaction_tests {
         let text = String::from_utf8(redacted).expect("utf8 body");
 
         assert!(!text.contains(provider_key), "provider key leaked: {text}");
-        assert!(text.contains("[REDACTED]"), "expected redaction marker: {text}");
+        assert!(
+            text.contains("[REDACTED]"),
+            "expected redaction marker: {text}"
+        );
         let value: serde_json::Value = serde_json::from_str(&text).expect("valid json");
         assert_eq!(
             value["error"]["message"],

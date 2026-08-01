@@ -165,10 +165,8 @@ impl UpstreamDialect {
     /// config validation time. The returned block is not yet acted upon (Step 3 does that).
     pub(crate) fn resolve(&self) -> Result<DialectBlock, String> {
         match self {
-            UpstreamDialect::Preset(name) => {
-                resolve_dialect_preset(name.0.as_str())
-                    .ok_or_else(|| format!("unknown dialect preset `{}`", name.0))
-            }
+            UpstreamDialect::Preset(name) => resolve_dialect_preset(name.0.as_str())
+                .ok_or_else(|| format!("unknown dialect preset `{}`", name.0)),
             UpstreamDialect::Detailed(block) => {
                 block.validate()?;
                 Ok(block.clone())
@@ -242,7 +240,11 @@ mod tests {
             assert_eq!(parsed, level, "parse {name}");
             // Display + FromStr agree with serde.
             assert_eq!(level.to_string(), name, "display {name}");
-            assert_eq!(ReasoningLevel::from_str(name).unwrap(), level, "from_str {name}");
+            assert_eq!(
+                ReasoningLevel::from_str(name).unwrap(),
+                level,
+                "from_str {name}"
+            );
         }
     }
 
@@ -330,7 +332,11 @@ mod tests {
         let block = DialectBlock {
             reasoning: ReasoningMechanism::OpenAiEffort,
             reasoning_echo: None,
-            reasoning_levels: Some(vec![ReasoningLevel::Low, ReasoningLevel::Low, ReasoningLevel::High]),
+            reasoning_levels: Some(vec![
+                ReasoningLevel::Low,
+                ReasoningLevel::Low,
+                ReasoningLevel::High,
+            ]),
         };
         let error = block.validate().expect_err("duplicate levels must fail");
         assert!(error.contains("strictly increasing"), "{error}");

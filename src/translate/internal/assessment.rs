@@ -12,6 +12,7 @@ use crate::provider_state_controls::{
     provider_state_control_enabled, responses_stateful_request_controls,
 };
 
+use super::dialect_emit::dialect_maps_reasoning;
 use super::media::{openai_file_part_mime_conflict_message, openai_file_part_resolved_mime_type};
 use super::messages::{
     custom_tool_format_portability_warning_message, custom_tool_format_reject_message,
@@ -23,7 +24,6 @@ use super::models::{
     NormalizedLogprobsControls, NormalizedOpenAiAudioContract, NormalizedOpenAiFamilyToolDef,
     SemanticToolKind, SharedControlProfile, TranslationAssessment,
 };
-use super::dialect_emit::dialect_maps_reasoning;
 use super::openai_family::{
     openai_extra_body_google_cached_content, validated_openai_extra_body_anthropic_cache_control,
 };
@@ -639,7 +639,8 @@ pub(super) fn responses_warning_only_request_controls_for_translate(
     if responses_text_verbosity(body).is_some() && !profile.verbosity {
         controls.push("text.verbosity".to_string());
     }
-    if responses_reasoning_effort(body).is_some() && !profile.reasoning_effort && !reasoning_mapped {
+    if responses_reasoning_effort(body).is_some() && !profile.reasoning_effort && !reasoning_mapped
+    {
         controls.push("reasoning.effort".to_string());
     }
     if body.get("parallel_tool_calls").and_then(Value::as_bool) == Some(false)
@@ -1686,9 +1687,7 @@ pub(super) fn anthropic_upstream_rejects_nondefault_sampling(
     let model = resolved_upstream_model.trim();
     if let Some(rest) = model.strip_prefix("claude-opus-4-") {
         let leading_digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        return leading_digits
-            .parse::<u32>()
-            .is_ok_and(|minor| minor >= 7);
+        return leading_digits.parse::<u32>().is_ok_and(|minor| minor >= 7);
     }
     model.starts_with("claude-sonnet-5")
         || model.starts_with("claude-fable-5")
@@ -2434,12 +2433,11 @@ pub(crate) fn assess_request_translation_with_dialect(
         {
             assessment.reject(message);
         }
-        let dropped_controls =
-            responses_warning_only_request_controls_for_translate(
-                body,
-                upstream_format,
-                reasoning_mapped,
-            );
+        let dropped_controls = responses_warning_only_request_controls_for_translate(
+            body,
+            upstream_format,
+            reasoning_mapped,
+        );
         if !dropped_controls.is_empty() {
             let quoted = dropped_controls
                 .iter()

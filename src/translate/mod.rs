@@ -13,7 +13,9 @@ pub use request::translate_request;
 pub use response::translate_response;
 
 pub(crate) use assessment::{assess_request_translation_with_surface, TranslationDecision};
-pub(crate) use internal::dialect_emit::{apply_dialect_reasoning_emit, parse_client_reasoning_effort};
+pub(crate) use internal::dialect_emit::{
+    apply_dialect_reasoning_emit, parse_client_reasoning_effort,
+};
 pub(crate) use internal::tools::internal_replay_marker_key;
 pub(crate) use internal::validate_public_request_tool_names;
 pub(crate) use request::{translate_request_with_policy, RequestTranslationPolicy};
@@ -32,6 +34,8 @@ pub(crate) use shared::{
 };
 
 #[cfg(test)]
-pub(crate) use internal::tools::{mark_tool_call_as_non_replayable, tool_call_is_marked_non_replayable};
+pub(crate) use internal::tools::{
+    mark_tool_call_as_non_replayable, tool_call_is_marked_non_replayable,
+};
 #[cfg(test)]
 pub(crate) use shared::attest_proxied_tool_kind;

@@ -314,8 +314,7 @@ fn normalize_openai_stream_text_handles_large_cumulative_stream_linearly() {
     // text would take many seconds. Generous bound to stay non-flaky.
     assert!(
         elapsed.as_secs() < 10,
-        "cumulative dedup took too long: {:?}",
-        elapsed
+        "cumulative dedup took too long: {elapsed:?}"
     );
 }
 

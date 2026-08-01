@@ -7,6 +7,7 @@
 - Refreshed protocol baselines to 2026-07-31 against current official OpenAI and Anthropic docs.
 - Eliminated test-suite flakiness (process-global env mutation, wall-clock deadline races).
 - 858 tests, deterministically green.
+- Advanced the main-branch release identity to Cargo package version `0.3.0` (release tag `v0.3.0`, not published), the next patch version after the published, occupied `v0.2.44` tag, without moving, deleting, or reusing the existing tag.
 
 ## v0.2.44 - 2026-05-29
 

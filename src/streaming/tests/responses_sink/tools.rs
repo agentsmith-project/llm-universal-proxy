@@ -617,8 +617,7 @@ fn non_replayable_marker_key_is_shared_between_streaming_and_request_paths() {
     });
     crate::translate::mark_tool_call_as_non_replayable(&mut request_signed);
     assert_eq!(
-        request_signed["_llmup_non_replayable_tool_call"],
-        streaming_marker,
+        request_signed["_llmup_non_replayable_tool_call"], streaming_marker,
         "request-signed and streaming-signed markers must match (shared key): {request_signed:?}"
     );
 }

@@ -1764,6 +1764,7 @@ async fn handle_openai_responses_resource_with_downstream_cancellation(
     response
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_openai_responses_resource_stream_response(
     response: upstream::UpstreamResourceResponse,
     status: StatusCode,

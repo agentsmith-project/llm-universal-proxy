@@ -979,13 +979,8 @@ mod tests {
                 url: credentialed.to_string(),
             },
         };
-        let error = build_client_with_proxy(
-            Duration::from_secs(5),
-            &resolved,
-            false,
-            true,
-        )
-        .expect_err("invalid-port credentialed proxy must fail to build a client");
+        let error = build_client_with_proxy(Duration::from_secs(5), &resolved, false, true)
+            .expect_err("invalid-port credentialed proxy must fail to build a client");
         let message = error.to_string();
         assert!(
             !message.contains("leak-user"),

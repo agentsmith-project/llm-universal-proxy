@@ -9,9 +9,7 @@ use std::net::SocketAddr;
 // reads via `AdminAccess::from_env()` and which would race with the many
 // reader tests that observe env. The dashboard routes are public; the admin
 // route is guarded by `require_admin_access`, exactly as in the live router.
-async fn start_dashboard_proxy(
-    admin_token: &str,
-) -> (String, tokio::task::JoinHandle<()>) {
+async fn start_dashboard_proxy(admin_token: &str) -> (String, tokio::task::JoinHandle<()>) {
     let config = crate::config::Config::default();
     let data_access = data_auth::DataAccess::ClientProviderKey;
     let runtime = crate::server::state::build_runtime_state(config.clone(), &data_access)

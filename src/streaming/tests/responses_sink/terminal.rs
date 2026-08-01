@@ -480,7 +480,10 @@ fn anthropic_thinking_stream_to_responses_carries_encrypted_content_carrier() {
         assert_eq!(payload["format"], "anthropic-thinking-replay");
         assert_eq!(payload["version"], 1);
         let blocks = payload["blocks"].as_array().expect("carrier blocks array");
-        assert!(!blocks.is_empty(), "carrier should carry at least one block");
+        assert!(
+            !blocks.is_empty(),
+            "carrier should carry at least one block"
+        );
         assert_eq!(blocks[0]["type"], "thinking");
         assert_eq!(
             blocks[0]["signature"], "sig_stream_abc",

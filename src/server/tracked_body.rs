@@ -47,7 +47,10 @@ where
         tokio::pin!(cancelled);
         if cancelled.poll(cx).is_ready() {
             if let Some(mut tracker) = this.tracker.take() {
-                info!("stream cancelled by downstream client status={}", this.status);
+                info!(
+                    "stream cancelled by downstream client status={}",
+                    this.status
+                );
                 tracker.finish_cancelled();
             }
             return Poll::Ready(None);

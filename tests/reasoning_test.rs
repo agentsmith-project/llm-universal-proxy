@@ -1054,8 +1054,7 @@ async fn dialect_anthropic_effort_maps_cross_protocol_reasoning_effort_to_output
     // for an anthropic-effort dialect (cross-protocol effort mapping).
     let (mock_base, _mock, mut captured) = spawn_capture_anthropic_mock().await;
     let dialect = detailed_dialect(ReasoningMechanism::AnthropicEffort, Some(true), None);
-    let config =
-        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let config = proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -1078,8 +1077,7 @@ async fn dialect_anthropic_effort_maps_cross_protocol_reasoning_effort_to_output
         .clone()
         .expect("captured anthropic request");
     assert_eq!(
-        request["output_config"]["effort"],
-        "high",
+        request["output_config"]["effort"], "high",
         "cross-protocol effort must be emitted as output_config.effort: {request:?}"
     );
 }
@@ -1121,13 +1119,9 @@ async fn dialect_openai_effort_caps_ultra_to_max_with_portability_warning() {
 
     // The upstream received the capped value.
     captured.changed().await.unwrap();
-    let request = captured
-        .borrow()
-        .clone()
-        .expect("captured openai request");
+    let request = captured.borrow().clone().expect("captured openai request");
     assert_eq!(
-        request["reasoning_effort"],
-        "max",
+        request["reasoning_effort"], "max",
         "ultra must be capped to max at the upstream: {request:?}"
     );
 
@@ -1151,8 +1145,7 @@ async fn dialect_echo_false_omits_reasoning_content_end_to_end() {
     // translated response, end-to-end through the proxy.
     let (mock_base, _mock) = spawn_anthropic_thinking_mock().await;
     let dialect = detailed_dialect(ReasoningMechanism::AutoOnly, Some(false), None);
-    let config =
-        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let config = proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -1182,8 +1175,7 @@ async fn dialect_echo_true_surfaces_reasoning_content_end_to_end() {
     // reasoning_content, mirroring today's no-dialect behavior.
     let (mock_base, _mock) = spawn_anthropic_thinking_mock().await;
     let dialect = detailed_dialect(ReasoningMechanism::AutoOnly, Some(true), None);
-    let config =
-        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let config = proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -1200,8 +1192,7 @@ async fn dialect_echo_true_surfaces_reasoning_content_end_to_end() {
     assert!(res.status().is_success(), "status: {}", res.status());
     let body: Value = res.json().await.unwrap();
     assert_eq!(
-        body["choices"][0]["message"]["reasoning_content"],
-        "think",
+        body["choices"][0]["message"]["reasoning_content"], "think",
         "reasoning_content must surface when reasoning_echo is true: {body:?}"
     );
 }
@@ -1214,8 +1205,7 @@ async fn dialect_echo_false_strips_thinking_on_same_format_passthrough_without_c
     // echo strip. Without the symmetric gate, thinking leaks to the client despite echo:false.
     let (mock_base, _mock) = spawn_anthropic_thinking_mock().await;
     let dialect = detailed_dialect(ReasoningMechanism::AutoOnly, Some(false), None);
-    let config =
-        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let config = proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();
@@ -1238,7 +1228,9 @@ async fn dialect_echo_false_strips_thinking_on_same_format_passthrough_without_c
         "thinking must be stripped when reasoning_echo is false on same-format passthrough without effort: {body:?}"
     );
     assert!(
-        content.iter().any(|block| block["type"] == "text" && block["text"] == "Hi"),
+        content
+            .iter()
+            .any(|block| block["type"] == "text" && block["text"] == "Hi"),
         "text block must remain after echo strip: {body:?}"
     );
 }
@@ -1250,8 +1242,7 @@ async fn dialect_echo_true_surfaces_thinking_on_same_format_passthrough_without_
     // must not over-suppress when echo is not disabled.
     let (mock_base, _mock) = spawn_anthropic_thinking_mock().await;
     let dialect = detailed_dialect(ReasoningMechanism::AutoOnly, Some(true), None);
-    let config =
-        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let config = proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
     let (proxy_base, _proxy) = start_proxy(config).await;
 
     let client = authenticated_reqwest_client();

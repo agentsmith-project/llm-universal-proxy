@@ -104,9 +104,7 @@ fn openai_chunk_to_responses_sse_propagates_model_to_created_and_terminal() {
         .find(|event| {
             matches!(
                 event.get("type").and_then(Value::as_str),
-                Some("response.completed")
-                    | Some("response.incomplete")
-                    | Some("response.failed")
+                Some("response.completed") | Some("response.incomplete") | Some("response.failed")
             )
         })
         .expect("terminal response event");

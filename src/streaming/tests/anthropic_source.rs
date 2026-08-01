@@ -902,7 +902,7 @@ fn merge_seeded_tool_arguments_large_seed_is_bounded() {
     // is now capped, so this degrades to the designated plain-concatenation
     // fallback promptly and returns a sane result.
     let big = "a".repeat(256 * 1024);
-    let seed = format!(r#"{{"data":"{}"}}"#, big);
+    let seed = format!(r#"{{"data":"{big}"}}"#);
     // `"extra"` cannot close the truncated object at any small trim offset, so no
     // trim in the bounded range yields valid JSON -> plain-concat fallback.
     let delta = "\"extra\"";
@@ -916,8 +916,7 @@ fn merge_seeded_tool_arguments_large_seed_is_bounded() {
     // slack for slow CI while remaining far below the pathological time.
     assert!(
         elapsed.as_secs() < 20,
-        "merge took {:?}; expected bounded completion",
-        elapsed
+        "merge took {elapsed:?}; expected bounded completion"
     );
 }
 

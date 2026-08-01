@@ -46,9 +46,9 @@ pub(crate) fn parse_client_reasoning_effort(
     client_format: UpstreamFormat,
 ) -> Option<ReasoningLevel> {
     let raw = match client_format {
-        UpstreamFormat::OpenAiChatCompletions => body
-            .get("reasoning_effort")
-            .and_then(Value::as_str),
+        UpstreamFormat::OpenAiChatCompletions => {
+            body.get("reasoning_effort").and_then(Value::as_str)
+        }
         UpstreamFormat::OpenAiResponses => body
             .get("reasoning")
             .and_then(Value::as_object)

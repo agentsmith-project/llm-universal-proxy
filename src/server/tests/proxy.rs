@@ -90,7 +90,7 @@ fn ensure_global_trace_sink() {
     INSTALL_TRACE_SINK.call_once(|| {
         let sink = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::TRACE)
-            .with_writer(|| std::io::sink())
+            .with_writer(std::io::sink)
             .with_ansi(false)
             .finish();
         let _ = tracing::subscriber::set_global_default(sink);

@@ -151,7 +151,7 @@ pub(super) fn strip_anthropic_response_thinking(body: &mut Value) {
         block
             .get("type")
             .and_then(Value::as_str)
-            .map_or(true, |ty| ty != "thinking" && ty != "redacted_thinking")
+            .is_none_or(|ty| ty != "thinking" && ty != "redacted_thinking")
     });
 }
 
@@ -164,7 +164,7 @@ pub(super) fn strip_responses_reasoning_items(body: &mut Value) {
     output.retain(|item| {
         item.get("type")
             .and_then(Value::as_str)
-            .map_or(true, |ty| ty != "reasoning")
+            .is_none_or(|ty| ty != "reasoning")
     });
 }
 

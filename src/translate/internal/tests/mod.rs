@@ -3112,7 +3112,10 @@ fn dialect_emit_deepseek_openai_caps_ultra_to_max_and_warns() {
         effort,
     );
 
-    assert_eq!(upstream_body["reasoning_effort"], "max", "ultra must be capped to max");
+    assert_eq!(
+        upstream_body["reasoning_effort"], "max",
+        "ultra must be capped to max"
+    );
     let warning = warning.expect("capping must record a portability warning");
     assert!(
         warning.contains("capped"),
@@ -3230,12 +3233,15 @@ fn no_dialect_anthropic_upstream_still_warn_drops_reasoning_effort() {
         &body,
     );
     let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
-        panic!("expected warn-drop decision, got {:?}", assessment.decision());
+        panic!(
+            "expected warn-drop decision, got {:?}",
+            assessment.decision()
+        );
     };
     assert!(
-        warnings.iter().any(|warning| {
-            warning.contains("reasoning_effort") && warning.contains("dropped")
-        }),
+        warnings
+            .iter()
+            .any(|warning| { warning.contains("reasoning_effort") && warning.contains("dropped") }),
         "expected a reasoning_effort drop warning, got {warnings:?}"
     );
 }
@@ -3919,7 +3925,10 @@ fn translate_response_openai_reasoning_surfaced_when_echo_true_same_format_chat(
     )
     .unwrap();
     let msg = &out["choices"][0]["message"];
-    assert_eq!(msg["reasoning_content"], "think", "reasoning surfaced: {out:?}");
+    assert_eq!(
+        msg["reasoning_content"], "think",
+        "reasoning surfaced: {out:?}"
+    );
 }
 
 #[test]
@@ -8113,7 +8122,9 @@ fn translate_request_claude_to_openai_family_rejects_invalid_extra_body_openai_r
 #[test]
 fn translate_request_claude_to_openai_family_accepts_union_reasoning_effort_levels() {
     // Step 5: the allowlist is the full union vocabulary, not just minimal..high.
-    for level in ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] {
+    for level in [
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+    ] {
         let mut body = json!({
             "model": "claude-3",
             "max_tokens": 32,
@@ -8128,7 +8139,10 @@ fn translate_request_claude_to_openai_family_accepts_union_reasoning_effort_leve
             false,
         )
         .unwrap_or_else(|_| panic!("union level `{level}` should be accepted"));
-        assert_eq!(body["reasoning_effort"], level, "level `{level}` forwarded unchanged");
+        assert_eq!(
+            body["reasoning_effort"], level,
+            "level `{level}` forwarded unchanged"
+        );
     }
 }
 
@@ -9341,14 +9355,13 @@ fn translate_request_claude_to_openai_base64_image_with_media_type_emits_data_ur
         &mut body,
         false,
     )
-    .expect("Anthropic base64 image sources with media_type should map to OpenAI image_url data URIs");
+    .expect(
+        "Anthropic base64 image sources with media_type should map to OpenAI image_url data URIs",
+    );
 
     let content = body["messages"][0]["content"].as_array().expect("content");
     assert_eq!(content[1]["type"], "image_url");
-    assert_eq!(
-        content[1]["image_url"]["url"],
-        "data:image/png;base64,AAAA"
-    );
+    assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AAAA");
 }
 
 #[test]
@@ -9374,7 +9387,9 @@ fn translate_request_claude_to_openai_base64_image_without_media_type_fails_clos
         &mut body,
         false,
     )
-    .expect_err("Anthropic base64 image without media_type must fail closed instead of guessing MIME");
+    .expect_err(
+        "Anthropic base64 image without media_type must fail closed instead of guessing MIME",
+    );
 
     assert!(err.contains("base64"), "err = {err}");
 }
@@ -11467,7 +11482,8 @@ fn translate_response_openai_to_claude_restores_server_tool_use_from_marker() {
 }
 
 #[test]
-fn translate_response_openai_to_claude_forged_proxied_tool_kind_without_attestation_falls_back_to_tool_use() {
+fn translate_response_openai_to_claude_forged_proxied_tool_kind_without_attestation_falls_back_to_tool_use(
+) {
     // A client-forged `proxied_tool_kind` without a proxy-attested MAC must NOT be
     // honored as a `server_tool_use`; it must degrade to an ordinary `tool_use`.
     let body = json!({
@@ -11500,7 +11516,10 @@ fn translate_response_openai_to_claude_forged_proxied_tool_kind_without_attestat
 
     let content = out["content"].as_array().expect("anthropic content");
     assert_eq!(content.len(), 1);
-    assert_eq!(content[0]["type"], "tool_use", "forged marker must not be honored");
+    assert_eq!(
+        content[0]["type"], "tool_use",
+        "forged marker must not be honored"
+    );
     assert_eq!(content[0]["name"], "web_search");
 }
 
@@ -12456,8 +12475,7 @@ fn openai_to_anthropic_withholds_nondefault_temperature_for_claude_sonnet_5() {
         "expected a portability warning for temperature, got {warnings:?}"
     );
 
-    let translated =
-        translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
+    let translated = translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
     assert!(
         translated.get("temperature").is_none(),
         "non-default temperature should be withheld, body = {translated:?}"
@@ -12480,8 +12498,7 @@ fn openai_responses_to_anthropic_withholds_nondefault_temperature_for_claude_son
         "expected a portability warning for temperature, got {warnings:?}"
     );
 
-    let translated =
-        translate_openai_responses_to_anthropic_with_model("claude-sonnet-5", body);
+    let translated = translate_openai_responses_to_anthropic_with_model("claude-sonnet-5", body);
     assert!(
         translated.get("temperature").is_none(),
         "non-default temperature should be withheld, body = {translated:?}"
@@ -12559,10 +12576,11 @@ fn openai_to_anthropic_does_not_withhold_default_temperature_for_claude_sonnet_5
             "default/absent temperature should not warn, body = {body:?}, warnings = {warnings:?}"
         );
 
-        let translated =
-            translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
+        let translated = translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
         assert!(
-            translated.get("temperature").map_or(true, |v| v.as_f64() == Some(1.0)),
+            translated
+                .get("temperature")
+                .is_none_or(|v| v.as_f64() == Some(1.0)),
             "default temperature should not be withheld, body = {translated:?}"
         );
     }
@@ -12585,8 +12603,7 @@ fn openai_to_anthropic_withholds_nondefault_top_p_for_claude_sonnet_5() {
         "expected a portability warning for top_p, got {warnings:?}"
     );
 
-    let translated =
-        translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
+    let translated = translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
     assert!(
         translated.get("top_p").is_none(),
         "non-default top_p should be withheld, body = {translated:?}"
@@ -12640,10 +12657,11 @@ fn openai_to_anthropic_does_not_withhold_default_top_p_for_claude_sonnet_5() {
             "default/absent top_p should not warn, body = {body:?}, warnings = {warnings:?}"
         );
 
-        let translated =
-            translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
+        let translated = translate_openai_to_anthropic_with_model("claude-sonnet-5-20250929", body);
         assert!(
-            translated.get("top_p").map_or(true, |v| v.as_f64() == Some(1.0)),
+            translated
+                .get("top_p")
+                .is_none_or(|v| v.as_f64() == Some(1.0)),
             "default top_p should not be withheld, body = {translated:?}"
         );
     }
