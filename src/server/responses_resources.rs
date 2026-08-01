@@ -1561,6 +1561,7 @@ async fn handle_openai_responses_resource_with_downstream_cancellation(
                 resolved_proxy: &upstream_state.resolved_proxy,
             },
             &downstream_cancellation,
+            Some(namespace_state.config.upstream_timeout),
         )
         .await
         {
@@ -1850,6 +1851,7 @@ async fn handle_openai_responses_resource_stream_response(
         body_stream,
         tracker,
         status.as_u16(),
+        downstream_cancellation.cancellation_token(),
     ));
     let mut response = Response::builder()
         .status(status)

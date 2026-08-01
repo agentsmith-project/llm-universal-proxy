@@ -684,6 +684,51 @@ async fn guarded_sse_stream_emits_configured_max_duration_error() {
 }
 
 #[tokio::test]
+async fn resource_limited_stream_terminates_on_idle_timeout() {
+    // A zero-transform (raw passthrough) upstream that sends headers then never
+    // yields another byte. Without resource timers this would hang indefinitely
+    // (C1 leak); the idle/max-duration timer must bound it.
+    let inner = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
+    let mut stream = ResourceLimitedStream::new(
+        inner,
+        crate::config::ResourceLimits {
+            stream_idle_timeout_secs: 1,
+            stream_max_duration_secs: 60,
+            ..Default::default()
+        },
+    );
+
+    let next = timeout(Duration::from_secs(2), stream.next())
+        .await
+        .expect("idle timeout should terminate the stalled zero-transform upstream");
+    assert!(
+        next.is_none(),
+        "stalled zero-transform upstream should end on idle timeout, got {next:?}"
+    );
+}
+
+#[tokio::test]
+async fn resource_limited_stream_terminates_on_max_duration() {
+    let inner = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
+    let mut stream = ResourceLimitedStream::new(
+        inner,
+        crate::config::ResourceLimits {
+            stream_idle_timeout_secs: 60,
+            stream_max_duration_secs: 1,
+            ..Default::default()
+        },
+    );
+
+    let next = timeout(Duration::from_secs(2), stream.next())
+        .await
+        .expect("max duration should terminate the stalled zero-transform upstream");
+    assert!(
+        next.is_none(),
+        "stalled zero-transform upstream should end on max duration, got {next:?}"
+    );
+}
+
+#[tokio::test]
 async fn translated_sse_stream_fails_closed_on_accumulated_state_cap() {
     const SENTINEL: &str = "STREAM_STATE_SENTINEL_SHOULD_NOT_LEAK";
 

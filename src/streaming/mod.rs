@@ -35,7 +35,7 @@ pub use responses_source::responses_event_to_openai_chunks;
 pub use state::{ClaudeToolUseState, StreamFatalRejection, StreamState, ToolCallState};
 pub use stream::{
     needs_stream_translation, openai_event_as_chunk, translate_response_chunk, translate_sse_event,
-    GuardedSseStream, TranslateSseStream,
+    GuardedSseStream, ResourceLimitedStream, TranslateSseStream,
 };
 pub use wire::{format_sse_data, format_sse_event, take_one_sse_event};
 

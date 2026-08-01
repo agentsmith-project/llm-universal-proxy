@@ -50,6 +50,13 @@ impl DownstreamCancellation {
     pub(crate) async fn cancelled(&self) {
         self.token.cancelled().await;
     }
+
+    /// Exposes the underlying cancellation token so it can be raced against a
+    /// streaming body's `poll_next` (the streaming-body hop of downstream
+    /// cancellation). Cloning a token is cheap (Arc bump).
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.token.clone()
+    }
 }
 
 impl DownstreamCancellationHandle {

@@ -92,6 +92,55 @@ impl StreamLimitTimers {
     }
 }
 
+/// Raw (non-SSE) passthrough stream bounded only by the idle/max-duration
+/// resource timers. Unlike [`GuardedSseStream`]/[`TranslateSseStream`] it does
+/// not re-canonicalize or sanitize SSE frames, so it is safe to apply to a
+/// zero-transform upstream stream where bytes must flow through unchanged. On
+/// timer expiry the stream simply ends, which drops the wrapped upstream stream
+/// (releasing the upstream connection) — the surrounding
+/// [`crate::server::tracked_body::TrackedBodyStream`] finalizes the tracker.
+pub struct ResourceLimitedStream<S> {
+    inner: S,
+    limit_timers: StreamLimitTimers,
+}
+
+impl<S> ResourceLimitedStream<S> {
+    pub fn new(inner: S, resource_limits: ResourceLimits) -> Self {
+        Self {
+            inner,
+            limit_timers: StreamLimitTimers::new(&resource_limits),
+        }
+    }
+}
+
+impl<S> Stream for ResourceLimitedStream<S>
+where
+    S: Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin,
+{
+    type Item = Result<bytes::Bytes, std::io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        // Bound the raw upstream stream with the same idle/max-duration timers
+        // used by the translated/guarded SSE paths. On expiry the stream simply
+        // ends, dropping the wrapped upstream stream (releasing the upstream
+        // connection) — this closes the zero-transform hang/leak (C1) without
+        // re-canonicalizing raw passthrough bytes.
+        if this.limit_timers.poll_expired(cx).is_some() {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(bytes))) => {
+                this.limit_timers.reset_idle();
+                Poll::Ready(Some(Ok(bytes)))
+            }
+            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 pub fn needs_stream_translation(
     upstream_format: UpstreamFormat,
     client_format: UpstreamFormat,

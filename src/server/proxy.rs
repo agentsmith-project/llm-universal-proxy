@@ -36,7 +36,9 @@ use crate::request_processing::{
     classify_request_processing, PromptCacheRequestControl, RequestProcessing,
     RequestProcessingInput, StateBridgeModifier,
 };
-use crate::streaming::{needs_stream_translation, GuardedSseStream, TranslateSseStream};
+use crate::streaming::{
+    needs_stream_translation, GuardedSseStream, ResourceLimitedStream, TranslateSseStream,
+};
 use crate::translate::{
     assess_request_translation_with_surface, translate_request_with_policy,
     translate_response_with_context, RequestTranslationPolicy, ResponseTranslationContext,
@@ -1518,10 +1520,21 @@ async fn handle_request_core_with_downstream_cancellation(
                     )),
                 ));
             }
+            // Apply the idle/max-duration resource timers to the raw upstream
+            // stream so a stalled zero-transform upstream cannot hang the
+            // connection/task indefinitely (C1). This deliberately wraps with
+            // the timer-only `ResourceLimitedStream` rather than
+            // `GuardedSseStream`, which would re-canonicalize/sanitize SSE
+            // frames and corrupt raw passthrough bytes.
+            body_stream = Box::pin(ResourceLimitedStream::new(
+                body_stream,
+                namespace_state.config.resource_limits.clone(),
+            ));
             let body = Body::from_stream(TrackedBodyStream::new(
                 body_stream,
                 tracker,
                 status.as_u16(),
+                downstream_cancellation.cancellation_token(),
             ));
             let mut response = Response::builder()
                 .status(status)
@@ -1673,6 +1686,7 @@ async fn handle_request_core_with_downstream_cancellation(
             body_stream,
             tracker,
             status.as_u16(),
+            downstream_cancellation.cancellation_token(),
         ));
         let mut response = Response::builder()
             .status(status)

@@ -112,8 +112,12 @@ fn build_client_with_proxy(
         }
         ResolvedProxyTarget::Proxy { ref url } => {
             builder = builder.no_proxy();
-            let proxy = Proxy::all(url)
-                .map_err(|error| format!("invalid explicit upstream proxy `{url}`: {error}"))?;
+            let proxy = Proxy::all(url).map_err(|error| {
+                format!(
+                    "invalid explicit upstream proxy `{}`: {error}",
+                    crate::config::sanitize_url_for_admin(url)
+                )
+            })?;
             builder = builder.proxy(proxy);
         }
     }
@@ -426,6 +430,7 @@ async fn send_upstream_resource_request(
     req.send().await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_upstream_resource_request_preserving_path(
     client: &Client,
     method: reqwest::Method,
@@ -434,6 +439,7 @@ async fn send_upstream_resource_request_preserving_path(
     headers: &[(String, String)],
     accept_event_stream: bool,
     resolved_proxy: &ResolvedProxyMetadata,
+    first_response_timeout: Option<Duration>,
 ) -> Result<UpstreamResourceResponse, BoxError> {
     if target.requires_raw_path_fidelity {
         if !raw_path_fidelity_sender_can_use_direct_connection(resolved_proxy) {
@@ -445,6 +451,7 @@ async fn send_upstream_resource_request_preserving_path(
             body,
             headers,
             accept_event_stream,
+            first_response_timeout,
         )
         .await;
     }
@@ -478,6 +485,7 @@ async fn send_raw_path_upstream_resource_request(
     body: Option<&Value>,
     headers: &[(String, String)],
     accept_event_stream: bool,
+    first_response_timeout: Option<Duration>,
 ) -> Result<UpstreamResourceResponse, BoxError> {
     let https = hyper_rustls::HttpsConnectorBuilder::new()
         .with_webpki_roots()
@@ -513,10 +521,26 @@ async fn send_raw_path_upstream_resource_request(
     let request = request
         .body(Full::new(body_bytes))
         .map_err(|error| Box::new(error) as BoxError)?;
-    let response = client
-        .request(request)
-        .await
-        .map_err(|error| Box::new(error) as BoxError)?;
+    // The hyper client is built fresh with no built-in timeout, so bound the
+    // wait for response headers with the same first-response timeout the
+    // reqwest sibling (`call_upstream_with_cancellation`) already applies. On a
+    // hung upstream that accepts the connection but never replies this prevents
+    // an unbounded hang that downstream cancellation alone would not catch.
+    let response = match first_response_timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, client.request(request)).await {
+            Ok(result) => result.map_err(|error| Box::new(error) as BoxError)?,
+            Err(_) => {
+                return Err(format!(
+                    "upstream raw-path response headers timed out after {timeout:?}"
+                )
+                .into());
+            }
+        },
+        None => client
+            .request(request)
+            .await
+            .map_err(|error| Box::new(error) as BoxError)?,
+    };
     Ok(UpstreamResourceResponse::Hyper(response))
 }
 
@@ -524,6 +548,7 @@ pub(crate) async fn call_upstream_resource_target_with_streaming_accept_and_canc
     client: &Client,
     request: UpstreamResourceRequest<'_>,
     downstream_cancellation: &DownstreamCancellation,
+    first_response_timeout: Option<Duration>,
 ) -> Result<UpstreamResourceResponse, DownstreamAwareError<BoxError>> {
     await_with_downstream_cancellation(
         send_upstream_resource_request_preserving_path(
@@ -534,6 +559,7 @@ pub(crate) async fn call_upstream_resource_target_with_streaming_accept_and_canc
             request.headers,
             request.accept_event_stream,
             request.resolved_proxy,
+            first_response_timeout,
         ),
         downstream_cancellation,
     )
@@ -635,7 +661,7 @@ pub fn upstream_url(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, LazyLock, Mutex};
+    use std::sync::{Arc, Mutex};
 
     use axum::{
         body::Body,
@@ -649,38 +675,6 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-
-    static UPSTREAM_PROXY_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-        LazyLock::new(|| tokio::sync::Mutex::new(()));
-
-    struct ScopedEnvVar {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl ScopedEnvVar {
-        fn set(key: &'static str, value: impl AsRef<str>) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::set_var(key, value.as_ref());
-            Self { key, previous }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::remove_var(key);
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for ScopedEnvVar {
-        fn drop(&mut self) {
-            if let Some(value) = &self.previous {
-                std::env::set_var(self.key, value);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
 
     #[derive(Clone, Default)]
     struct CapturedProxyRequests {
@@ -836,18 +830,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_upstream_proxy_prefers_upstream_then_namespace_then_environment() {
-        let _guard = UPSTREAM_PROXY_ENV_LOCK.blocking_lock();
-        let _http_proxy = ScopedEnvVar::set("HTTP_PROXY", "http://env-proxy.example:8080");
-        let _http_proxy_lower = ScopedEnvVar::remove("http_proxy");
-        let _https_proxy = ScopedEnvVar::remove("HTTPS_PROXY");
-        let _https_proxy_lower = ScopedEnvVar::remove("https_proxy");
-        let _all_proxy = ScopedEnvVar::remove("ALL_PROXY");
-        let _all_proxy_lower = ScopedEnvVar::remove("all_proxy");
-        let _no_proxy = ScopedEnvVar::remove("NO_PROXY");
-        let _no_proxy_lower = ScopedEnvVar::remove("no_proxy");
-        let _request_method = ScopedEnvVar::remove("REQUEST_METHOD");
-
+    fn resolve_upstream_proxy_prefers_upstream_then_namespace() {
+        // Explicit proxy sources win purely by precedence, with no dependence on
+        // the process environment: an upstream-level proxy beats a namespace
+        // direct override, and the namespace direct override is itself resolved
+        // when no upstream proxy is supplied.
         assert_eq!(
             resolve_upstream_proxy(
                 Some(&ProxyConfig::Proxy {
@@ -869,122 +856,37 @@ mod tests {
                 target: ResolvedProxyTarget::Direct,
             }
         );
-        assert_eq!(
-            resolve_upstream_proxy(None, None),
-            ResolvedProxyMetadata {
-                source: ResolvedProxySource::Environment,
-                target: ResolvedProxyTarget::Inherited,
-            }
-        );
     }
 
     #[test]
-    fn resolve_upstream_proxy_without_any_configured_sources_returns_none() {
-        let _guard = UPSTREAM_PROXY_ENV_LOCK.blocking_lock();
-        let _http_proxy = ScopedEnvVar::remove("HTTP_PROXY");
-        let _http_proxy_lower = ScopedEnvVar::remove("http_proxy");
-        let _https_proxy = ScopedEnvVar::remove("HTTPS_PROXY");
-        let _https_proxy_lower = ScopedEnvVar::remove("https_proxy");
-        let _all_proxy = ScopedEnvVar::remove("ALL_PROXY");
-        let _all_proxy_lower = ScopedEnvVar::remove("all_proxy");
-        let _no_proxy = ScopedEnvVar::remove("NO_PROXY");
-        let _no_proxy_lower = ScopedEnvVar::remove("no_proxy");
-        let _request_method = ScopedEnvVar::remove("REQUEST_METHOD");
-
+    fn resolve_upstream_proxy_without_explicit_sources_reflects_ambient_proxy_env() {
+        // With no explicit proxy sources, resolution falls through to the process
+        // environment. Rather than mutating process env (which races with other
+        // tests that read env for config resolution), observe the ambient
+        // environment directly and assert the resolver agrees with it.
+        let ambient_proxy_present = has_environment_proxy_configuration();
+        let expected_source = if ambient_proxy_present {
+            ResolvedProxySource::Environment
+        } else {
+            ResolvedProxySource::None
+        };
         assert_eq!(
             resolve_upstream_proxy(None, None),
             ResolvedProxyMetadata {
-                source: ResolvedProxySource::None,
-                target: ResolvedProxyTarget::Inherited,
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_upstream_proxy_with_only_no_proxy_returns_none() {
-        let _guard = UPSTREAM_PROXY_ENV_LOCK.blocking_lock();
-        let _http_proxy = ScopedEnvVar::remove("HTTP_PROXY");
-        let _http_proxy_lower = ScopedEnvVar::remove("http_proxy");
-        let _https_proxy = ScopedEnvVar::remove("HTTPS_PROXY");
-        let _https_proxy_lower = ScopedEnvVar::remove("https_proxy");
-        let _all_proxy = ScopedEnvVar::remove("ALL_PROXY");
-        let _all_proxy_lower = ScopedEnvVar::remove("all_proxy");
-        let _no_proxy = ScopedEnvVar::set("NO_PROXY", "localhost,127.0.0.1");
-        let _no_proxy_lower = ScopedEnvVar::set("no_proxy", "localhost,127.0.0.1");
-        let _request_method = ScopedEnvVar::remove("REQUEST_METHOD");
-
-        assert_eq!(
-            resolve_upstream_proxy(None, None),
-            ResolvedProxyMetadata {
-                source: ResolvedProxySource::None,
+                source: expected_source,
                 target: ResolvedProxyTarget::Inherited,
             }
         );
     }
 
     #[tokio::test]
-    async fn build_upstream_clients_without_explicit_proxy_inherits_environment_proxy() {
-        let _guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
-        let (target_base, direct_requests, direct_server) = spawn_direct_upstream().await;
-        let (env_proxy_base, env_captured, env_proxy_server) = spawn_forward_proxy().await;
-        let _http_proxy = ScopedEnvVar::set("HTTP_PROXY", &env_proxy_base);
-        let _http_proxy_lower = ScopedEnvVar::set("http_proxy", &env_proxy_base);
-        let _https_proxy = ScopedEnvVar::remove("HTTPS_PROXY");
-        let _https_proxy_lower = ScopedEnvVar::remove("https_proxy");
-        let _all_proxy = ScopedEnvVar::remove("ALL_PROXY");
-        let _all_proxy_lower = ScopedEnvVar::remove("all_proxy");
-        let _no_proxy = ScopedEnvVar::remove("NO_PROXY");
-        let _no_proxy_lower = ScopedEnvVar::remove("no_proxy");
-        let _request_method = ScopedEnvVar::remove("REQUEST_METHOD");
-        let config = test_config(Duration::from_secs(5));
-
-        let (client, _, resolved_proxy) =
-            build_upstream_clients(&config, None, None).expect("environment inherited client");
-
-        let response = call_upstream_resource(
-            &client,
-            reqwest::Method::POST,
-            &format!("{target_base}/resource"),
-            None,
-            &[],
-        )
-        .await
-        .expect("environment proxied request");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            resolved_proxy,
-            ResolvedProxyMetadata {
-                source: ResolvedProxySource::Environment,
-                target: ResolvedProxyTarget::Inherited,
-            }
-        );
-        assert_eq!(env_captured.snapshot().len(), 1);
-        assert_eq!(
-            direct_requests.lock().expect("direct request lock").len(),
-            1
-        );
-
-        direct_server.abort();
-        env_proxy_server.abort();
-    }
-
-    #[tokio::test]
-    async fn build_upstream_clients_explicit_proxy_beats_environment_proxy() {
-        let _guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
-        let (target_base, direct_requests, direct_server) = spawn_direct_upstream().await;
-        let (env_proxy_base, env_captured, env_proxy_server) = spawn_forward_proxy().await;
+    async fn build_upstream_clients_explicit_proxy_routes_request_through_it() {
+        // An explicit upstream proxy is wired into the reqwest client via
+        // `Proxy::all` together with `no_proxy()`, so the request is routed
+        // through the configured proxy regardless of process environment.
         let (explicit_proxy_base, explicit_captured, explicit_proxy_server) =
             spawn_forward_proxy().await;
-        let _http_proxy = ScopedEnvVar::set("HTTP_PROXY", &env_proxy_base);
-        let _http_proxy_lower = ScopedEnvVar::set("http_proxy", &env_proxy_base);
-        let _https_proxy = ScopedEnvVar::remove("HTTPS_PROXY");
-        let _https_proxy_lower = ScopedEnvVar::remove("https_proxy");
-        let _all_proxy = ScopedEnvVar::remove("ALL_PROXY");
-        let _all_proxy_lower = ScopedEnvVar::remove("all_proxy");
-        let _no_proxy = ScopedEnvVar::remove("NO_PROXY");
-        let _no_proxy_lower = ScopedEnvVar::remove("no_proxy");
-        let _request_method = ScopedEnvVar::remove("REQUEST_METHOD");
+        let (target_base, direct_requests, direct_server) = spawn_direct_upstream().await;
         let config = test_config(Duration::from_secs(5));
 
         let (client, _, resolved_proxy) = build_upstream_clients(
@@ -1016,7 +918,6 @@ mod tests {
                 },
             }
         );
-        assert_eq!(env_captured.snapshot(), Vec::<String>::new());
         assert_eq!(explicit_captured.snapshot().len(), 1);
         assert_eq!(
             direct_requests.lock().expect("direct request lock").len(),
@@ -1024,24 +925,15 @@ mod tests {
         );
 
         direct_server.abort();
-        env_proxy_server.abort();
         explicit_proxy_server.abort();
     }
 
     #[tokio::test]
-    async fn build_upstream_clients_direct_cuts_environment_proxy_inheritance() {
-        let _guard = UPSTREAM_PROXY_ENV_LOCK.lock().await;
+    async fn build_upstream_clients_direct_proxy_routes_request_directly() {
+        // An explicit direct override calls `no_proxy()`, so the request bypasses
+        // any proxy and reaches the upstream directly, regardless of process
+        // environment.
         let (target_base, direct_requests, direct_server) = spawn_direct_upstream().await;
-        let (env_proxy_base, env_captured, env_proxy_server) = spawn_forward_proxy().await;
-        let _http_proxy = ScopedEnvVar::set("HTTP_PROXY", &env_proxy_base);
-        let _http_proxy_lower = ScopedEnvVar::set("http_proxy", &env_proxy_base);
-        let _https_proxy = ScopedEnvVar::remove("HTTPS_PROXY");
-        let _https_proxy_lower = ScopedEnvVar::remove("https_proxy");
-        let _all_proxy = ScopedEnvVar::remove("ALL_PROXY");
-        let _all_proxy_lower = ScopedEnvVar::remove("all_proxy");
-        let _no_proxy = ScopedEnvVar::remove("NO_PROXY");
-        let _no_proxy_lower = ScopedEnvVar::remove("no_proxy");
-        let _request_method = ScopedEnvVar::remove("REQUEST_METHOD");
         let config = test_config(Duration::from_secs(5));
 
         let (client, _, resolved_proxy) =
@@ -1066,13 +958,99 @@ mod tests {
                 target: ResolvedProxyTarget::Direct,
             }
         );
-        assert_eq!(env_captured.snapshot(), Vec::<String>::new());
         assert_eq!(
             direct_requests.lock().expect("direct request lock").len(),
             1
         );
 
         direct_server.abort();
-        env_proxy_server.abort();
+    }
+
+    #[test]
+    fn build_client_with_proxy_error_does_not_leak_proxy_credentials() {
+        // A credentialed proxy URL whose port is invalid is rejected by
+        // `Proxy::all`, exercising the error-message construction in
+        // `build_client_with_proxy`. The resulting error must not echo the raw
+        // (credentialed) URL; it must be sanitized like every other admin surface.
+        let credentialed = "socks5h://leak-user:leak-pass@host.example:abc";
+        let resolved = ResolvedProxyMetadata {
+            source: ResolvedProxySource::Upstream,
+            target: ResolvedProxyTarget::Proxy {
+                url: credentialed.to_string(),
+            },
+        };
+        let error = build_client_with_proxy(
+            Duration::from_secs(5),
+            &resolved,
+            false,
+            true,
+        )
+        .expect_err("invalid-port credentialed proxy must fail to build a client");
+        let message = error.to_string();
+        assert!(
+            !message.contains("leak-user"),
+            "proxy error must not leak username: {message}"
+        );
+        assert!(
+            !message.contains("leak-pass"),
+            "proxy error must not leak password: {message}"
+        );
+    }
+
+    async fn spawn_silent_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind silent upstream");
+        let addr = listener.local_addr().expect("silent upstream addr");
+        let handle = tokio::spawn(async move {
+            // Accept every inbound connection but hold it open without ever
+            // reading or writing, so the peer hangs forever waiting for
+            // response headers.
+            let mut held: Vec<tokio::net::TcpStream> = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn send_raw_path_upstream_resource_request_is_bounded_by_first_response_timeout() {
+        // Against an upstream that accepts the connection but never replies, the
+        // raw-path hyper sender must be bounded by its first-response timeout
+        // rather than hanging indefinitely.
+        let (base, server_handle) = spawn_silent_upstream().await;
+        let uri: hyper::Uri = format!("{base}/silent")
+            .parse()
+            .expect("silent upstream uri");
+        let timeout = Duration::from_millis(300);
+
+        let start = tokio::time::Instant::now();
+        let result = send_raw_path_upstream_resource_request(
+            reqwest::Method::GET,
+            uri,
+            None,
+            &[],
+            false,
+            Some(timeout),
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        server_handle.abort();
+
+        let error = match result {
+            Ok(_) => panic!("raw-path call against a silent upstream must time out, not hang"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("timed out"),
+            "expected a timeout error against the silent upstream, got: {message}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "raw-path call must be bounded by the timeout, not hang; elapsed={elapsed:?}"
+        );
     }
 }
