@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased / Next v0.3.0 (not published)
+## Unreleased / Next v0.3.1 (not published)
 
 - Fixed 25+ high-risk defects across protocol translation correctness, streaming stability (timeout/cancellation gaps, O(n²) algorithmic-complexity DoS, mid-stream error handling), security (proxy-credential leak in error bodies, forgeable tool-call attestation), and error-response shaping (200-on-error, finish-reason mapping, tool-result validation).
 - Added unified reasoning effort with per-upstream `dialect` parameter: accept the union vocabulary (none→ultra) and map to each provider's native format (OpenAI reasoning_effort, Anthropic output_config.effort / thinking). Named presets (deepseek-openai, glm-openai, glm-anthropic, qwen-openai) for one-word config. Optional and additive — no behavior change without dialect.
 - Refreshed protocol baselines to 2026-07-31 against current official OpenAI and Anthropic docs.
 - Eliminated test-suite flakiness (process-global env mutation, wall-clock deadline races).
-- 858 tests, deterministically green.
-- Advanced the main-branch release identity to Cargo package version `0.3.0` (release tag `v0.3.0`, not published), the next patch version after the published, occupied `v0.2.44` tag, without moving, deleting, or reusing the existing tag.
+- Added Codex CLI compatibility for translated upstreams: warn-and-omit Responses namespace tool groups instead of hard-rejecting (P0), populate the synthesized Responses `model` field and emit the `openai-model` response header (P1), and serve a Codex-compatible `ModelsResponse` catalog from `/models` (P2).
+- Bridged OpenAI Responses `{type:"namespace"}` tool groups (Codex `multi_agent_v1`) into flattened `<namespace>__<child>` function tools with streaming and non-streaming reversal, history replay, and tool_choice coverage, so Codex multi-agent sub-agents work through Chat/Anthropic upstreams; namespaces with non-function children stay fail-closed. Mirrors the existing custom-tool bridge (request-scoped context v2 to v3).
+- 1212 tests, deterministically green.
+- Advanced the main-branch release identity to Cargo package version `0.3.1` (release tag `v0.3.1`, not published), the next patch version after the published, occupied `v0.2.44` tag and the unpublished, tagged `v0.3.0` attempt, without moving, deleting, or reusing the existing tag.
 
 ## v0.2.44 - 2026-05-29
 
