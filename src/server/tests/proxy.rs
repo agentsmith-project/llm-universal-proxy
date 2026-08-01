@@ -2123,6 +2123,110 @@ async fn request_processing_observability_marks_local_state_capture_and_expansio
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn conversation_state_bridge_continuation_without_input_replays_stored_transcript() {
+    // PF-7: a continuation that carries `previous_response_id` but omits `input`
+    // is a valid "continue with stored context only" turn. It must replay the
+    // stored transcript instead of hard-failing with BAD_REQUEST
+    // "requires OpenAI Responses `input`", mirroring the graceful first-request
+    // path and `validate_bridge_continuation_items` (which already accepts empty
+    // current items when there are no pending tool calls).
+    let server_response_body = serde_json::json!({
+        "id": "chatcmpl_pf7_no_input_continuation",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+    });
+    let (mock_base, requests, upstream_server) =
+        spawn_openai_completion_mock(server_response_body).await;
+    let state = app_state_for_single_upstream(
+        mock_base,
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+    );
+
+    // First request captures a transcript under a resp_llmup_* id.
+    let first = handle_request_core(
+        state.clone(),
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/responses".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "input": "First",
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::OpenAiResponses,
+        None,
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body: Value = serde_json::from_str(&response_text(first).await).unwrap();
+    let local_id = first_body["id"]
+        .as_str()
+        .expect("local response id")
+        .to_string();
+    assert!(local_id.starts_with("resp_llmup_"), "body = {first_body:?}");
+
+    // Continuation carries previous_response_id but deliberately omits `input`.
+    let continuation = handle_request_core(
+        state.clone(),
+        DEFAULT_NAMESPACE.to_string(),
+        HeaderMap::new(),
+        "/openai/v1/responses".to_string(),
+        serde_json::json!({
+            "model": "gpt-4o-mini",
+            "previous_response_id": local_id,
+            "stream": false
+        }),
+        "gpt-4o-mini".to_string(),
+        crate::formats::UpstreamFormat::OpenAiResponses,
+        None,
+    )
+    .await;
+    assert_eq!(
+        continuation.status(),
+        StatusCode::OK,
+        "no-input continuation must not return 400"
+    );
+    let _ = response_text(continuation).await;
+
+    // The continuation must have replayed the stored transcript to the upstream
+    // (the first user turn plus the captured assistant output) rather than
+    // sending no input.
+    let captured = requests.lock().await;
+    assert_eq!(captured.len(), 2, "captured = {captured:?}");
+    let replayed_messages = captured[1]["messages"]
+        .as_array()
+        .expect("replayed upstream messages");
+    let replayed_text: Vec<String> = replayed_messages
+        .iter()
+        .map(|message| {
+            message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        replayed_text.iter().any(|text| text.contains("First")),
+        "continuation must replay the stored first turn: {replayed_text:?}"
+    );
+    assert!(
+        replayed_text.iter().any(|text| text.contains("ok")),
+        "continuation must replay the captured assistant output: {replayed_text:?}"
+    );
+
+    upstream_server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn debug_trace_records_prompt_cache_disposition_for_explicit_anthropic_mapping() {
     let server_response_body = serde_json::json!({
         "id": "msg_explicit_cache_mapping",

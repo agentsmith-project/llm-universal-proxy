@@ -2175,7 +2175,7 @@ async fn prepare_conversation_state_bridge(
     let mut debug_trace = None;
     let request_items = if let Some(previous) = preloaded_response {
         let stored_item_count = previous.transcript_items.len();
-        let current_items = responses_bridge_input_items_from_body(body)?;
+        let current_items = responses_bridge_continuation_items_from_body(body)?;
         let current_item_count = current_items.len();
         validate_bridge_continuation_items(&previous.transcript_items, &current_items)?;
         let mut expanded = previous.transcript_items;
@@ -2275,6 +2275,19 @@ fn set_responses_input_items(body: &mut Value, items: Vec<Value>) -> Result<(), 
     };
     obj.insert("input".to_string(), Value::Array(items));
     Ok(())
+}
+
+/// Continuation items for a local-replay turn. Unlike the first-request path in
+/// `prepare_conversation_state_bridge`, a continuation that carries
+/// `previous_response_id` may legitimately omit `input` to continue with the
+/// stored context only; a missing `input` is treated as an empty item list so a
+/// valid no-new-input continuation replays the stored transcript instead of
+/// failing with BAD_REQUEST. A present-but-unparseable `input` still errors.
+fn responses_bridge_continuation_items_from_body(body: &Value) -> Result<Vec<Value>, String> {
+    if body.get("input").is_none() {
+        return Ok(Vec::new());
+    }
+    responses_bridge_input_items_from_body(body)
 }
 
 fn responses_bridge_input_items_from_body(body: &Value) -> Result<Vec<Value>, String> {
