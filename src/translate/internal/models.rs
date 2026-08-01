@@ -170,6 +170,16 @@ pub(crate) struct NormalizedOpenAiFamilyCustomTool {
 pub(crate) enum NormalizedOpenAiFamilyToolDef {
     Function(NormalizedOpenAiFamilyFunctionTool),
     Custom(NormalizedOpenAiFamilyCustomTool),
+    /// A `type: "namespace"` tool group (e.g. Codex `multi_agent_v1`) whose
+    /// children are ALL `{type: "function"}`. The namespace bridge flattens
+    /// each child into a prefixed function tool `<namespace>__<child>`.
+    /// Namespaces containing any non-function child fall through to
+    /// warn-and-omit and never produce this variant.
+    Namespace {
+        name: String,
+        description: Option<String>,
+        children: Vec<NormalizedOpenAiFamilyFunctionTool>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

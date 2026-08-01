@@ -1,6 +1,6 @@
 use super::*;
 
-const TOOL_BRIDGE_CONTEXT_VERSION: u64 = 2;
+const TOOL_BRIDGE_CONTEXT_VERSION: u64 = 3;
 const TOOL_BRIDGE_CONTEXT_PURPOSE: &str = "openai_responses_custom_tool_bridge";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,10 +52,35 @@ impl StreamToolBridgeContextEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StreamNamespaceBridgeContextEntry {
+    namespace: String,
+    child: String,
+}
+
+impl StreamNamespaceBridgeContextEntry {
+    fn from_value(flat_name: &str, value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let namespace = object.get("namespace").and_then(Value::as_str)?;
+        let child = object.get("child").and_then(Value::as_str)?;
+        if namespace.is_empty() || child.is_empty() {
+            return None;
+        }
+        if flat_name != format!("{namespace}__{child}") {
+            return None;
+        }
+        Some(Self {
+            namespace: namespace.to_string(),
+            child: child.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StreamToolBridgeContext {
     version: u64,
     purpose: String,
     entries: std::collections::BTreeMap<String, StreamToolBridgeContextEntry>,
+    namespace_entries: std::collections::BTreeMap<String, StreamNamespaceBridgeContextEntry>,
 }
 
 impl StreamToolBridgeContext {
@@ -69,19 +94,28 @@ impl StreamToolBridgeContext {
         if purpose != TOOL_BRIDGE_CONTEXT_PURPOSE {
             return None;
         }
-        let entries_object = object.get("entries")?.as_object()?;
         let mut entries = std::collections::BTreeMap::new();
-        for (stable_name, entry_value) in entries_object {
-            let entry = StreamToolBridgeContextEntry::from_value(stable_name, entry_value)?;
-            entries.insert(stable_name.clone(), entry);
+        if let Some(entries_object) = object.get("entries").and_then(Value::as_object) {
+            for (stable_name, entry_value) in entries_object {
+                let entry = StreamToolBridgeContextEntry::from_value(stable_name, entry_value)?;
+                entries.insert(stable_name.clone(), entry);
+            }
         }
-        if entries.is_empty() {
+        let mut namespace_entries = std::collections::BTreeMap::new();
+        if let Some(ns_object) = object.get("namespace_entries").and_then(Value::as_object) {
+            for (flat_name, entry_value) in ns_object {
+                let entry = StreamNamespaceBridgeContextEntry::from_value(flat_name, entry_value)?;
+                namespace_entries.insert(flat_name.clone(), entry);
+            }
+        }
+        if entries.is_empty() && namespace_entries.is_empty() {
             return None;
         }
         Some(Self {
             version,
             purpose: purpose.to_string(),
             entries,
+            namespace_entries,
         })
     }
 
@@ -92,6 +126,12 @@ impl StreamToolBridgeContext {
                 .entries
                 .get(name)
                 .is_some_and(StreamToolBridgeContextEntry::expects_canonical_input_wrapper)
+    }
+
+    fn namespace_bridge_split(&self, flat_name: &str) -> Option<(String, String)> {
+        self.namespace_entries
+            .get(flat_name)
+            .map(|entry| (entry.namespace.clone(), entry.child.clone()))
     }
 }
 
@@ -211,6 +251,7 @@ pub struct ToolCallState {
     pub custom_input_done: bool,
     pub tool_type: Option<String>,
     pub proxied_tool_kind: Option<String>,
+    pub namespace: Option<String>,
     pub arguments_seeded_from_start: bool,
     pub block_index: Option<usize>,
     pub responses_item_id: Option<String>,
@@ -274,6 +315,9 @@ pub(super) fn dedupe_tool_call_state_by_call_id(
             }
             if entry.proxied_tool_kind.is_none() {
                 entry.proxied_tool_kind = existing_entry.proxied_tool_kind.clone();
+            }
+            if entry.namespace.is_none() {
+                entry.namespace = existing_entry.namespace.clone();
             }
             if entry.block_index.is_none() {
                 entry.block_index = existing_entry.block_index;
@@ -361,6 +405,17 @@ pub(super) fn request_scoped_openai_custom_bridge_expects_canonical_input_wrappe
     bridge_context
         .and_then(StreamToolBridgeContext::from_value)
         .is_some_and(|ctx| ctx.expects_canonical_input_wrapper(name))
+}
+
+/// Look up a flattened namespace tool name in the stream bridge context and
+/// return the `(namespace, child)` pair, if registered.
+pub(super) fn request_scoped_namespace_bridge_lookup_stream(
+    bridge_context: Option<&Value>,
+    flat_name: &str,
+) -> Option<(String, String)> {
+    bridge_context
+        .and_then(StreamToolBridgeContext::from_value)?
+        .namespace_bridge_split(flat_name)
 }
 
 pub(super) fn tool_call_state_type(state: &ToolCallState) -> &str {

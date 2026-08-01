@@ -379,7 +379,7 @@ pub(crate) fn openai_custom_tool_bridge_description_for_target(
 
 pub(crate) const OPENAI_RESPONSES_CUSTOM_BRIDGE_PREFIX: &str = "__llmup_custom__";
 pub(crate) const REQUEST_SCOPED_TOOL_BRIDGE_CONTEXT_FIELD: &str = "_llmup_tool_bridge_context";
-const TOOL_BRIDGE_CONTEXT_VERSION: u64 = 2;
+const TOOL_BRIDGE_CONTEXT_VERSION: u64 = 3;
 const TOOL_BRIDGE_CONTEXT_PURPOSE: &str = "openai_responses_custom_tool_bridge";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -530,11 +530,48 @@ impl ToolBridgeContextEntry {
     }
 }
 
+/// Entry in the namespace bridge map. The KEY (in `namespace_entries`) is the
+/// flattened name `<namespace>__<child>`; the entry records the original
+/// namespace and child tool name so response-side reversal can split the flat
+/// name back into `namespace` + `name`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamespaceBridgeContextEntry {
+    pub(crate) namespace: String,
+    pub(crate) child: String,
+}
+
+impl NamespaceBridgeContextEntry {
+    fn from_value(flat_name: &str, value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let namespace = object.get("namespace").and_then(Value::as_str)?;
+        let child = object.get("child").and_then(Value::as_str)?;
+        if namespace.is_empty() || child.is_empty() {
+            return None;
+        }
+        // The flat name must be `<namespace>__<child>` using double underscore.
+        if flat_name != format!("{namespace}__{child}") {
+            return None;
+        }
+        Some(Self {
+            namespace: namespace.to_string(),
+            child: child.to_string(),
+        })
+    }
+
+    fn to_value(&self) -> Value {
+        serde_json::json!({
+            "namespace": self.namespace,
+            "child": self.child
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolBridgeContext {
     pub(crate) version: u64,
     purpose: String,
     pub(crate) entries: BTreeMap<String, ToolBridgeContextEntry>,
+    pub(crate) namespace_entries: BTreeMap<String, NamespaceBridgeContextEntry>,
 }
 
 impl ToolBridgeContext {
@@ -543,6 +580,7 @@ impl ToolBridgeContext {
             version: TOOL_BRIDGE_CONTEXT_VERSION,
             purpose: TOOL_BRIDGE_CONTEXT_PURPOSE.to_string(),
             entries: BTreeMap::new(),
+            namespace_entries: BTreeMap::new(),
         }
     }
 
@@ -556,19 +594,28 @@ impl ToolBridgeContext {
         if purpose != TOOL_BRIDGE_CONTEXT_PURPOSE {
             return None;
         }
-        let entries_object = object.get("entries").and_then(Value::as_object)?;
         let mut entries = BTreeMap::new();
-        for (stable_name, entry_value) in entries_object {
-            let entry = ToolBridgeContextEntry::from_value(stable_name, entry_value)?;
-            entries.insert(stable_name.clone(), entry);
+        if let Some(entries_object) = object.get("entries").and_then(Value::as_object) {
+            for (stable_name, entry_value) in entries_object {
+                let entry = ToolBridgeContextEntry::from_value(stable_name, entry_value)?;
+                entries.insert(stable_name.clone(), entry);
+            }
         }
-        if entries.is_empty() {
+        let mut namespace_entries = BTreeMap::new();
+        if let Some(ns_object) = object.get("namespace_entries").and_then(Value::as_object) {
+            for (flat_name, entry_value) in ns_object {
+                let entry = NamespaceBridgeContextEntry::from_value(flat_name, entry_value)?;
+                namespace_entries.insert(flat_name.clone(), entry);
+            }
+        }
+        if entries.is_empty() && namespace_entries.is_empty() {
             return None;
         }
         Some(Self {
             version,
             purpose: purpose.to_string(),
             entries,
+            namespace_entries,
         })
     }
 
@@ -578,10 +625,16 @@ impl ToolBridgeContext {
             .iter()
             .map(|(stable_name, entry)| (stable_name.clone(), entry.to_value()))
             .collect::<serde_json::Map<_, _>>();
+        let namespace_entries = self
+            .namespace_entries
+            .iter()
+            .map(|(flat_name, entry)| (flat_name.clone(), entry.to_value()))
+            .collect::<serde_json::Map<_, _>>();
         serde_json::json!({
             "version": self.version,
             "purpose": self.purpose,
-            "entries": entries
+            "entries": entries,
+            "namespace_entries": namespace_entries
         })
     }
 
@@ -589,6 +642,15 @@ impl ToolBridgeContext {
         self.entries
             .get(name)
             .is_some_and(ToolBridgeContextEntry::expects_canonical_input_wrapper)
+    }
+
+    /// Look up a flattened namespace tool name (`<ns>__<child>`) and return the
+    /// `(namespace, child)` pair, if this name was registered as a bridged
+    /// namespace child.
+    pub(crate) fn namespace_bridge_split(&self, flat_name: &str) -> Option<(String, String)> {
+        self.namespace_entries
+            .get(flat_name)
+            .map(|entry| (entry.namespace.clone(), entry.child.clone()))
     }
 }
 
@@ -888,19 +950,79 @@ pub(crate) fn request_scoped_openai_custom_bridge_context(
 ) -> Option<ToolBridgeContext> {
     let mut bridge_context = ToolBridgeContext::new();
     for tool in tools {
-        let NormalizedOpenAiFamilyToolDef::Custom(custom) = tool else {
-            continue;
-        };
-        bridge_context.entries.insert(
-            custom.name.clone(),
-            ToolBridgeContextEntry::from_custom(custom),
-        );
+        match tool {
+            NormalizedOpenAiFamilyToolDef::Custom(custom) => {
+                bridge_context.entries.insert(
+                    custom.name.clone(),
+                    ToolBridgeContextEntry::from_custom(custom),
+                );
+            }
+            NormalizedOpenAiFamilyToolDef::Namespace { name, children, .. } => {
+                for child in children {
+                    let flat_name = format!("{name}__{child_name}", child_name = child.name);
+                    bridge_context.namespace_entries.insert(
+                        flat_name,
+                        NamespaceBridgeContextEntry {
+                            namespace: name.clone(),
+                            child: child.name.clone(),
+                        },
+                    );
+                }
+            }
+            NormalizedOpenAiFamilyToolDef::Function(_) => {}
+        }
     }
-    if bridge_context.entries.is_empty() {
+    if bridge_context.entries.is_empty() && bridge_context.namespace_entries.is_empty() {
         None
     } else {
         Some(bridge_context)
     }
+}
+
+/// Detect a problematic namespace bridge flattened name (`<ns>__<child>`).
+/// Returns the first offending flat name if one exists. This is the single
+/// choke point that validates every generated flat name on the request side:
+///
+/// - reserved bridge prefix (`__llmup_custom__`): the namespace part `__llmup_custom`
+///   passes part-level validation but its flat name is reserved, so it must be
+///   rejected here to avoid request/response asymmetry;
+/// - collision with a user-supplied function/custom tool name;
+/// - duplicate generated flat name (repeated children within a namespace,
+///   repeated namespace blocks, or cross-namespace strings that collapse to the
+///   same `<ns>__<child>`).
+///
+/// The caller decides the error message: it re-runs the reserved-prefix guard on
+/// the returned name to distinguish a reserved flat name from a collision.
+pub(crate) fn request_scoped_openai_namespace_bridge_conflict_name(
+    tools: &[NormalizedOpenAiFamilyToolDef],
+) -> Option<String> {
+    let user_names: BTreeSet<String> = tools
+        .iter()
+        .filter_map(|tool| match tool {
+            NormalizedOpenAiFamilyToolDef::Function(function) => Some(function.name.clone()),
+            NormalizedOpenAiFamilyToolDef::Custom(custom) => Some(custom.name.clone()),
+            NormalizedOpenAiFamilyToolDef::Namespace { .. } => None,
+        })
+        .collect();
+    let mut generated_flats: BTreeSet<String> = BTreeSet::new();
+    for tool in tools {
+        let NormalizedOpenAiFamilyToolDef::Namespace { name, children, .. } = tool else {
+            continue;
+        };
+        for child in children {
+            let flat = format!("{name}__{child_name}", child_name = child.name);
+            if validate_public_tool_name_not_reserved(&flat).is_err() {
+                return Some(flat);
+            }
+            if user_names.contains(&flat) {
+                return Some(flat);
+            }
+            if !generated_flats.insert(flat.clone()) {
+                return Some(flat);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn request_scoped_openai_custom_bridge_conflict_name(
@@ -916,6 +1038,7 @@ pub(crate) fn request_scoped_openai_custom_bridge_conflict_name(
             NormalizedOpenAiFamilyToolDef::Custom(custom) => {
                 custom_names.insert(custom.name.clone());
             }
+            NormalizedOpenAiFamilyToolDef::Namespace { .. } => {}
         }
     }
     function_names
@@ -1266,11 +1389,62 @@ pub(crate) fn normalized_responses_tool_definition(
                 },
             )))
         }
-        // `type: "namespace"` tool definitions (e.g. Codex `multi_agent_v1`, `mcp__*`)
-        // are warn-and-omit: they fall through to the `Ok(None)` non-function path used by
-        // `web_search` / `computer`, so the existing warn-and-omit pipeline drops them from
-        // the translated `tools` array and emits an `x-llmup-portability-warning` header
-        // (PRD §2.4 row "Built-in / non-function tools" + §2.6).
+        // `type: "namespace"` tool definitions (e.g. Codex `multi_agent_v1`,
+        // `mcp__*`). When EVERY child is `{type: "function"}` the namespace is
+        // bridged: each child is flattened into a prefixed function tool
+        // `<namespace>__<child>`. Namespaces with any non-function child remain
+        // warn-and-omit (fall through to `Ok(None)`), mirroring `web_search` /
+        // `computer` handling.
+        Some("namespace") => {
+            let name = tool
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or("OpenAI Responses namespace tools require a non-empty name.".to_string())?;
+            validate_public_tool_name_not_reserved(name)?;
+            let description = tool
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let children_array = tool.get("tools").and_then(Value::as_array);
+            let Some(children_array) = children_array else {
+                return Ok(None);
+            };
+            // If ANY child is not a function tool, warn-and-omit the whole namespace.
+            if !children_array
+                .iter()
+                .all(|child| child.get("type").and_then(Value::as_str) == Some("function"))
+            {
+                return Ok(None);
+            }
+            let mut children = Vec::with_capacity(children_array.len());
+            for child in children_array {
+                let child_name = child
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .ok_or(
+                        "OpenAI Responses namespace function tools require a non-empty name."
+                            .to_string(),
+                    )?;
+                validate_public_tool_name_not_reserved(child_name)?;
+                children.push(NormalizedOpenAiFamilyFunctionTool {
+                    name: child_name.to_string(),
+                    description: child.get("description").cloned(),
+                    parameters: child.get("parameters").cloned(),
+                    strict: child.get("strict").cloned(),
+                });
+            }
+            Ok(Some(NormalizedOpenAiFamilyToolDef::Namespace {
+                name: name.to_string(),
+                description,
+                children,
+            }))
+        }
+        // Non-function / non-namespace tool definitions (e.g. `web_search`,
+        // `computer`) are warn-and-omit: they fall through to `Ok(None)` so the
+        // existing warn-and-omit pipeline drops them from the translated `tools`
+        // array and emits an `x-llmup-portability-warning` header.
         _ => Ok(None),
     }
 }
@@ -1359,6 +1533,12 @@ pub(crate) fn normalized_tool_definition_to_openai(
                 "function": Value::Object(payload)
             }))
         }
+        // Namespace variants are expanded into flat Function variants by the
+        // request-side bridge before reaching this single-value converter.
+        NormalizedOpenAiFamilyToolDef::Namespace { .. } => Err(
+            "OpenAI Responses namespace tool definitions must be flattened before conversion."
+                .to_string(),
+        ),
         NormalizedOpenAiFamilyToolDef::Custom(custom) => {
             let mut payload = serde_json::Map::new();
             payload.insert("name".to_string(), Value::String(custom.name.clone()));
@@ -1441,6 +1621,38 @@ pub(crate) fn normalized_tool_definition_to_responses(
             if let Some(format) = custom.format.clone() {
                 payload.insert("format".to_string(), format);
             }
+            Value::Object(payload)
+        }
+        NormalizedOpenAiFamilyToolDef::Namespace {
+            name,
+            description,
+            children,
+        } => {
+            let mut payload = serde_json::Map::new();
+            payload.insert("type".to_string(), Value::String("namespace".to_string()));
+            payload.insert("name".to_string(), Value::String(name.clone()));
+            if let Some(description) = description.clone() {
+                payload.insert("description".to_string(), Value::String(description));
+            }
+            let child_values = children
+                .iter()
+                .map(|child| {
+                    let mut c = serde_json::Map::new();
+                    c.insert("type".to_string(), Value::String("function".to_string()));
+                    c.insert("name".to_string(), Value::String(child.name.clone()));
+                    if let Some(description) = child.description.clone() {
+                        c.insert("description".to_string(), description);
+                    }
+                    if let Some(parameters) = child.parameters.clone() {
+                        c.insert("parameters".to_string(), parameters);
+                    }
+                    if let Some(strict) = child.strict.clone() {
+                        c.insert("strict".to_string(), strict);
+                    }
+                    Value::Object(c)
+                })
+                .collect::<Vec<_>>();
+            payload.insert("tools".to_string(), Value::Array(child_values));
             Value::Object(payload)
         }
     }
@@ -1614,54 +1826,30 @@ pub(crate) fn responses_tool_call_item_to_openai_tool_call(item: &Value) -> Opti
 
 pub(crate) fn responses_tool_call_item_to_openai_tool_call_strict(
     item: &Value,
-    target_label: &str,
+    _target_label: &str,
 ) -> Result<Option<Value>, String> {
     let Some(tool_call) = normalized_responses_tool_call(item)? else {
         return Ok(None);
     };
-    match &tool_call {
-        NormalizedOpenAiFamilyToolCall::Function {
-            name,
-            namespace: Some(_),
-            ..
-        }
-        | NormalizedOpenAiFamilyToolCall::Custom {
-            name,
-            namespace: Some(_),
-            ..
-        } => Err(format!(
-            "OpenAI Responses namespaced tool call `{name}` cannot be faithfully translated to {target_label}"
-        )),
-        _ => {
-            let mut tool_call = normalized_tool_call_to_openai(&tool_call);
-            copy_non_replayable_tool_call_marker(item, &mut tool_call);
-            Ok(Some(tool_call))
-        }
-    }
+    // A namespaced tool call whose namespace was bridged (all-function children)
+    // is flattened to `<namespace>__<name>`. Non-bridged namespaces are rejected
+    // upstream by the assessment gate, so reaching here with a namespace means
+    // the call should be flattened.
+    let tool_call = flatten_normalized_namespaced_tool_call(tool_call);
+    let mut tool_call = normalized_tool_call_to_openai(&tool_call);
+    copy_non_replayable_tool_call_marker(item, &mut tool_call);
+    Ok(Some(tool_call))
 }
 
 pub(crate) fn responses_tool_call_item_to_openai_tool_call_with_request_scoped_custom_bridge_strict(
     item: &Value,
-    target_label: &str,
+    _target_label: &str,
 ) -> Result<Option<Value>, String> {
     let Some(tool_call) = normalized_responses_tool_call(item)? else {
         return Ok(None);
     };
+    let tool_call = flatten_normalized_namespaced_tool_call(tool_call);
     match tool_call {
-        NormalizedOpenAiFamilyToolCall::Function {
-            name,
-            namespace: Some(_),
-            ..
-        } => Err(format!(
-            "OpenAI Responses namespaced tool call `{name}` cannot be faithfully translated to {target_label}"
-        )),
-        NormalizedOpenAiFamilyToolCall::Custom {
-            name,
-            namespace: Some(_),
-            ..
-        } => Err(format!(
-            "OpenAI Responses namespaced tool call `{name}` cannot be faithfully translated to {target_label}"
-        )),
         NormalizedOpenAiFamilyToolCall::Custom {
             id,
             name,
@@ -1691,14 +1879,51 @@ pub(crate) fn responses_tool_call_item_to_openai_tool_call_with_request_scoped_c
     }
 }
 
+/// Flatten a namespaced `NormalizedOpenAiFamilyToolCall` by rewriting the name
+/// to `<namespace>__<name>` and clearing the `namespace` field. Non-namespaced
+/// calls pass through unchanged.
+fn flatten_normalized_namespaced_tool_call(
+    call: NormalizedOpenAiFamilyToolCall,
+) -> NormalizedOpenAiFamilyToolCall {
+    match call {
+        NormalizedOpenAiFamilyToolCall::Function {
+            id,
+            name,
+            arguments,
+            namespace: Some(ns),
+            proxied_tool_kind,
+        } => NormalizedOpenAiFamilyToolCall::Function {
+            id,
+            name: format!("{ns}__{name}"),
+            arguments,
+            namespace: None,
+            proxied_tool_kind,
+        },
+        NormalizedOpenAiFamilyToolCall::Custom {
+            id,
+            name,
+            input,
+            namespace: Some(ns),
+            proxied_tool_kind,
+        } => NormalizedOpenAiFamilyToolCall::Custom {
+            id,
+            name: format!("{ns}__{name}"),
+            input,
+            namespace: None,
+            proxied_tool_kind,
+        },
+        other => other,
+    }
+}
+
 fn normalized_tool_call_to_responses_item(call: NormalizedOpenAiFamilyToolCall) -> Value {
     match call {
         NormalizedOpenAiFamilyToolCall::Function {
             id,
             name,
             arguments,
+            namespace,
             proxied_tool_kind,
-            ..
         } => {
             let mut item = serde_json::json!({
                 "type": "function_call",
@@ -1706,6 +1931,9 @@ fn normalized_tool_call_to_responses_item(call: NormalizedOpenAiFamilyToolCall) 
                 "name": name,
                 "arguments": arguments
             });
+            if let Some(namespace) = namespace {
+                item["namespace"] = Value::String(namespace);
+            }
             if let Some(proxied_tool_kind) = proxied_tool_kind {
                 item["proxied_tool_kind"] = proxied_tool_kind;
             }
@@ -1715,8 +1943,8 @@ fn normalized_tool_call_to_responses_item(call: NormalizedOpenAiFamilyToolCall) 
             id,
             name,
             input,
+            namespace,
             proxied_tool_kind,
-            ..
         } => {
             let mut item = serde_json::json!({
                 "type": "custom_tool_call",
@@ -1724,6 +1952,9 @@ fn normalized_tool_call_to_responses_item(call: NormalizedOpenAiFamilyToolCall) 
                 "name": name,
                 "input": input
             });
+            if let Some(namespace) = namespace {
+                item["namespace"] = Value::String(namespace);
+            }
             if let Some(proxied_tool_kind) = proxied_tool_kind {
                 item["proxied_tool_kind"] = proxied_tool_kind;
             }
@@ -1808,6 +2039,25 @@ pub(crate) fn openai_tool_call_to_responses_item_decoding_custom_bridge_with_con
                         Ok(item)
                     }
                 }
+            } else if let Some((ns, child)) =
+                bridge_context.and_then(|ctx| ctx.namespace_bridge_split(&name))
+            {
+                // Namespace bridge reversal: the upstream Chat tool call used
+                // the flattened `<ns>__<child>` name; split it back into the
+                // original namespace + child name. Arguments pass through
+                // unchanged (no wrapper decoding).
+                let mut item = serde_json::json!({
+                    "type": "function_call",
+                    "call_id": id,
+                    "namespace": ns,
+                    "name": child,
+                    "arguments": arguments
+                });
+                if let Some(proxied_tool_kind) = proxied_tool_kind {
+                    item["proxied_tool_kind"] = proxied_tool_kind;
+                }
+                copy_non_replayable_tool_call_marker(tool_call, &mut item);
+                Ok(item)
             } else {
                 let mut item = normalized_tool_call_to_responses_item(
                     NormalizedOpenAiFamilyToolCall::Function {

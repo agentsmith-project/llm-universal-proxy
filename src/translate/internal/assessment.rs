@@ -725,6 +725,11 @@ pub(super) fn responses_nonportable_tool_choice_message(
                 "OpenAI Responses tool_choice.type `custom` cannot be faithfully translated to {target_label}"
             )),
         },
+        // A standalone `{type:"namespace", name:<ns>}` selector is bridged when
+        // the namespace has all-function children (expanded to flat function
+        // selectors) and otherwise warn-and-omit, mirroring namespace tool
+        // definitions and allowed_tools namespace entries.
+        "namespace" => None,
         "allowed_tools" => responses_tool_choice_allowed_tools_array(tool_choice).and_then(
             |tools| {
                 tools.iter().find_map(|tool| match tool.get("type").and_then(Value::as_str) {
@@ -861,6 +866,25 @@ pub(super) fn responses_hosted_input_item_type(item_type: &str) -> bool {
     )
 }
 
+/// Whether a namespace name is bridged: defined in the request's `tools` as a
+/// `type: "namespace"` group whose children are ALL `{type: "function"}`.
+fn responses_namespace_is_bridged(body: &Value, namespace: &str) -> bool {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools.iter().any(|tool| {
+                normalized_responses_tool_definition(tool)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|t| match t {
+                        NormalizedOpenAiFamilyToolDef::Namespace { name, .. } => name == namespace,
+                        _ => false,
+                    })
+            })
+        })
+        .unwrap_or(false)
+}
+
 pub(super) fn responses_portable_input_item_type(item_type: &str) -> bool {
     matches!(
         item_type,
@@ -976,12 +1000,19 @@ pub(super) fn responses_nonportable_input_item_message(
         if matches!(item_type, "function_call" | "custom_tool_call")
             && item.get("namespace").is_some()
         {
-            return Some(format!(
-                "OpenAI Responses namespaced tool call `{}` cannot be faithfully translated to {target_label}",
-                item.get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-            ));
+            let ns = item.get("namespace").and_then(Value::as_str).unwrap_or("");
+            // Allow when the namespace was bridged (defined in `tools` with
+            // all-function children); the translator flattens the call to
+            // `<ns>__<name>`. Otherwise reject as before.
+            if !responses_namespace_is_bridged(body, ns) {
+                return Some(format!(
+                    "OpenAI Responses namespaced tool call `{}` cannot be faithfully translated to {target_label}",
+                    item.get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                ));
+            }
+            return None;
         }
         if responses_input_item_is_compaction(item) {
             if responses_compaction_item_can_drop_opaque_state(

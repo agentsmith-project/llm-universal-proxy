@@ -14,9 +14,28 @@ fn typed_tool_bridge_context(stable_name: &str, source_kind: &str) -> serde_json
         }),
     );
     json!({
-        "version": 2,
+        "version": 3,
         "purpose": "openai_responses_custom_tool_bridge",
-        "entries": entries
+        "entries": entries,
+        "namespace_entries": {}
+    })
+}
+
+fn typed_namespace_bridge_context(namespace: &str, child: &str) -> serde_json::Value {
+    let flat = format!("{namespace}__{child}");
+    let mut ns_entries = serde_json::Map::new();
+    ns_entries.insert(
+        flat,
+        json!({
+            "namespace": namespace,
+            "child": child
+        }),
+    );
+    json!({
+        "version": 3,
+        "purpose": "openai_responses_custom_tool_bridge",
+        "entries": {},
+        "namespace_entries": ns_entries
     })
 }
 
@@ -1502,7 +1521,7 @@ fn translate_request_responses_to_openai_bridges_custom_tool_definition_choice_a
     assert_eq!(
         body["_llmup_tool_bridge_context"],
         json!({
-            "version": 2,
+            "version": 3,
             "purpose": "openai_responses_custom_tool_bridge",
             "entries": {
                 "code_exec": {
@@ -1512,7 +1531,8 @@ fn translate_request_responses_to_openai_bridges_custom_tool_definition_choice_a
                     "wrapper_field": "input",
                     "expected_canonical_shape": "single_required_string"
                 }
-            }
+            },
+            "namespace_entries": {}
         })
     );
 
@@ -1604,6 +1624,39 @@ fn translate_request_responses_to_openai_rejects_reserved_bridge_prefix_for_func
         assert!(err.contains("__llmup_custom__"), "err = {err}");
         assert!(err.contains("reserved bridge prefix"), "err = {err}");
     }
+}
+
+#[test]
+fn translate_request_responses_rejects_reserved_bridge_prefix_for_namespace_flat_name() {
+    // The namespace part `__llmup_custom` passes part-level validation (it does
+    // not start with the full reserved `__llmup_custom__` prefix), but its flat
+    // name `__llmup_custom__tool` is reserved. It must be rejected on the request
+    // side to avoid request/response asymmetry.
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": "run this",
+        "tools": [{
+            "type": "namespace",
+            "name": "__llmup_custom",
+            "tools": [{
+                "type": "function",
+                "name": "tool",
+                "parameters": {"type": "object"}
+            }]
+        }]
+    });
+
+    let err = translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect_err("reserved namespace flat name should be rejected up-front");
+
+    assert!(err.contains("__llmup_custom__"), "err = {err}");
+    assert!(err.contains("reserved bridge prefix"), "err = {err}");
 }
 
 #[test]
@@ -1890,10 +1943,52 @@ fn translate_request_responses_to_openai_rejects_same_name_function_and_custom_b
 
 #[test]
 fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_groups() {
-    // PRD §2.4/§2.6: namespace tool definitions are warn-and-omit (like `web_search` /
-    // `computer`), not fail-closed. This covers the namespace `name` values Codex emits:
-    // `multi_agent_v1` and `mcp__<server>` namespaced tool groups.
-    for namespace_name in ["crm", "multi_agent_v1", "mcp__github"] {
+    // A namespace whose children are ALL function tools is BRIDGED: each child
+    // is flattened to `<namespace>__<child>` in the Chat tools array. A
+    // namespace with any non-function child is still warn-and-omit.
+
+    // Case 1: function-child namespace is bridged (flattened).
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": "run this",
+        "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "multi-agent tool group",
+            "tools": [{
+                "type": "function",
+                "name": "spawn_agent",
+                "description": "spawn a sub-agent",
+                "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}}}
+            }]
+        }]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("function-child namespace should bridge, not reject");
+
+    let tools = body["tools"].as_array().expect("chat tools");
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["function"]["name"], "multi_agent_v1__spawn_agent");
+    assert_eq!(
+        tools[0]["function"]["parameters"],
+        json!({"type": "object", "properties": {"prompt": {"type": "string"}}})
+    );
+    // The namespace bridge context carries the namespace_entries registration.
+    let ns_entries = &body["_llmup_tool_bridge_context"]["namespace_entries"];
+    assert_eq!(
+        ns_entries["multi_agent_v1__spawn_agent"],
+        json!({"namespace": "multi_agent_v1", "child": "spawn_agent"})
+    );
+
+    // Case 2: namespace with a non-function child is still warn-and-omit.
+    for namespace_name in ["crm", "mcp__github"] {
         let mut body = json!({
             "model": "gpt-4o",
             "input": "run this",
@@ -1921,8 +2016,6 @@ fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_g
             )
         });
 
-        // The entire namespace group (including its nested tools) is dropped from the
-        // translated body by the existing non-function warn-and-omit pipeline.
         let remaining_namespace = body
             .get("tools")
             .and_then(Value::as_array)
@@ -1948,13 +2041,20 @@ fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_g
 #[test]
 fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_choice_allowed_tools(
 ) {
-    // Site 2: a `namespace` entry inside `tool_choice.allowed_tools` must not fail-closed.
-    // Codex may emit these when multi-agent/MCP is enabled; they are dropped/passed-through
-    // (warn-and-omit) like namespace tool definitions rather than rejecting the whole request.
+    // A `namespace` entry inside `tool_choice.allowed_tools` expands to flat
+    // function selectors for each registered child of the namespace.
     let mut body = json!({
         "model": "gpt-4o",
         "input": "run this",
         "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [{
+                "type": "function",
+                "name": "spawn_agent",
+                "parameters": {"type": "object"}
+            }]
+        }, {
             "type": "function",
             "name": "do_thing",
             "parameters": {"type": "object", "properties": {}}
@@ -1976,13 +2076,66 @@ fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_c
         &mut body,
         false,
     )
-    .unwrap_or_else(|err| {
-        panic!("namespace allowed_tools entry should warn-and-omit, not reject: {err}")
-    });
+    .unwrap_or_else(|err| panic!("namespace allowed_tools entry should expand, not reject: {err}"));
+
+    let allowed_tools = body["tool_choice"]["allowed_tools"]["tools"]
+        .as_array()
+        .expect("allowed tools");
+    // The namespace selector should have been expanded to a flat function selector.
+    let has_flat = allowed_tools
+        .iter()
+        .any(|t| t["type"] == "function" && t["function"]["name"] == "multi_agent_v1__spawn_agent");
+    assert!(
+        has_flat,
+        "namespace selector should expand to flat selector: {allowed_tools:?}"
+    );
 }
 
 #[test]
 fn translate_request_responses_to_non_responses_rejects_namespaced_tool_calls() {
+    // A namespaced tool call whose namespace WAS bridged flattens instead of rejecting.
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": [{
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "spawn_agent",
+            "namespace": "multi_agent_v1",
+            "arguments": "{\"prompt\":\"hello\"}"
+        }],
+        "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [{
+                "type": "function",
+                "name": "spawn_agent",
+                "parameters": {"type": "object"}
+            }]
+        }]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("bridged namespaced tool call should flatten, not reject");
+
+    // The history call should have been flattened to multi_agent_v1__spawn_agent.
+    let messages = body["messages"].as_array().expect("messages");
+    let assistant_msg = messages
+        .iter()
+        .find(|m| m["role"] == "assistant")
+        .expect("assistant message");
+    let tool_calls = assistant_msg["tool_calls"].as_array().expect("tool_calls");
+    assert_eq!(
+        tool_calls[0]["function"]["name"],
+        "multi_agent_v1__spawn_agent"
+    );
+
+    // A namespaced call whose namespace was NOT bridged (non-function child) still rejects.
     let mut body = json!({
         "model": "gpt-4o",
         "input": [{
@@ -1991,6 +2144,14 @@ fn translate_request_responses_to_non_responses_rejects_namespaced_tool_calls() 
             "name": "lookup_account",
             "namespace": "crm",
             "input": "account_id=123"
+        }],
+        "tools": [{
+            "type": "namespace",
+            "name": "crm",
+            "tools": [{
+                "type": "custom",
+                "name": "lookup_account"
+            }]
         }]
     });
 
@@ -2001,9 +2162,457 @@ fn translate_request_responses_to_non_responses_rejects_namespaced_tool_calls() 
         &mut body,
         false,
     )
-    .expect_err("Responses namespaced tool calls should fail closed");
+    .expect_err("non-bridged namespaced tool calls should fail closed");
 
     assert!(err.contains("namespace"), "err = {err}");
+}
+
+#[test]
+fn translate_request_responses_namespace_bridge_flattens_function_children() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": "run this",
+        "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "multi-agent",
+            "tools": [{
+                "type": "function",
+                "name": "spawn_agent",
+                "description": "spawn",
+                "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}}},
+                "strict": true
+            }]
+        }]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("namespace bridge should succeed");
+
+    let tools = body["tools"].as_array().expect("chat tools");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["function"]["name"], "multi_agent_v1__spawn_agent");
+    assert_eq!(
+        tools[0]["function"]["parameters"]["properties"]["prompt"]["type"],
+        "string"
+    );
+    assert_eq!(tools[0]["function"]["strict"], true);
+    assert_eq!(
+        body["_llmup_tool_bridge_context"]["namespace_entries"]["multi_agent_v1__spawn_agent"],
+        json!({"namespace": "multi_agent_v1", "child": "spawn_agent"})
+    );
+}
+
+#[test]
+fn translate_response_openai_to_responses_namespace_bridge_reverses_flat_call() {
+    let upstream = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "multi_agent_v1__spawn_agent",
+                        "arguments": "{\"prompt\":\"hello\"}"
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }]
+    });
+
+    let context =
+        ResponseTranslationContext::default().with_request_scoped_tool_bridge_context_value(Some(
+            typed_namespace_bridge_context("multi_agent_v1", "spawn_agent"),
+        ));
+
+    let result = crate::translate::translate_response_with_context(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiResponses,
+        &upstream,
+        context,
+    )
+    .expect("response translation should succeed");
+
+    let output = result["output"].as_array().expect("output");
+    let fc = output
+        .iter()
+        .find(|item| item["type"] == "function_call")
+        .expect("function_call item");
+    assert_eq!(fc["namespace"], "multi_agent_v1");
+    assert_eq!(fc["name"], "spawn_agent");
+    assert_eq!(fc["call_id"], "call_1");
+    assert_eq!(fc["arguments"], "{\"prompt\":\"hello\"}");
+}
+
+#[test]
+fn translate_response_openai_to_responses_namespace_call_not_decoded_when_child_matches_custom_stable_name(
+) {
+    // Non-streaming counterpart of the streaming collision regression. The
+    // bridge context carries BOTH a custom `apply_patch` entry AND the namespace
+    // registration for `multi_agent_v1__apply_patch`. The flat name does not
+    // match the custom stable name, so arguments must pass through unchanged.
+    let upstream = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "multi_agent_v1__apply_patch",
+                        "arguments": "{\"input\":\"hello\"}"
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }]
+    });
+
+    let mut entries = serde_json::Map::new();
+    entries.insert(
+        "apply_patch".to_string(),
+        json!({
+            "stable_name": "apply_patch",
+            "source_kind": "custom_grammar",
+            "transport_kind": "function_object_wrapper",
+            "wrapper_field": "input",
+            "expected_canonical_shape": "single_required_string"
+        }),
+    );
+    let mut ns_entries = serde_json::Map::new();
+    ns_entries.insert(
+        "multi_agent_v1__apply_patch".to_string(),
+        json!({ "namespace": "multi_agent_v1", "child": "apply_patch" }),
+    );
+    let bridge_context = json!({
+        "version": 3,
+        "purpose": "openai_responses_custom_tool_bridge",
+        "entries": entries,
+        "namespace_entries": ns_entries
+    });
+    let context = ResponseTranslationContext::default()
+        .with_request_scoped_tool_bridge_context_value(Some(bridge_context));
+
+    let result = crate::translate::translate_response_with_context(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiResponses,
+        &upstream,
+        context,
+    )
+    .expect("response translation should succeed");
+
+    let output = result["output"].as_array().expect("output");
+    let fc = output
+        .iter()
+        .find(|item| item["type"] == "function_call")
+        .expect("function_call item");
+    assert_eq!(fc["namespace"], "multi_agent_v1");
+    assert_eq!(fc["name"], "apply_patch");
+    assert_eq!(fc["arguments"], "{\"input\":\"hello\"}");
+}
+
+#[test]
+fn translate_request_responses_namespace_bridge_rejects_duplicate_flat_names() {
+    // Two children sharing the same name within one namespace produce the same
+    // flat name; this collision must be rejected rather than silently overwriting.
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": "run this",
+        "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [
+                {"type": "function", "name": "spawn_agent", "parameters": {"type": "object"}},
+                {"type": "function", "name": "spawn_agent", "parameters": {"type": "object"}}
+            ]
+        }]
+    });
+
+    let err = translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect_err("duplicate namespace flat names should be rejected");
+
+    assert!(
+        err.contains("multi_agent_v1__spawn_agent"),
+        "error should name the colliding flat name: {err}"
+    );
+    assert!(
+        err.contains("collides"),
+        "error should describe a collision: {err}"
+    );
+}
+
+#[test]
+fn translate_request_responses_namespace_bridge_rejects_cross_namespace_flat_collision() {
+    // Two different (namespace, child) pairs can collapse to the same flat name
+    // because the `__` separator is ambiguous: namespace `a` child `b__c` and
+    // namespace `a__b` child `c` both yield `a__b__c`.
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": "run this",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "a",
+                "tools": [{"type": "function", "name": "b__c", "parameters": {"type": "object"}}]
+            },
+            {
+                "type": "namespace",
+                "name": "a__b",
+                "tools": [{"type": "function", "name": "c", "parameters": {"type": "object"}}]
+            }
+        ]
+    });
+
+    let err = translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect_err("cross-namespace flat collision should be rejected");
+
+    assert!(
+        err.contains("a__b__c"),
+        "error should name the colliding flat name: {err}"
+    );
+    assert!(
+        err.contains("collides"),
+        "error should describe a collision: {err}"
+    );
+}
+
+#[test]
+fn translate_request_responses_namespace_bridge_flattens_history_call() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go"}]},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "spawn_agent",
+                "namespace": "multi_agent_v1",
+                "arguments": "{\"prompt\":\"hello\"}"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "done"
+            }
+        ],
+        "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [{
+                "type": "function",
+                "name": "spawn_agent",
+                "parameters": {"type": "object"}
+            }]
+        }]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("bridged history call should flatten");
+
+    let messages = body["messages"].as_array().expect("messages");
+    let assistant = messages
+        .iter()
+        .find(|m| m["role"] == "assistant")
+        .expect("assistant message");
+    let tool_calls = assistant["tool_calls"].as_array().expect("tool_calls");
+    assert_eq!(
+        tool_calls[0]["function"]["name"],
+        "multi_agent_v1__spawn_agent"
+    );
+}
+
+#[test]
+fn translate_request_responses_namespace_bridge_expands_standalone_tool_choice() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": "run this",
+        "tools": [{
+            "type": "namespace",
+            "name": "single_ns",
+            "tools": [{
+                "type": "function",
+                "name": "only_child",
+                "parameters": {"type": "object"}
+            }]
+        }],
+        "tool_choice": {
+            "type": "namespace",
+            "name": "single_ns"
+        }
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("namespace tool_choice should expand");
+
+    assert_eq!(body["tool_choice"]["type"], "function");
+    assert_eq!(
+        body["tool_choice"]["function"]["name"],
+        "single_ns__only_child"
+    );
+}
+
+#[test]
+fn translate_request_responses_namespace_bridge_rejects_flat_name_collision() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": "run this",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "multi_agent_v1",
+                "tools": [{
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "parameters": {"type": "object"}
+                }]
+            },
+            {
+                "type": "function",
+                "name": "multi_agent_v1__spawn_agent",
+                "parameters": {"type": "object"}
+            }
+        ]
+    });
+
+    let err = translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect_err("flat name collision should reject");
+
+    assert!(err.contains("multi_agent_v1__spawn_agent"), "err = {err}");
+    assert!(err.contains("collides"), "err = {err}");
+}
+
+#[test]
+fn translate_request_responses_namespace_bridge_non_function_child_warn_and_omit() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": "run this",
+        "tools": [{
+            "type": "namespace",
+            "name": "mixed_ns",
+            "tools": [{
+                "type": "web_search"
+            }]
+        }]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("non-function child namespace should warn-and-omit, not reject");
+
+    // No tools should survive (namespace dropped, no other tools).
+    let tools = body.get("tools").and_then(Value::as_array);
+    assert!(
+        tools.is_none() || tools.unwrap().is_empty(),
+        "body = {body:?}"
+    );
+    // No namespace_entries should be registered.
+    assert!(
+        body.get("_llmup_tool_bridge_context").is_none(),
+        "no bridge context for non-function namespace"
+    );
+}
+
+#[test]
+fn namespace_bridge_round_trip_via_helpers() {
+    use crate::translate::internal::models::{
+        NormalizedOpenAiFamilyFunctionTool, NormalizedOpenAiFamilyToolDef,
+    };
+    use crate::translate::internal::tools::{
+        request_scoped_openai_custom_bridge_context, NamespaceBridgeContextEntry, ToolBridgeContext,
+    };
+
+    let tools = vec![NormalizedOpenAiFamilyToolDef::Namespace {
+        name: "multi_agent_v1".to_string(),
+        description: None,
+        children: vec![NormalizedOpenAiFamilyFunctionTool {
+            name: "spawn_agent".to_string(),
+            description: None,
+            parameters: Some(json!({"type": "object"})),
+            strict: None,
+        }],
+    }];
+
+    let bridge_context =
+        request_scoped_openai_custom_bridge_context(&tools).expect("bridge context");
+    let serialized = bridge_context.to_value();
+
+    // Reverse: parse back and look up the flat name.
+    let parsed = ToolBridgeContext::from_value(&serialized).expect("parsed context");
+    let (ns, child) = parsed
+        .namespace_bridge_split("multi_agent_v1__spawn_agent")
+        .expect("flat name registered");
+    assert_eq!(ns, "multi_agent_v1");
+    assert_eq!(child, "spawn_agent");
+
+    // Unregistered name returns None.
+    assert!(parsed.namespace_bridge_split("unknown__tool").is_none());
+
+    // Verify entry shape directly.
+    let entry = parsed
+        .namespace_entries
+        .get("multi_agent_v1__spawn_agent")
+        .unwrap();
+    assert_eq!(
+        entry,
+        &NamespaceBridgeContextEntry {
+            namespace: "multi_agent_v1".to_string(),
+            child: "spawn_agent".to_string(),
+        }
+    );
 }
 
 #[test]
@@ -7098,7 +7707,7 @@ fn translate_request_responses_custom_tool_to_claude_bridges_definition_choice_a
     assert_eq!(
         body["_llmup_tool_bridge_context"],
         json!({
-            "version": 2,
+            "version": 3,
             "purpose": "openai_responses_custom_tool_bridge",
             "entries": {
                 "code_exec": {
@@ -7108,7 +7717,8 @@ fn translate_request_responses_custom_tool_to_claude_bridges_definition_choice_a
                     "wrapper_field": "input",
                     "expected_canonical_shape": "single_required_string"
                 }
-            }
+            },
+            "namespace_entries": {}
         })
     );
     let tools = body["tools"].as_array().expect("anthropic tools");
@@ -7385,7 +7995,7 @@ eof_line: "*** End of File" LF
     assert_eq!(
         body["_llmup_tool_bridge_context"],
         json!({
-            "version": 2,
+            "version": 3,
             "purpose": "openai_responses_custom_tool_bridge",
             "entries": {
                 "apply_patch": {
@@ -7395,7 +8005,8 @@ eof_line: "*** End of File" LF
                     "wrapper_field": "input",
                     "expected_canonical_shape": "single_required_string"
                 }
-            }
+            },
+            "namespace_entries": {}
         })
     );
     assert_eq!(tools[0]["name"], "apply_patch");
@@ -7508,7 +8119,7 @@ fn translate_request_responses_string_grammar_custom_tool_to_claude_default_warn
     .expect("default grammar custom tools should bridge to Anthropic");
 
     let bridge_context = &body["_llmup_tool_bridge_context"];
-    assert_eq!(bridge_context["version"], 2);
+    assert_eq!(bridge_context["version"], 3);
     assert_eq!(
         bridge_context["purpose"],
         "openai_responses_custom_tool_bridge"
@@ -7574,7 +8185,7 @@ fn translate_request_responses_string_grammar_custom_tool_to_openai_default_warn
     .expect("default grammar custom tools should bridge to OpenAI Chat Completions");
 
     let bridge_context = &body["_llmup_tool_bridge_context"];
-    assert_eq!(bridge_context["version"], 2);
+    assert_eq!(bridge_context["version"], 3);
     assert_eq!(
         bridge_context["purpose"],
         "openai_responses_custom_tool_bridge"
@@ -7661,7 +8272,7 @@ eof_line: "*** End of File" LF
     )
     .expect("string-grammar custom tools should bridge to OpenAI Chat Completions by default");
 
-    assert_eq!(body["_llmup_tool_bridge_context"]["version"], 2);
+    assert_eq!(body["_llmup_tool_bridge_context"]["version"], 3);
     assert_eq!(
         body["_llmup_tool_bridge_context"]["purpose"],
         "openai_responses_custom_tool_bridge"
@@ -7926,7 +8537,7 @@ fn responses_custom_tool_bridge_round_trip_preserves_trusted_non_replayable_mark
         .expect("tool call");
 
     let bridge_context = super::tools::ToolBridgeContext::from_value(&json!({
-        "version": 2,
+        "version": 3,
         "purpose": "openai_responses_custom_tool_bridge",
         "entries": {
             "apply_patch": {
@@ -12009,14 +12620,14 @@ fn translate_response_openai_to_responses_fails_closed_for_incomplete_or_invalid
         (
             "missing purpose",
             json!({
-                "version": 2,
+                "version": 3,
                 "entries": { "code_exec": entry.clone() }
             }),
         ),
         (
             "invalid purpose",
             json!({
-                "version": 2,
+                "version": 3,
                 "purpose": "other",
                 "entries": { "code_exec": entry.clone() }
             }),
@@ -12024,7 +12635,7 @@ fn translate_response_openai_to_responses_fails_closed_for_incomplete_or_invalid
         (
             "missing stable_name",
             json!({
-                "version": 2,
+                "version": 3,
                 "purpose": "openai_responses_custom_tool_bridge",
                 "entries": {
                     "code_exec": {
@@ -12039,7 +12650,7 @@ fn translate_response_openai_to_responses_fails_closed_for_incomplete_or_invalid
         (
             "stable_name mismatch",
             json!({
-                "version": 2,
+                "version": 3,
                 "purpose": "openai_responses_custom_tool_bridge",
                 "entries": {
                     "code_exec": {
@@ -12063,7 +12674,7 @@ fn translate_response_openai_to_responses_fails_closed_for_incomplete_or_invalid
         (
             "future version",
             json!({
-                "version": 3,
+                "version": 99,
                 "purpose": "openai_responses_custom_tool_bridge",
                 "entries": { "code_exec": entry }
             }),

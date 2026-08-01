@@ -7970,10 +7970,11 @@ async fn openai_chat_completions_sets_openai_model_header_to_client_alias() {
 
 #[tokio::test]
 async fn responses_namespace_tools_warn_and_omit_emits_portability_header() {
-    // P0: a Responses request carrying namespace tool groups (Codex `multi_agent_v1` /
-    // `mcp__*`) must succeed, emit the non-function portability warning header, and the
-    // translated upstream request must omit the namespace group while preserving portable
-    // function tools.
+    // P0: a Responses request carrying a namespace tool group with NON-function
+    // children must succeed, emit the non-function portability warning header,
+    // and the translated upstream request must omit the namespace group while
+    // preserving portable function tools. (Function-child namespaces are
+    // bridged — covered by unit tests.)
     let (mock_base, _mock, captured) = spawn_auth_capture_anthropic_mock().await;
     let config = proxy_config(&mock_base, UpstreamFormat::Anthropic);
     let (proxy_base, _proxy) = start_proxy(config).await;
@@ -7987,7 +7988,7 @@ async fn responses_namespace_tools_warn_and_omit_emits_portability_header() {
             "prompt_cache_key": "cache-key",
             "tools": [
                 { "type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]} },
-                { "type": "namespace", "name": "multi_agent_v1", "description": "multi-agent group", "tools": [{ "type": "function", "name": "spawn_agent", "parameters": {"type": "object", "properties": {}} }] }
+                { "type": "namespace", "name": "mcp__github", "description": "mcp group", "tools": [{ "type": "web_search" }] }
             ],
             "tool_choice": "auto",
             "stream": false
@@ -8010,7 +8011,7 @@ async fn responses_namespace_tools_warn_and_omit_emits_portability_header() {
         "warnings = {warnings:?}"
     );
 
-    // The namespace group (and its nested `spawn_agent` tool) must be dropped from the
+    // The namespace group (and its nested non-function tool) must be dropped from the
     // translated upstream request; the portable `get_weather` function tool survives.
     let requests = captured.requests.lock().unwrap();
     assert_eq!(requests.len(), 1, "expected one upstream capture");
@@ -8030,8 +8031,10 @@ async fn responses_namespace_tools_warn_and_omit_emits_portability_header() {
         "portable function tool should survive translation: {upstream_tool_names:?}"
     );
     assert!(
-        !upstream_tool_names.contains(&"spawn_agent"),
-        "namespaced nested tool should be omitted from upstream: {upstream_tool_names:?}"
+        !upstream_tool_names
+            .iter()
+            .any(|name| name.contains("mcp__github")),
+        "non-function namespace should be omitted from upstream: {upstream_tool_names:?}"
     );
 }
 

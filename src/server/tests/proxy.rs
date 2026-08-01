@@ -5447,7 +5447,7 @@ async fn live_responses_custom_tool_bridge_to_openai_restores_non_stream_respons
 async fn live_openai_responses_transformation_required_rejects_upstream_bridge_context_leak() {
     let response_body = serde_json::json!({
         "_llmup_tool_bridge_context": {
-            "version": 2,
+            "version": 3,
             "purpose": "openai_responses_custom_tool_bridge",
             "entries": {
                 "code_exec": {
@@ -5758,7 +5758,7 @@ async fn live_responses_rejects_external_tool_bridge_context_ingress() {
                 "content": [{ "type": "input_text", "text": "Create hello.txt" }]
             }],
             "_llmup_tool_bridge_context": {
-                "version": 2,
+                "version": 3,
                 "purpose": "openai_responses_custom_tool_bridge",
                 "entries": {
                     "code_exec": {

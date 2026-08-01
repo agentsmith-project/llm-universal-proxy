@@ -804,6 +804,9 @@ pub(super) fn emit_openai_responses_terminal(
             if let Some(proxied_tool_kind) = tool_call.proxied_tool_kind.clone() {
                 item["proxied_tool_kind"] = Value::String(proxied_tool_kind);
             }
+            if let Some(namespace) = tool_call.namespace.clone() {
+                item["namespace"] = Value::String(namespace);
+            }
             maybe_mark_responses_stream_tool_call_item_non_replayable(
                 &mut item,
                 &tool_call.name,
@@ -1126,6 +1129,7 @@ struct ResponsesToolCallEvent<'a> {
     name: &'a str,
     tool_type: &'a str,
     proxied_tool_kind: Option<&'a str>,
+    namespace: Option<&'a str>,
 }
 
 fn emit_responses_tool_call_item_added(
@@ -1149,6 +1153,9 @@ fn emit_responses_tool_call_item_added(
     ev["item"][payload_field] = Value::String(String::new());
     if let Some(proxied_tool_kind) = event.proxied_tool_kind {
         ev["item"]["proxied_tool_kind"] = Value::String(proxied_tool_kind.to_string());
+    }
+    if let Some(namespace) = event.namespace {
+        ev["item"]["namespace"] = Value::String(namespace.to_string());
     }
     out.push(format_sse_event("response.output_item.added", &ev));
 }
@@ -1175,6 +1182,9 @@ fn emit_responses_tool_call_delta(
     if let Some(proxied_tool_kind) = event.proxied_tool_kind {
         ev["proxied_tool_kind"] = Value::String(proxied_tool_kind.to_string());
     }
+    if let Some(namespace) = event.namespace {
+        ev["namespace"] = Value::String(namespace.to_string());
+    }
     out.push(format_sse_event(
         responses_tool_call_delta_event_type(event.tool_type),
         &ev,
@@ -1188,6 +1198,7 @@ struct ResponsesToolCallDone {
     output_index: usize,
     tool_type: String,
     proxied_tool_kind: Option<String>,
+    namespace: Option<String>,
 }
 
 struct ResponsesToolCallDoneContext<'a> {
@@ -1209,6 +1220,7 @@ fn emit_responses_tool_call_done(
         output_index,
         tool_type,
         proxied_tool_kind,
+        namespace,
     } = tool_call;
     let ResponsesToolCallDoneContext {
         response_id,
@@ -1227,6 +1239,9 @@ fn emit_responses_tool_call_done(
         "output_index": output_index,
     });
     args_done_ev[payload_field] = Value::String(arguments.clone());
+    if let Some(namespace) = namespace.as_ref() {
+        args_done_ev["namespace"] = Value::String(namespace.clone());
+    }
     out.push(format_sse_event(
         responses_tool_call_done_event_type(&tool_type),
         &args_done_ev,
@@ -1247,6 +1262,9 @@ fn emit_responses_tool_call_done(
     output_item_done_ev["item"][payload_field] = Value::String(arguments.clone());
     if let Some(proxied_tool_kind) = proxied_tool_kind {
         output_item_done_ev["item"]["proxied_tool_kind"] = Value::String(proxied_tool_kind);
+    }
+    if let Some(namespace) = namespace {
+        output_item_done_ev["item"]["namespace"] = Value::String(namespace);
     }
     maybe_mark_responses_stream_tool_call_item_non_replayable(
         &mut output_item_done_ev["item"],
@@ -1308,10 +1326,11 @@ fn emit_pending_responses_tool_call_done_events(
                 tool_call.block_index.unwrap_or(tool_call.index),
                 tool_call_state_type(tool_call).to_string(),
                 tool_call.proxied_tool_kind.clone(),
+                tool_call.namespace.clone(),
             ));
         }
     }
-    for (call_id, name, arguments, output_index, tool_type, proxied_tool_kind) in
+    for (call_id, name, arguments, output_index, tool_type, proxied_tool_kind, namespace) in
         completed_tool_calls
     {
         emit_responses_tool_call_done(
@@ -1323,6 +1342,7 @@ fn emit_pending_responses_tool_call_done_events(
                 output_index,
                 tool_type,
                 proxied_tool_kind,
+                namespace,
             },
             ResponsesToolCallDoneContext {
                 response_id,
@@ -1375,9 +1395,11 @@ fn flush_pending_responses_tool_call(
         let name = entry.name.clone();
         let mut arguments = entry.arguments.clone();
         let proxied_tool_kind = entry.proxied_tool_kind.clone();
+        let namespace = entry.namespace.clone();
 
         if tool_type != "custom"
             && proxied_tool_kind.is_none()
+            && namespace.is_none()
             && request_scoped_openai_custom_bridge_expects_canonical_input_wrapper_stream(
                 state.request_scoped_tool_bridge_context.as_ref(),
                 &entry.name,
@@ -1397,10 +1419,17 @@ fn flush_pending_responses_tool_call(
 
         entry.responses_item_added = true;
         entry.responses_item_id = Some(format!("fc_{call_id}"));
-        (call_id, name, arguments, tool_type, proxied_tool_kind)
+        (
+            call_id,
+            name,
+            arguments,
+            tool_type,
+            proxied_tool_kind,
+            namespace,
+        )
     };
 
-    let (call_id, name, arguments, tool_type, proxied_tool_kind) = resolved;
+    let (call_id, name, arguments, tool_type, proxied_tool_kind, namespace) = resolved;
     let event = ResponsesToolCallEvent {
         response_id,
         output_index,
@@ -1408,6 +1437,7 @@ fn flush_pending_responses_tool_call(
         name: &name,
         tool_type: &tool_type,
         proxied_tool_kind: proxied_tool_kind.as_deref(),
+        namespace: namespace.as_deref(),
     };
     emit_responses_tool_call_item_added(state, &event, out);
     emit_responses_tool_call_delta(state, &event, &arguments, out);
@@ -1678,7 +1708,15 @@ pub(super) fn openai_chunk_to_responses_sse(
                     return out;
                 }
             }
-            let mut args_delta: Option<(String, String, String, String, Option<String>)> = None;
+            #[allow(clippy::type_complexity)]
+            let mut args_delta: Option<(
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+            )> = None;
             let should_flush_pending;
             {
                 let entry =
@@ -1712,7 +1750,22 @@ pub(super) fn openai_chunk_to_responses_sse(
                     .and_then(|f| f.get("name"))
                     .and_then(Value::as_str)
                 {
-                    entry.name = name.to_string();
+                    // Resolve the namespace bridge registration for this flat
+                    // name. When found, restore the child name and namespace so
+                    // all downstream emit sites produce the correct Responses
+                    // item shape (name=child, namespace=ns). Once resolved, do
+                    // not overwrite the child name on subsequent chunks.
+                    if entry.namespace.is_none() {
+                        if let Some((ns, child)) = request_scoped_namespace_bridge_lookup_stream(
+                            state.request_scoped_tool_bridge_context.as_ref(),
+                            name,
+                        ) {
+                            entry.namespace = Some(ns);
+                            entry.name = child;
+                        } else {
+                            entry.name = name.to_string();
+                        }
+                    }
                 }
                 if let Some(args) = tc
                     .get("function")
@@ -1734,6 +1787,7 @@ pub(super) fn openai_chunk_to_responses_sse(
                                 args.to_string(),
                                 tool_call_state_type(entry).to_string(),
                                 entry.proxied_tool_kind.clone(),
+                                entry.namespace.clone(),
                             ));
                         }
                     }
@@ -1758,7 +1812,8 @@ pub(super) fn openai_chunk_to_responses_sse(
             if should_flush_pending {
                 flush_pending_responses_tool_call(state, &response_id, tc_idx, false, &mut out);
             }
-            if let Some((call_id, name, args, tool_type, proxied_tool_kind)) = args_delta {
+            if let Some((call_id, name, args, tool_type, proxied_tool_kind, namespace)) = args_delta
+            {
                 let event = ResponsesToolCallEvent {
                     response_id: &response_id,
                     output_index,
@@ -1766,6 +1821,7 @@ pub(super) fn openai_chunk_to_responses_sse(
                     name: &name,
                     tool_type: &tool_type,
                     proxied_tool_kind: proxied_tool_kind.as_deref(),
+                    namespace: namespace.as_deref(),
                 };
                 emit_responses_tool_call_delta(state, &event, &args, &mut out);
             }

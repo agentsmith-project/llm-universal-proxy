@@ -145,6 +145,169 @@ fn openai_chunk_to_responses_sse_decodes_request_scoped_custom_bridge_without_pr
 }
 
 #[test]
+fn openai_chunk_to_responses_sse_restores_namespace_for_bridged_flat_tool_call() {
+    let mut state = StreamState {
+        request_scoped_tool_bridge_context: Some(typed_namespace_bridge_context(
+            "multi_agent_v1",
+            "spawn_agent",
+        )),
+        ..Default::default()
+    };
+    let tool_chunk = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "created": 123,
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_ns",
+                    "function": {
+                        "name": "multi_agent_v1__spawn_agent",
+                        "arguments": "{\"prompt\":\"hi\"}"
+                    }
+                }]
+            },
+            "finish_reason": null
+        }]
+    });
+    let finish_chunk = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "created": 123,
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+    });
+
+    let out1 = openai_chunk_to_responses_sse(&tool_chunk, &mut state);
+    let out2 = openai_chunk_to_responses_sse(&finish_chunk, &mut state);
+    let joined = out1
+        .into_iter()
+        .chain(out2)
+        .map(|b| String::from_utf8_lossy(&b).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // The namespace must be restored in output_item.added, output_item.done,
+    // and the terminal response.output.
+    assert!(
+        joined.contains("\"namespace\":\"multi_agent_v1\""),
+        "namespace should appear in SSE events: {joined}"
+    );
+    assert!(
+        joined.contains("\"name\":\"spawn_agent\""),
+        "child name should appear: {joined}"
+    );
+    assert!(
+        joined.contains("response.output_item.added"),
+        "added event present"
+    );
+    assert!(
+        joined.contains("response.output_item.done"),
+        "done event present"
+    );
+}
+
+#[test]
+fn openai_chunk_to_responses_sse_namespace_call_not_decoded_when_child_matches_custom_stable_name()
+{
+    // Regression: a namespace child name that equals a custom-tool stable name
+    // must NOT enter the custom-bridge decode path. The chunk handler rewrites
+    // the flat name to the child name (`apply_patch`) and sets the namespace, so
+    // the namespace call must emit as `function_call` with arguments unchanged.
+    let mut entries = serde_json::Map::new();
+    entries.insert(
+        "apply_patch".to_string(),
+        serde_json::json!({
+            "stable_name": "apply_patch",
+            "source_kind": "custom_grammar",
+            "transport_kind": "function_object_wrapper",
+            "wrapper_field": "input",
+            "expected_canonical_shape": "single_required_string"
+        }),
+    );
+    let mut ns_entries = serde_json::Map::new();
+    ns_entries.insert(
+        "multi_agent_v1__apply_patch".to_string(),
+        serde_json::json!({ "namespace": "multi_agent_v1", "child": "apply_patch" }),
+    );
+    let bridge_context = serde_json::json!({
+        "version": 3,
+        "purpose": "openai_responses_custom_tool_bridge",
+        "entries": entries,
+        "namespace_entries": ns_entries
+    });
+    let mut state = StreamState {
+        request_scoped_tool_bridge_context: Some(bridge_context),
+        ..Default::default()
+    };
+    let tool_chunk = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "created": 123,
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_ns",
+                    "function": {
+                        "name": "multi_agent_v1__apply_patch",
+                        "arguments": "{\"input\":\"hello\"}"
+                    }
+                }]
+            },
+            "finish_reason": null
+        }]
+    });
+    let finish_chunk = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "created": 123,
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+    });
+
+    let out1 = openai_chunk_to_responses_sse(&tool_chunk, &mut state);
+    let out2 = openai_chunk_to_responses_sse(&finish_chunk, &mut state);
+    let joined = out1
+        .into_iter()
+        .chain(out2)
+        .map(|b| String::from_utf8_lossy(&b).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Emitted as a namespace-bridged function_call, NOT a custom_tool_call.
+    assert!(
+        joined.contains("\"type\":\"function_call\""),
+        "namespace call should emit function_call: {joined}"
+    );
+    assert!(
+        !joined.contains("\"type\":\"custom_tool_call\""),
+        "namespace call must not become custom_tool_call: {joined}"
+    );
+    assert!(
+        !joined.contains("custom_tool_call_input"),
+        "no custom-bridge events should be emitted: {joined}"
+    );
+    assert!(
+        joined.contains("function_call_arguments.done"),
+        "function-call done event should be present: {joined}"
+    );
+    assert!(
+        joined.contains("\"namespace\":\"multi_agent_v1\""),
+        "namespace should be restored: {joined}"
+    );
+    assert!(
+        joined.contains("\"name\":\"apply_patch\""),
+        "child name should be restored: {joined}"
+    );
+    // Arguments must be passed through UNCHANGED. If the bug were present, the
+    // custom-bridge decode would strip the wrapper and emit a bare `hello` under
+    // the custom `input` field (`"input":"hello"`); that substring never appears
+    // in the correctly-escaped wrapped form (`{\"input\":\"hello\"}`).
+    assert!(
+        !joined.contains("\"input\":\"hello\""),
+        "arguments must not be decoded to bare `hello`: {joined}"
+    );
+}
+
+#[test]
 fn openai_chunk_to_responses_sse_rejects_reserved_prefix_function_names_without_bridge_context() {
     let mut state = StreamState::default();
     let tool_chunk = serde_json::json!({
@@ -220,14 +383,14 @@ fn openai_chunk_to_responses_sse_fails_closed_for_incomplete_or_invalid_tool_bri
         (
             "missing purpose",
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "entries": { "code_exec": entry.clone() }
             }),
         ),
         (
             "invalid purpose",
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "purpose": "other",
                 "entries": { "code_exec": entry.clone() }
             }),
@@ -235,7 +398,7 @@ fn openai_chunk_to_responses_sse_fails_closed_for_incomplete_or_invalid_tool_bri
         (
             "missing stable_name",
             serde_json::json!({
-                "version": 2,
+                "version": 3,
                 "purpose": "openai_responses_custom_tool_bridge",
                 "entries": {
                     "code_exec": {
@@ -258,7 +421,7 @@ fn openai_chunk_to_responses_sse_fails_closed_for_incomplete_or_invalid_tool_bri
         (
             "future version",
             serde_json::json!({
-                "version": 3,
+                "version": 99,
                 "purpose": "openai_responses_custom_tool_bridge",
                 "entries": { "code_exec": entry }
             }),

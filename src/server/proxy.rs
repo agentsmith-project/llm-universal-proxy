@@ -72,7 +72,7 @@ use super::secret_redaction::{
 use super::state::{AppState, RuntimeNamespaceState, DEFAULT_NAMESPACE};
 use super::tracked_body::TrackedBodyStream;
 
-const TOOL_BRIDGE_CONTEXT_VERSION: u64 = 2;
+const TOOL_BRIDGE_CONTEXT_VERSION: u64 = 3;
 const TOOL_BRIDGE_CONTEXT_PURPOSE: &str = "openai_responses_custom_tool_bridge";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,10 +123,42 @@ impl TrustedToolBridgeContextEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct TrustedNamespaceBridgeContextEntry {
+    namespace: String,
+    child: String,
+}
+
+impl TrustedNamespaceBridgeContextEntry {
+    fn from_value(flat_name: &str, value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let namespace = object.get("namespace").and_then(Value::as_str)?;
+        let child = object.get("child").and_then(Value::as_str)?;
+        if namespace.is_empty() || child.is_empty() {
+            return None;
+        }
+        if flat_name != format!("{namespace}__{child}") {
+            return None;
+        }
+        Some(Self {
+            namespace: namespace.to_string(),
+            child: child.to_string(),
+        })
+    }
+
+    fn to_value(&self) -> Value {
+        serde_json::json!({
+            "namespace": self.namespace,
+            "child": self.child
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TrustedToolBridgeContext {
     version: u64,
     purpose: String,
     entries: BTreeMap<String, TrustedToolBridgeContextEntry>,
+    namespace_entries: BTreeMap<String, TrustedNamespaceBridgeContextEntry>,
 }
 
 impl TrustedToolBridgeContext {
@@ -140,19 +172,28 @@ impl TrustedToolBridgeContext {
         if purpose != TOOL_BRIDGE_CONTEXT_PURPOSE {
             return None;
         }
-        let entries_object = object.get("entries")?.as_object()?;
         let mut entries = BTreeMap::new();
-        for (stable_name, entry_value) in entries_object {
-            let entry = TrustedToolBridgeContextEntry::from_value(stable_name, entry_value)?;
-            entries.insert(stable_name.clone(), entry);
+        if let Some(entries_object) = object.get("entries").and_then(Value::as_object) {
+            for (stable_name, entry_value) in entries_object {
+                let entry = TrustedToolBridgeContextEntry::from_value(stable_name, entry_value)?;
+                entries.insert(stable_name.clone(), entry);
+            }
         }
-        if entries.is_empty() {
+        let mut namespace_entries = BTreeMap::new();
+        if let Some(ns_object) = object.get("namespace_entries").and_then(Value::as_object) {
+            for (flat_name, entry_value) in ns_object {
+                let entry = TrustedNamespaceBridgeContextEntry::from_value(flat_name, entry_value)?;
+                namespace_entries.insert(flat_name.clone(), entry);
+            }
+        }
+        if entries.is_empty() && namespace_entries.is_empty() {
             return None;
         }
         Some(Self {
             version,
             purpose: purpose.to_string(),
             entries,
+            namespace_entries,
         })
     }
 
@@ -169,10 +210,16 @@ impl TrustedToolBridgeContext {
             .iter()
             .map(|(stable_name, entry)| (stable_name.clone(), entry.to_value()))
             .collect::<serde_json::Map<String, Value>>();
+        let namespace_entries = self
+            .namespace_entries
+            .iter()
+            .map(|(flat_name, entry)| (flat_name.clone(), entry.to_value()))
+            .collect::<serde_json::Map<String, Value>>();
         serde_json::json!({
             "version": self.version,
             "purpose": self.purpose,
-            "entries": entries
+            "entries": entries,
+            "namespace_entries": namespace_entries
         })
     }
 }

@@ -10,8 +10,8 @@ use super::messages::{
     translation_target_label,
 };
 use super::models::{
-    NormalizedOpenAiFamilyToolCall, NormalizedOpenAiFamilyToolDef, NormalizedToolPolicy,
-    SemanticTextPart, SemanticToolKind,
+    NormalizedOpenAiFamilyFunctionTool, NormalizedOpenAiFamilyToolCall,
+    NormalizedOpenAiFamilyToolDef, NormalizedToolPolicy, SemanticTextPart, SemanticToolKind,
 };
 use super::openai_family::{
     collapse_openai_text_parts, copy_remaining_usage_fields, extract_openai_refusal,
@@ -36,6 +36,7 @@ use super::tools::{
     openai_tool_result_content_to_responses_output,
     request_scoped_openai_custom_bridge_conflict_name, request_scoped_openai_custom_bridge_context,
     request_scoped_openai_custom_bridge_expects_canonical_input_wrapper,
+    request_scoped_openai_namespace_bridge_conflict_name,
     request_scoped_tool_bridge_context_from_body, responses_item_is_tool_output,
     responses_tool_call_item_to_openai_tool_call_strict,
     responses_tool_call_item_to_openai_tool_call_with_request_scoped_custom_bridge_strict,
@@ -730,6 +731,25 @@ pub(super) fn responses_to_messages(
     if bridge_custom_responses_semantics {
         validate_responses_request_for_custom_bridge(body)?;
     }
+    // Normalize tools once to derive the namespace bridge registrations. The
+    // map keys are flattened names (`<ns>__<child>`); values are `(namespace,
+    // child)`. This drives history-replay flattening, tool_choice expansion,
+    // and the bridge context embedded into the translated body.
+    let namespace_bridge_entries: std::collections::BTreeMap<String, (String, String)> =
+        if use_request_scoped_openai_custom_bridge && body.get("tools").is_some() {
+            let mut entries = std::collections::BTreeMap::new();
+            for tool in normalized_responses_tool_definitions_from_request(body)? {
+                if let NormalizedOpenAiFamilyToolDef::Namespace { name, children, .. } = tool {
+                    for child in children {
+                        let flat = format!("{name}__{child_name}", child_name = child.name);
+                        entries.insert(flat, (name.clone(), child.name));
+                    }
+                }
+            }
+            entries
+        } else {
+            std::collections::BTreeMap::new()
+        };
     let controls = responses_normalized_request_controls(body)?;
     let profile = shared_control_profile_for_target(target_format);
     let input = body.get("input").ok_or("missing input")?;
@@ -797,6 +817,30 @@ pub(super) fn responses_to_messages(
                 }
             }
             "function_call" | "custom_tool_call" => {
+                // For a bridged namespace call, flatten the name to
+                // `<ns>__<child>` and drop the `namespace` field so the strict
+                // conversion below emits an ordinary Chat tool_call. Calls
+                // whose namespace was NOT bridged (non-function children, or
+                // namespace absent from the request tools) are left untouched;
+                // the strict converter / assessment reject those as before.
+                let item =
+                    if use_request_scoped_openai_custom_bridge && item.get("namespace").is_some() {
+                        let ns = item.get("namespace").and_then(Value::as_str).unwrap_or("");
+                        let child = item.get("name").and_then(Value::as_str).unwrap_or("");
+                        let flat = format!("{ns}__{child}");
+                        if namespace_bridge_entries.contains_key(&flat) {
+                            let mut flat_item = item.clone();
+                            flat_item["name"] = Value::String(flat);
+                            if let Some(obj) = flat_item.as_object_mut() {
+                                obj.remove("namespace");
+                            }
+                            flat_item
+                        } else {
+                            item
+                        }
+                    } else {
+                        item
+                    };
                 if degrade_marked_tool_calls && tool_call_is_marked_non_replayable(&item) {
                     let assistant = current_assistant.get_or_insert_with(|| {
                         serde_json::json!({
@@ -1003,9 +1047,11 @@ pub(super) fn responses_to_messages(
         }
     }
     if let Some(tool_choice) = body.get("tool_choice").cloned() {
-        if let Some(mapped_tool_choice) =
-            responses_tool_choice_to_openai_tool_choice(&tool_choice, target_format)?
-        {
+        if let Some(mapped_tool_choice) = responses_tool_choice_to_openai_tool_choice(
+            &tool_choice,
+            target_format,
+            &namespace_bridge_entries,
+        )? {
             out.insert("tool_choice".to_string(), mapped_tool_choice);
         }
     }
@@ -1094,7 +1140,9 @@ pub(super) fn responses_to_messages(
     }
 
     // Convert tools from Responses API format to Chat Completions format.
-    // Stable-name bridge rewrites Responses custom tools into canonical wrapper function tools.
+    // The stable-name bridge rewrites Responses custom tools into canonical
+    // wrapper function tools; the namespace bridge flattens namespace tool
+    // groups (all-function children) into prefixed function tools.
     if tools.is_some() {
         let normalized_tools = normalized_responses_tool_definitions_from_request(body)?;
         if use_request_scoped_openai_custom_bridge {
@@ -1106,9 +1154,38 @@ pub(super) fn responses_to_messages(
                     translation_target_label(target_format),
                 ));
             }
+            if let Some(conflict_name) =
+                request_scoped_openai_namespace_bridge_conflict_name(&normalized_tools)
+            {
+                validate_public_tool_name_not_reserved(&conflict_name)?;
+                return Err(format!(
+                    "OpenAI Responses tool name `{conflict_name}` collides with a namespace bridge flattened name and cannot be faithfully translated to {}.",
+                    translation_target_label(target_format),
+                ));
+            }
         }
+        // Expand namespace tool groups into flat function tools, one per child.
         let converted_tools = normalized_tools
-            .into_iter()
+            .iter()
+            .flat_map(|tool| {
+                let tools: Vec<NormalizedOpenAiFamilyToolDef> = match tool {
+                    NormalizedOpenAiFamilyToolDef::Namespace { name, children, .. } => children
+                        .iter()
+                        .map(|child| {
+                            NormalizedOpenAiFamilyToolDef::Function(
+                                NormalizedOpenAiFamilyFunctionTool {
+                                    name: format!("{name}__{child_name}", child_name = child.name),
+                                    description: child.description.clone(),
+                                    parameters: child.parameters.clone(),
+                                    strict: child.strict.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
+                    _ => vec![tool.clone()],
+                };
+                tools
+            })
             .map(|tool| {
                 if use_request_scoped_openai_custom_bridge {
                     normalized_tool_definition_to_openai_with_request_scoped_custom_bridge(
@@ -1124,7 +1201,6 @@ pub(super) fn responses_to_messages(
             out.insert("tools".to_string(), Value::Array(converted_tools));
         }
         if use_request_scoped_openai_custom_bridge {
-            let normalized_tools = normalized_responses_tool_definitions_from_request(body)?;
             if let Some(bridge_context) =
                 request_scoped_openai_custom_bridge_context(&normalized_tools)
             {
@@ -1586,6 +1662,7 @@ pub(super) fn messages_to_responses(body: &mut Value) -> Result<(), String> {
 fn responses_tool_choice_to_openai_tool_choice(
     choice: &Value,
     target_format: UpstreamFormat,
+    namespace_bridge_entries: &std::collections::BTreeMap<String, (String, String)>,
 ) -> Result<Option<Value>, String> {
     let use_request_scoped_openai_custom_bridge = matches!(
         target_format,
@@ -1641,41 +1718,57 @@ fn responses_tool_choice_to_openai_tool_choice(
             let Some(tools) = obj.get("tools").and_then(Value::as_array) else {
                 return Ok(None);
             };
-            let converted_tools = tools
-                .iter()
-                .map(|tool| match tool.get("type").and_then(Value::as_str) {
+            let mut converted_tools = Vec::new();
+            for tool in tools {
+                match tool.get("type").and_then(Value::as_str) {
                     Some("function") if tool.get("name").is_some() => {
                         if let Some(name) = tool.get("name").and_then(Value::as_str) {
                             validate_public_tool_name_not_reserved(name)?;
                         }
-                        Ok(serde_json::json!({
+                        converted_tools.push(serde_json::json!({
                             "type": "function",
                             "function": { "name": tool.get("name").cloned().unwrap_or(Value::Null) }
-                        }))
+                        }));
                     }
                     Some("custom") if bridge_custom_responses_semantics => {
                         if let Some(name) = tool.get("name").and_then(Value::as_str) {
                             validate_public_tool_name_not_reserved(name)?;
-                            Ok(serde_json::json!({
+                            converted_tools.push(serde_json::json!({
                                 "type": "function",
                                 "function": { "name": name }
-                            }))
+                            }));
                         } else {
-                            Ok(tool.clone())
+                            converted_tools.push(tool.clone());
                         }
                     }
                     Some("custom") if tool.get("name").is_some() => {
                         if let Some(name) = tool.get("name").and_then(Value::as_str) {
                             validate_public_tool_name_not_reserved(name)?;
                         }
-                        Ok(serde_json::json!({
+                        converted_tools.push(serde_json::json!({
                             "type": "custom",
                             "custom": { "name": tool.get("name").cloned().unwrap_or(Value::Null) }
-                        }))
+                        }));
                     }
-                    _ => Ok(tool.clone()),
-                })
-                .collect::<Result<Vec<_>, String>>()?;
+                    // Expand a namespace selection into flat function selectors
+                    // for each registered child.
+                    Some("namespace")
+                        if bridge_custom_responses_semantics
+                            && tool.get("name").and_then(Value::as_str).is_some() =>
+                    {
+                        let ns = tool.get("name").and_then(Value::as_str).unwrap_or("");
+                        for (flat_name, (entry_ns, _)) in namespace_bridge_entries {
+                            if entry_ns == ns {
+                                converted_tools.push(serde_json::json!({
+                                    "type": "function",
+                                    "function": { "name": flat_name }
+                                }));
+                            }
+                        }
+                    }
+                    _ => converted_tools.push(tool.clone()),
+                }
+            }
             serde_json::json!({
                 "type": "allowed_tools",
                 "allowed_tools": {
@@ -1683,6 +1776,32 @@ fn responses_tool_choice_to_openai_tool_choice(
                     "tools": converted_tools
                 }
             })
+        }
+        // A standalone `{type:"namespace", name:<ns>}` selector: expand to a
+        // flat function selector. Chat tool_choice admits only a single forced
+        // function, so this is faithful only when the namespace has exactly one
+        // bridged child; otherwise the selector is dropped (defaults to auto).
+        "namespace"
+            if bridge_custom_responses_semantics
+                && obj.get("name").and_then(Value::as_str).is_some() =>
+        {
+            let ns = obj.get("name").and_then(Value::as_str).unwrap_or("");
+            let mut flat_children: Vec<String> = namespace_bridge_entries
+                .iter()
+                .filter(|(_, (entry_ns, _))| entry_ns == ns)
+                .map(|(flat_name, _)| flat_name.clone())
+                .collect();
+            flat_children.sort();
+            if flat_children.len() == 1 {
+                let name = &flat_children[0];
+                validate_public_tool_name_not_reserved(name)?;
+                serde_json::json!({
+                    "type": "function",
+                    "function": { "name": name }
+                })
+            } else {
+                return Ok(None);
+            }
         }
         _ => return Ok(None),
     };
