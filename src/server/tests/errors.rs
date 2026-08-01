@@ -313,6 +313,65 @@ fn classify_post_translation_non_stream_status_maps_anthropic_api_error_to_500()
 }
 
 #[test]
+fn classify_post_translation_non_stream_status_maps_openai_invalid_request_error_to_400() {
+    let status = classify_post_translation_non_stream_status(
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        &serde_json::json!({
+            "error": {
+                "type": "invalid_request_error",
+                "message": "The model does not support that input."
+            }
+        }),
+    );
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[test]
+fn classify_post_translation_non_stream_status_maps_openai_server_error_to_500() {
+    let status = classify_post_translation_non_stream_status(
+        crate::formats::UpstreamFormat::OpenAiResponses,
+        &serde_json::json!({
+            "error": {
+                "type": "server_error",
+                "message": "The provider returned an error."
+            }
+        }),
+    );
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[test]
+fn classify_post_translation_non_stream_status_keeps_openai_choices_success() {
+    let status = classify_post_translation_non_stream_status(
+        crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        &serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": "Hi" } }]
+        }),
+    );
+
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[test]
+fn classify_post_translation_non_stream_status_keeps_openai_responses_object_success() {
+    // The translated Responses object always carries `error` (null on success).
+    let status = classify_post_translation_non_stream_status(
+        crate::formats::UpstreamFormat::OpenAiResponses,
+        &serde_json::json!({
+            "id": "resp_1",
+            "object": "response",
+            "status": "completed",
+            "error": serde_json::Value::Null,
+            "output": []
+        }),
+    );
+
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[test]
 fn append_portability_warning_headers_exposes_each_warning() {
     let mut response = Response::builder()
         .status(StatusCode::OK)

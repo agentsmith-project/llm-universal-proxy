@@ -281,7 +281,22 @@ pub(super) fn classify_post_translation_non_stream_status(
             },
             _ => StatusCode::OK,
         },
-        _ => StatusCode::OK,
+        UpstreamFormat::OpenAiChatCompletions | UpstreamFormat::OpenAiResponses => {
+            // The translated OpenAI Responses object always carries an `error`
+            // field (`null` on success), so a real error is an error *object*.
+            if body.get("error").and_then(Value::as_object).is_some() {
+                match body
+                    .get("error")
+                    .and_then(|error| error.get("type"))
+                    .and_then(Value::as_str)
+                {
+                    Some("invalid_request_error") => StatusCode::BAD_REQUEST,
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                }
+            } else {
+                StatusCode::OK
+            }
+        }
     }
 }
 

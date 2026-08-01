@@ -848,6 +848,32 @@ fn redact_value_with_prompt_cache_key(
         .unwrap_or(redacted)
 }
 
+/// Redact known secrets in a zero-transform (raw passthrough) upstream error
+/// body, mirroring the redaction the response headers already receive via
+/// `append_raw_upstream_response_headers`. Only uncompressed bodies (no
+/// non-identity `Content-Encoding`) are redacted so compressed payloads are
+/// forwarded byte-for-byte; the upstream JSON shape is preserved and only
+/// known secrets are replaced with `[REDACTED]`. A redacted body may differ in
+/// length, but `matching_content_length` drops a mismatched `Content-Length`
+/// so axum recomputes it.
+fn redact_zero_transform_error_body(
+    bytes: &Bytes,
+    upstream_headers: &reqwest::header::HeaderMap,
+    redactor: &SecretRedactor,
+) -> Vec<u8> {
+    let uncompressed = upstream_headers
+        .get(reqwest::header::CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.eq_ignore_ascii_case("identity"))
+        .unwrap_or(true);
+    if !uncompressed {
+        return bytes.to_vec();
+    }
+    redactor
+        .redact_text(&String::from_utf8_lossy(bytes))
+        .into_bytes()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_request_core_with_downstream_cancellation(
     state: Arc<AppState>,
@@ -1482,10 +1508,15 @@ async fn handle_request_core_with_downstream_cancellation(
                     }
                 };
                 tracker.finish_error(status.as_u16());
-                let body_len = bytes.len();
+                let forwarded_bytes = Bytes::from(redact_zero_transform_error_body(
+                    &bytes,
+                    &upstream_response_headers,
+                    &request_redactor,
+                ));
+                let body_len = forwarded_bytes.len();
                 let mut response = Response::builder()
                     .status(status)
-                    .body(Body::from(bytes))
+                    .body(Body::from(forwarded_bytes))
                     .unwrap();
                 append_raw_upstream_response_headers(
                     &mut response,
@@ -1826,10 +1857,19 @@ async fn handle_request_core_with_downstream_cancellation(
         } else {
             tracker.finish_error(status.as_u16());
         }
-        let body_len = bytes.len();
+        let forwarded_bytes = if status.is_success() {
+            bytes
+        } else {
+            Bytes::from(redact_zero_transform_error_body(
+                &bytes,
+                &upstream_response_headers,
+                &request_redactor,
+            ))
+        };
+        let body_len = forwarded_bytes.len();
         let mut response = Response::builder()
             .status(status)
-            .body(Body::from(bytes))
+            .body(Body::from(forwarded_bytes))
             .unwrap();
         append_raw_upstream_response_headers(
             &mut response,
@@ -3035,5 +3075,66 @@ fn request_body_has_tool_definitions(target_format: UpstreamFormat, body: &Value
             .get("tools")
             .and_then(Value::as_array)
             .is_some_and(|tools| !tools.is_empty()),
+    }
+}
+
+#[cfg(test)]
+mod zero_transform_redaction_tests {
+    use super::redact_zero_transform_error_body;
+    use bytes::Bytes;
+
+    fn redactor_with_secret(secret: &str) -> crate::server::secret_redaction::SecretRedactor {
+        crate::server::secret_redaction::SecretRedactor::new([secret.to_string()])
+    }
+
+    #[test]
+    fn redacts_known_secret_in_zero_transform_error_body() {
+        let provider_key = "sk-test-provider-key-123";
+        let redactor = redactor_with_secret(provider_key);
+        let body = format!(
+            "{{\"error\":{{\"message\":\"diagnostic: rejected key {provider_key} upstream\"}}}}"
+        );
+        let bytes = Bytes::from(body);
+        let headers = reqwest::header::HeaderMap::new();
+
+        let redacted = redact_zero_transform_error_body(&bytes, &headers, &redactor);
+        let text = String::from_utf8(redacted).expect("utf8 body");
+
+        assert!(!text.contains(provider_key), "provider key leaked: {text}");
+        assert!(text.contains("[REDACTED]"), "expected redaction marker: {text}");
+        let value: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+        assert_eq!(
+            value["error"]["message"],
+            "diagnostic: rejected key [REDACTED] upstream"
+        );
+    }
+
+    #[test]
+    fn leaves_secret_free_zero_transform_error_body_unchanged() {
+        let redactor = redactor_with_secret("sk-test-provider-key-123");
+        let body = "{\"error\":{\"message\":\"model not found\"}}";
+        let bytes = Bytes::from(body);
+        let headers = reqwest::header::HeaderMap::new();
+
+        let redacted = redact_zero_transform_error_body(&bytes, &headers, &redactor);
+
+        assert_eq!(redacted.as_slice(), body.as_bytes());
+    }
+
+    #[test]
+    fn skips_redaction_when_content_encoding_is_present() {
+        let provider_key = "sk-test-provider-key-123";
+        let redactor = redactor_with_secret(provider_key);
+        let body = format!("error body echoes {provider_key}");
+        let bytes = Bytes::from(body);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_ENCODING,
+            reqwest::header::HeaderValue::from_static("gzip"),
+        );
+
+        let forwarded = redact_zero_transform_error_body(&bytes, &headers, &redactor);
+
+        assert_eq!(forwarded.as_slice(), bytes.as_ref());
     }
 }
