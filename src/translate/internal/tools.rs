@@ -13,8 +13,8 @@ use super::messages::{
 };
 use super::models::{
     NormalizedOpenAiFamilyCustomTool, NormalizedOpenAiFamilyFunctionTool,
-    NormalizedOpenAiFamilyNamespaceTool, NormalizedOpenAiFamilyToolCall,
-    NormalizedOpenAiFamilyToolDef, SemanticTextPart, SemanticToolKind, SemanticToolResultContent,
+    NormalizedOpenAiFamilyToolCall, NormalizedOpenAiFamilyToolDef, SemanticTextPart,
+    SemanticToolKind, SemanticToolResultContent,
 };
 
 pub(crate) fn anthropic_tool_use_type_for_openai_tool_call(
@@ -1267,19 +1267,12 @@ pub(crate) fn normalized_responses_tool_definition(
                 },
             )))
         }
-        Some("namespace") => {
-            let name = tool
-                .get("name")
-                .and_then(Value::as_str)
-                .filter(|name| !name.is_empty())
-                .ok_or("OpenAI Responses namespace tools require a non-empty name.".to_string())?;
-            validate_public_tool_name_not_reserved(name)?;
-            Ok(Some(NormalizedOpenAiFamilyToolDef::Namespace(
-                NormalizedOpenAiFamilyNamespaceTool {
-                    name: name.to_string(),
-                },
-            )))
-        }
+        // `type: "namespace"` tool definitions (e.g. Codex `multi_agent_v1`, `mcp__*`)
+        // are warn-and-omit: they fall through to the `Ok(None)` non-function path used by
+        // `web_search` / `computer`, so the existing warn-and-omit pipeline drops them from
+        // the translated `tools` array and emits an `x-llmup-portability-warning` header
+        // (PRD §2.4 row "Built-in / non-function tools" + §2.6). The `Namespace` classifier
+        // variant remains below as a guarded seam for the deferred reversible namespace bridge.
         _ => Ok(None),
     }
 }

@@ -7882,6 +7882,160 @@ async fn responses_translated_portability_warnings_emit_headers() {
 }
 
 #[tokio::test]
+async fn responses_non_stream_sets_openai_model_header_to_client_alias() {
+    // P1 Part B: the `openai-model` HTTP response header (read by Codex CLI
+    // 0.146.0 to identify the served model) must be set to the client-facing
+    // model alias on non-streaming Responses API responses.
+    let (mock_base, _mock) = spawn_openai_completion_mock().await;
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let res = Client::new()
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "ds-flash",
+            "input": "Hi",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let header = res
+        .headers()
+        .get("openai-model")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_else(|| panic!("openai-model header missing; headers = {:?}", res.headers()));
+    assert_eq!(header, "ds-flash");
+}
+
+#[tokio::test]
+async fn responses_stream_sets_openai_model_header_to_client_alias() {
+    // P1 Part B: streaming Responses API responses must also carry the
+    // `openai-model` header set to the client-facing model alias.
+    let (mock_base, _mock) = spawn_openai_responses_mock().await;
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiResponses);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let res = Client::new()
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "ds-flash",
+            "input": "Hi",
+            "stream": true
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let header = res
+        .headers()
+        .get("openai-model")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_else(|| panic!("openai-model header missing; headers = {:?}", res.headers()));
+    assert_eq!(header, "ds-flash");
+    // Drain the streaming body so the proxy/upstream tasks can wind down.
+    let _ = res.text().await.unwrap();
+}
+
+#[tokio::test]
+async fn openai_chat_completions_sets_openai_model_header_to_client_alias() {
+    // P1 Part B: Chat Completions responses also carry the `openai-model`
+    // header for consistency (other OpenAI-family clients may read it too).
+    let (mock_base, _mock) = spawn_openai_completion_mock().await;
+    let config = proxy_config(&mock_base, UpstreamFormat::OpenAiChatCompletions);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let res = Client::new()
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": "ds-flash",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let header = res
+        .headers()
+        .get("openai-model")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_else(|| panic!("openai-model header missing; headers = {:?}", res.headers()));
+    assert_eq!(header, "ds-flash");
+}
+
+#[tokio::test]
+async fn responses_namespace_tools_warn_and_omit_emits_portability_header() {
+    // P0: a Responses request carrying namespace tool groups (Codex `multi_agent_v1` /
+    // `mcp__*`) must succeed, emit the non-function portability warning header, and the
+    // translated upstream request must omit the namespace group while preserving portable
+    // function tools.
+    let (mock_base, _mock, captured) = spawn_auth_capture_anthropic_mock().await;
+    let config = proxy_config(&mock_base, UpstreamFormat::Anthropic);
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let res = Client::new()
+        .post(format!("{proxy_base}/openai/v1/responses"))
+        .json(&json!({
+            "model": "GLM-5",
+            "input": "Hi",
+            "truncation": "auto",
+            "prompt_cache_key": "cache-key",
+            "tools": [
+                { "type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]} },
+                { "type": "namespace", "name": "multi_agent_v1", "description": "multi-agent group", "tools": [{ "type": "function", "name": "spawn_agent", "parameters": {"type": "object", "properties": {}} }] }
+            ],
+            "tool_choice": "auto",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let warnings = res
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("non-function Responses tools")),
+        "warnings = {warnings:?}"
+    );
+
+    // The namespace group (and its nested `spawn_agent` tool) must be dropped from the
+    // translated upstream request; the portable `get_weather` function tool survives.
+    let requests = captured.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1, "expected one upstream capture");
+    let upstream_tool_names: Vec<&str> = requests[0]
+        .body
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        upstream_tool_names.contains(&"get_weather"),
+        "portable function tool should survive translation: {upstream_tool_names:?}"
+    );
+    assert!(
+        !upstream_tool_names.iter().any(|name| *name == "spawn_agent"),
+        "namespaced nested tool should be omitted from upstream: {upstream_tool_names:?}"
+    );
+}
+
+#[tokio::test]
 async fn responses_store_true_fails_closed_on_live_proxy_path() {
     let (mock_base, _mock, captured) = spawn_auth_capture_anthropic_mock().await;
     let config = proxy_config(&mock_base, UpstreamFormat::Anthropic);

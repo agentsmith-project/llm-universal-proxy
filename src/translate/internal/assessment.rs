@@ -743,12 +743,10 @@ pub(super) fn responses_nonportable_tool_choice_message(
                             .and_then(Value::as_str)
                             .unwrap_or("unknown")
                     )),
-                    Some("namespace") => Some(format!(
-                        "OpenAI Responses tool_choice.allowed_tools selected namespace tool `{}` and cannot be faithfully translated to {target_label}",
-                        tool.get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or("unknown")
-                    )),
+                    // Namespace selections (Codex `multi_agent_v1`, `mcp__*`) are
+                    // warn-and-omit, mirroring namespace tool definitions: do not reject.
+                    // The entry is passed through/dropped by the tool_choice translation.
+                    Some("namespace") => None,
                     Some(other) => Some(format!(
                         "OpenAI Responses tool_choice.allowed_tools selected hosted/built-in tool `{other}` and cannot be faithfully translated to {target_label}"
                     )),

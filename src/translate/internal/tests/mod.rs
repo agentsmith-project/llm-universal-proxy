@@ -1889,31 +1889,92 @@ fn translate_request_responses_to_openai_rejects_same_name_function_and_custom_b
 }
 
 #[test]
-fn translate_request_responses_to_non_responses_rejects_namespace_tool_groups() {
+fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_groups() {
+    // PRD §2.4/§2.6: namespace tool definitions are warn-and-omit (like `web_search` /
+    // `computer`), not fail-closed. This covers the namespace `name` values Codex emits:
+    // `multi_agent_v1` and `mcp__<server>` namespaced tool groups.
+    for namespace_name in ["crm", "multi_agent_v1", "mcp__github"] {
+        let mut body = json!({
+            "model": "gpt-4o",
+            "input": "run this",
+            "tools": [{
+                "type": "namespace",
+                "name": namespace_name,
+                "description": "namespaced tool group",
+                "tools": [{
+                    "type": "custom",
+                    "name": "lookup_account"
+                }]
+            }]
+        });
+
+        translate_request(
+            UpstreamFormat::OpenAiResponses,
+            UpstreamFormat::OpenAiChatCompletions,
+            "gpt-4o",
+            &mut body,
+            false,
+        )
+        .unwrap_or_else(|err| {
+            panic!("namespace tool group `{namespace_name}` should warn-and-omit, not reject: {err}")
+        });
+
+        // The entire namespace group (including its nested tools) is dropped from the
+        // translated body by the existing non-function warn-and-omit pipeline.
+        let remaining_namespace = body
+            .get("tools")
+            .and_then(Value::as_array)
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter(|tool| {
+                        tool.get("type").and_then(Value::as_str) == Some("namespace")
+                            || tool.get("name").and_then(Value::as_str) == Some("lookup_account")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            remaining_namespace, 0,
+            "namespace group `{namespace_name}` should be fully omitted: {:?}",
+            body.get("tools")
+        );
+    }
+}
+
+#[test]
+fn translate_request_responses_to_non_responses_warns_and_omits_namespace_tool_choice_allowed_tools() {
+    // Site 2: a `namespace` entry inside `tool_choice.allowed_tools` must not fail-closed.
+    // Codex may emit these when multi-agent/MCP is enabled; they are dropped/passed-through
+    // (warn-and-omit) like namespace tool definitions rather than rejecting the whole request.
     let mut body = json!({
         "model": "gpt-4o",
         "input": "run this",
         "tools": [{
-            "type": "namespace",
-            "name": "crm",
-            "description": "CRM tools",
-            "tools": [{
-                "type": "custom",
-                "name": "lookup_account"
-            }]
-        }]
+            "type": "function",
+            "name": "do_thing",
+            "parameters": {"type": "object", "properties": {}}
+        }],
+        "tool_choice": {
+            "type": "allowed_tools",
+            "mode": "auto",
+            "tools": [
+                { "type": "function", "name": "do_thing" },
+                { "type": "namespace", "name": "multi_agent_v1" }
+            ]
+        }
     });
 
-    let err = translate_request(
+    translate_request(
         UpstreamFormat::OpenAiResponses,
         UpstreamFormat::OpenAiChatCompletions,
         "gpt-4o",
         &mut body,
         false,
     )
-    .expect_err("Responses namespace tools should fail closed");
-
-    assert!(err.contains("namespace"), "err = {err}");
+    .unwrap_or_else(|err| {
+        panic!("namespace allowed_tools entry should warn-and-omit, not reject: {err}")
+    });
 }
 
 #[test]
@@ -11008,6 +11069,53 @@ fn translate_response_openai_to_responses_maps_usage_fields() {
     assert_eq!(out["usage"]["output_tokens"], 7);
     assert_eq!(out["usage"]["input_tokens_details"]["cached_tokens"], 3);
     assert_eq!(out["usage"]["output_tokens_details"]["reasoning_tokens"], 2);
+}
+
+#[test]
+fn translate_response_openai_to_responses_propagates_model() {
+    // P1 Part A: the synthesized Responses object must surface a non-null
+    // `model` field sourced from the upstream Chat Completions body, matching
+    // the streaming path and the reverse (Responses -> OpenAI) direction.
+    let body = json!({
+        "id": "chatcmpl_model",
+        "object": "chat.completion",
+        "model": "gpt-4o-2024",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "Hi" },
+            "finish_reason": "stop"
+        }]
+    });
+    let out = translate_response(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiResponses,
+        &body,
+    )
+    .unwrap();
+    assert_eq!(out["model"], "gpt-4o-2024");
+}
+
+#[test]
+fn translate_response_openai_to_responses_model_defaults_to_null_when_absent() {
+    // When the upstream body omits `model`, the field degrades to null rather
+    // than disappearing, so the Responses object shape stays stable.
+    let body = json!({
+        "id": "chatcmpl_no_model",
+        "object": "chat.completion",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "Hi" },
+            "finish_reason": "stop"
+        }]
+    });
+    let out = translate_response(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiResponses,
+        &body,
+    )
+    .unwrap();
+    assert!(out.get("model").is_some(), "model key must always be present");
+    assert_eq!(out["model"], serde_json::Value::Null);
 }
 
 #[test]
