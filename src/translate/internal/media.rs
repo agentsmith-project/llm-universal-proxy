@@ -1,5 +1,3 @@
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine as _;
 use serde_json::Value;
 use url::Url;
 
@@ -58,20 +56,66 @@ pub(super) enum OpenAiFileSource<'a> {
     Missing,
 }
 
+/// Maps a standard-alphabet base64 data byte to its 6-bit value (`=` is not a
+/// data byte and returns `None`).
+fn base64_data_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+/// Allocation-free canonical standard base64 check.
+///
+/// Returns `true` iff `value` is exactly the string `BASE64_STANDARD` would
+/// produce by encoding some bytes: standard alphabet, length a multiple of 4,
+/// canonical padding confined to a 0/1/2-char trailing suffix in the final
+/// group, and zero unused bits in the final sextet. This is precisely the
+/// accept/reject contract of the previous `decode -> re-encode -> compare`
+/// implementation (captured by `canonical_base64_contract_tests`), with the
+/// ~1.75x payload allocation and three O(n) passes per call removed.
 fn canonical_base64_payload(value: &str, allow_empty: bool) -> bool {
     if value.is_empty() {
         return allow_empty;
     }
-    if value
-        .chars()
-        .any(|ch| ch.is_whitespace() || ch.is_control())
-    {
+    let bytes = value.as_bytes();
+    let len = bytes.len();
+    // Canonical standard base64 is always padded to a whole number of 4-char
+    // groups, so the length is a multiple of 4.
+    if len % 4 != 0 {
         return false;
     }
-    let Ok(decoded) = BASE64_STANDARD.decode(value) else {
+    // Padding is a contiguous 0/1/2-char suffix; count it from the end.
+    let mut padding = 0usize;
+    if bytes[len - 1] == b'=' {
+        padding += 1;
+        if bytes[len - 2] == b'=' {
+            padding += 1;
+        }
+    }
+    let data_len = len - padding;
+    // Every non-padding byte must be a standard-alphabet data char. This also
+    // rejects any interior/leading `=` (which may only occupy the trailing
+    // suffix) and any whitespace/control/non-alphabet byte, matching the prior
+    // whitespace pre-check + strict decode alphabet.
+    for &byte in &bytes[..data_len] {
+        if base64_data_value(byte).is_none() {
+            return false;
+        }
+    }
+    // The unused bits in the final data sextet must be zero (matches
+    // `decode_allow_trailing_bits: false` plus canonical re-encoding).
+    if padding == 1 && base64_data_value(bytes[len - 2]).unwrap_or(0xff) & 0b0000_0011 != 0 {
         return false;
-    };
-    BASE64_STANDARD.encode(decoded) == value
+    }
+    if padding == 2 && base64_data_value(bytes[len - 3]).unwrap_or(0xff) & 0b0000_1111 != 0 {
+        return false;
+    }
+    true
 }
 
 pub(super) fn validate_inline_base64_payload(value: &str) -> Option<&str> {
@@ -475,4 +519,144 @@ fn openai_file_data_reference_from_payload<'a>(
 
 pub(super) fn is_pdf_mime(mime_type: &str) -> bool {
     normalized_mime_type(mime_type).as_deref() == Some("application/pdf")
+}
+
+#[cfg(test)]
+mod canonical_base64_contract_tests {
+    use super::canonical_base64_payload;
+
+    // Characterization battery: these expected values were captured against the
+    // original `decode -> re-encode -> compare` implementation. They pin the
+    // exact accept/reject contract that the allocation-free check must preserve.
+    #[test]
+    fn canonical_base64_payload_accept_set() {
+        let accepted = [
+            // full groups, no padding
+            "AAAA",
+            "JVBERi0x",
+            "AAAA////",
+            "++++++++",
+            "////////",
+            // one padding char (2 trailing bytes), zero trailing bits
+            "AAA=",
+            "QUQ=",
+            "iVBORw0KGgo=",
+            // two padding chars (1 trailing byte), zero trailing bits
+            "AA==",
+            "QQ==",
+            "fw==",
+        ];
+        for value in accepted {
+            assert!(
+                canonical_base64_payload(value, false),
+                "expected accepted (canonical): {value:?}"
+            );
+            assert!(
+                canonical_base64_payload(value, true),
+                "expected accepted (canonical, allow_empty irrelevant): {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_base64_payload_reject_set() {
+        let rejected = [
+            // empty handled by allow_empty flag
+            // non-canonical padding / trailing bits
+            "AAAA=",
+            "AAAA==",
+            "AAAA===",
+            "AAAA====",
+            "QR==",    // 1 trailing byte, nonzero unused bits in c1
+            "QUR=",    // 2 trailing bytes, nonzero unused bits in c2
+            "AAAAA=",  // length not a multiple of 4
+            "AAA",     // no padding, length not a multiple of 4
+            "AAAAAA",  // len not mult of 4
+            "AAAAAA=", // 7 chars not mult of 4
+            "=AAA",    // leading padding
+            "A=AA",    // interior padding
+            "AAAA =",  // interior/terminal padding after data + space
+            "====",    // all padding, no data
+            "==AA",
+            "AA=A",
+            // stray whitespace / control / non-alphabet
+            " AAAA",
+            "AAAA ",
+            "AA AA",
+            "AA\nAA",
+            "AA\r\nAA",
+            "AA\tAA",
+            "AAAA\u{000b}",
+            "AAAA\u{007f}",
+            "AAAA\u{00a0}", // NBSP (whitespace)
+            "AAAA\u{200b}", // ZWSP (whitespace)
+            "AAAA\u{2028}", // line sep (whitespace)
+            "AAAA\u{0000}",
+            "AAAA*",
+            "AAAA-",
+            "AAAA.",
+            "AAAA!",
+            "AAAA(",
+            // non-ascii multibyte (not whitespace/control but invalid alphabet)
+            "AAAAé",
+            "éAAA",
+            "AAAA中",
+        ];
+        for value in rejected {
+            assert!(
+                !canonical_base64_payload(value, false),
+                "expected rejected (non-canonical): {value:?}"
+            );
+            assert!(
+                !canonical_base64_payload(value, true),
+                "expected rejected (non-canonical, allow_empty irrelevant): {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_base64_payload_empty_respects_allow_empty() {
+        assert!(!canonical_base64_payload("", false));
+        assert!(canonical_base64_payload("", true));
+    }
+
+    // Perf/regression guard: a large (~8 MiB) canonical payload must be accepted
+    // and validated in a single bounded pass with no decode/re-encode allocation.
+    // The input is constructed directly; no environment is mutated. The previous
+    // `decode -> re-encode -> compare` path allocated ~1.75x the payload and ran
+    // three O(n) passes per call (4-6 calls per file part), so a ~12 MiB blob
+    // caused ~126 MiB of transient allocation. This test pins that the canonical
+    // large path stays bounded/fast (completes promptly) and remains correct at
+    // scale; the accept/reject contract itself is pinned by the battery above.
+    #[test]
+    fn canonical_base64_payload_large_canonical_input_is_bounded() {
+        let payload = "AAAA".repeat(2_000_000);
+        assert_eq!(payload.len(), 8_000_000);
+        assert_eq!(payload.len() % 4, 0);
+
+        let start = std::time::Instant::now();
+        let accepted = canonical_base64_payload(&payload, false);
+        let elapsed = start.elapsed();
+
+        assert!(accepted, "large canonical base64 payload must be accepted");
+        // Generous bound that absorbs debug-build and CI variance while still
+        // catching catastrophic regressions (e.g. O(n^2), a hang, or reintroducing
+        // large per-call allocations on the hot path). The allocation-free
+        // single-pass check finishes in the tens of milliseconds even in debug.
+        assert!(
+            elapsed <= std::time::Duration::from_secs(1),
+            "canonical_base64_payload took {elapsed:?} on {} bytes",
+            payload.len()
+        );
+
+        // A large non-canonical input (trailing '=' breaks the length multiple)
+        // must also be rejected promptly by the same bounded path.
+        let mut rejected_payload = payload;
+        rejected_payload.push('=');
+        assert_eq!(rejected_payload.len() % 4, 1);
+        assert!(
+            !canonical_base64_payload(&rejected_payload, false),
+            "large non-canonical base64 payload must be rejected"
+        );
+    }
 }
