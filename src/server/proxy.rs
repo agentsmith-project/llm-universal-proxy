@@ -1148,6 +1148,19 @@ async fn handle_request_core_with_downstream_cancellation(
     } else {
         StateBridgeModifier::Off
     };
+    // Step 3: resolve the upstream's reasoning dialect (if any) and the client's normalized
+    // reasoning effort up front. Both feed the body-mutation gate below and the dialect-aware
+    // reasoning emit pass applied to the final upstream body. When no dialect is configured,
+    // `dialect_reasoning_emit_applies` is false and every downstream branch is unchanged.
+    let resolved_dialect = upstream_state
+        .config
+        .dialect
+        .as_ref()
+        .and_then(|dialect| dialect.resolve().ok());
+    let client_reasoning_effort =
+        crate::translate::parse_client_reasoning_effort(&original_body, client_format);
+    let dialect_reasoning_emit_applies = resolved_dialect.is_some() && client_reasoning_effort.is_some();
+
     let mut llmup = classify_request_processing(RequestProcessingInput {
         client_format,
         upstream_format,
@@ -1160,7 +1173,7 @@ async fn handle_request_core_with_downstream_cancellation(
             upstream_format,
             &original_body,
             &request_translation_policy,
-        ),
+        ) || dialect_reasoning_emit_applies,
         state_bridge,
     });
     tracker.set_request_processing(llmup);
@@ -1171,6 +1184,7 @@ async fn handle_request_core_with_downstream_cancellation(
         &original_body,
         &request_translation_policy,
         &resolved_model.upstream_model,
+        resolved_dialect.as_ref(),
     ) {
         RequestBoundaryDecision::Allow => Vec::new(),
         RequestBoundaryDecision::AllowWithWarnings(warnings) => warnings
@@ -1249,6 +1263,31 @@ async fn handle_request_core_with_downstream_cancellation(
                 TrustedToolBridgeContext::take_from_body(&mut body);
             (body.clone(), None, request_scoped_tool_bridge_context)
         };
+
+    // Step 3: dialect-switched reasoning-effort emit. The gate above forces the JSON/translate
+    // path (raw-byte forwarding is off) whenever this applies, so mutating the finalized upstream
+    // body here is guaranteed to reach the upstream send. Skipped entirely when no dialect is
+    // configured — preserving byte-identical no-dialect behavior.
+    if dialect_reasoning_emit_applies {
+        let dialect = resolved_dialect
+            .as_ref()
+            .expect("dialect present when dialect_reasoning_emit_applies is true");
+        let effort = client_reasoning_effort
+            .expect("client effort present when dialect_reasoning_emit_applies is true");
+        if let Some(warning) = crate::translate::apply_dialect_reasoning_emit(
+            &mut upstream_request_body,
+            upstream_format,
+            dialect,
+            effort,
+        ) {
+            let redacted = request_redactor.redact_text(&warning);
+            warn!(
+                "portability warning: client_format={} upstream_format={} warning={}",
+                client_format, upstream_format, &redacted
+            );
+            portability_warnings.push(redacted);
+        }
+    }
 
     let prompt_cache_key_synthesis = if raw_upstream_request_body.is_none() {
         synthesize_openai_family_prompt_cache_key_from_source(
@@ -2914,6 +2953,7 @@ pub(super) fn classify_request_boundary(
             surface: crate::config::ModelSurface::default(),
         },
         "",
+        None,
     )
 }
 
@@ -2923,6 +2963,7 @@ fn classify_request_boundary_with_policy(
     body: &Value,
     policy: &RequestTranslationPolicy,
     resolved_upstream_model: &str,
+    dialect: Option<&crate::config::DialectBlock>,
 ) -> RequestBoundaryDecision {
     match assess_request_translation_with_surface(
         client_format,
@@ -2930,6 +2971,7 @@ fn classify_request_boundary_with_policy(
         body,
         &policy.surface,
         resolved_upstream_model,
+        dialect,
     )
     .decision()
     {

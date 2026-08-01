@@ -89,6 +89,25 @@ pub enum ReasoningMechanism {
     None,
 }
 
+impl ReasoningMechanism {
+    /// The kebab-case wire name used in config (matches the serde representation).
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::OpenAiEffort => "openai-effort",
+            Self::AnthropicEffort => "anthropic-effort",
+            Self::AnthropicThinking => "anthropic-thinking",
+            Self::AutoOnly => "auto-only",
+            Self::None => "none",
+        }
+    }
+}
+
+impl std::fmt::Display for ReasoningMechanism {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A resolved per-upstream dialect declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

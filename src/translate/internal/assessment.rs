@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use crate::config::{ModelModality, ModelSurface};
+use crate::config::{DialectBlock, ModelModality, ModelSurface};
 use crate::formats::UpstreamFormat;
 use crate::prompt_cache_controls::{
     anthropic_extra_body_openai_prompt_cache_controls_present,
@@ -23,6 +23,7 @@ use super::models::{
     NormalizedLogprobsControls, NormalizedOpenAiAudioContract, NormalizedOpenAiFamilyToolDef,
     SemanticToolKind, SharedControlProfile, TranslationAssessment,
 };
+use super::dialect_emit::dialect_maps_reasoning;
 use super::openai_family::{
     openai_extra_body_google_cached_content, validated_openai_extra_body_anthropic_cache_control,
 };
@@ -515,6 +516,7 @@ pub(super) fn openai_to_anthropic_dropped_control_names(body: &Value) -> Vec<&'s
 pub(super) fn openai_warning_only_request_controls_for_translate(
     body: &Value,
     target_format: UpstreamFormat,
+    reasoning_mapped: bool,
 ) -> Vec<String> {
     let profile = shared_control_profile_for_target(target_format);
     let mut controls = Vec::new();
@@ -533,7 +535,7 @@ pub(super) fn openai_warning_only_request_controls_for_translate(
     if body.get("verbosity").is_some() && !profile.verbosity {
         controls.push("verbosity".to_string());
     }
-    if body.get("reasoning_effort").is_some() && !profile.reasoning_effort {
+    if body.get("reasoning_effort").is_some() && !profile.reasoning_effort && !reasoning_mapped {
         controls.push("reasoning_effort".to_string());
     }
     if body.get("prompt_cache_key").is_some() && !profile.prompt_cache_key {
@@ -566,6 +568,7 @@ pub(super) fn openai_warning_only_request_controls_for_translate(
 pub(super) fn responses_warning_only_request_controls_for_translate(
     body: &Value,
     target_format: UpstreamFormat,
+    reasoning_mapped: bool,
 ) -> Vec<String> {
     let profile = shared_control_profile_for_target(target_format);
     let mut controls = Vec::new();
@@ -595,7 +598,8 @@ pub(super) fn responses_warning_only_request_controls_for_translate(
     }
 
     if body.get("reasoning").is_some()
-        && (!profile.reasoning_effort || responses_reasoning_has_nonportable_fields(body, profile))
+        && ((!profile.reasoning_effort && !reasoning_mapped)
+            || responses_reasoning_has_nonportable_fields(body, profile))
     {
         controls.push("reasoning".to_string());
     }
@@ -635,7 +639,7 @@ pub(super) fn responses_warning_only_request_controls_for_translate(
     if responses_text_verbosity(body).is_some() && !profile.verbosity {
         controls.push("text.verbosity".to_string());
     }
-    if responses_reasoning_effort(body).is_some() && !profile.reasoning_effort {
+    if responses_reasoning_effort(body).is_some() && !profile.reasoning_effort && !reasoning_mapped {
         controls.push("reasoning.effort".to_string());
     }
     if body.get("parallel_tool_calls").and_then(Value::as_bool) == Some(false)
@@ -1601,12 +1605,14 @@ pub(crate) fn assess_request_translation_with_surface(
     body: &Value,
     surface: &ModelSurface,
     resolved_upstream_model: &str,
+    dialect: Option<&DialectBlock>,
 ) -> TranslationAssessment {
     let mut assessment = TranslationAssessment::default();
     assess_surface_request_policy(&mut assessment, client_format, body, surface);
-    assessment
-        .issues
-        .extend(assess_request_translation(client_format, upstream_format, body).issues);
+    assessment.issues.extend(
+        assess_request_translation_with_dialect(client_format, upstream_format, body, dialect)
+            .issues,
+    );
     assess_anthropic_nondefault_sampling_withhold(
         &mut assessment,
         client_format,
@@ -2359,11 +2365,26 @@ fn anthropic_duplicate_assistant_tool_use_id_message(
     None
 }
 
+#[cfg(test)]
 pub(crate) fn assess_request_translation(
     client_format: UpstreamFormat,
     upstream_format: UpstreamFormat,
     body: &Value,
 ) -> TranslationAssessment {
+    assess_request_translation_with_dialect(client_format, upstream_format, body, None)
+}
+
+/// Dialect-aware variant of [`assess_request_translation`]. When a resolved [`DialectBlock`] is
+/// supplied and its mechanism maps reasoning effort, the reasoning-effort drop warnings are
+/// suppressed (the effort is emitted in the upstream's native shape by the proxy emit pass, not
+/// dropped). Passing `None` is identical to the historical no-dialect behavior.
+pub(crate) fn assess_request_translation_with_dialect(
+    client_format: UpstreamFormat,
+    upstream_format: UpstreamFormat,
+    body: &Value,
+    dialect: Option<&DialectBlock>,
+) -> TranslationAssessment {
+    let reasoning_mapped = dialect_maps_reasoning(dialect);
     let mut assessment = TranslationAssessment::default();
 
     if let Some(message) = openai_request_file_mime_conflict_message(client_format, body) {
@@ -2414,7 +2435,11 @@ pub(crate) fn assess_request_translation(
             assessment.reject(message);
         }
         let dropped_controls =
-            responses_warning_only_request_controls_for_translate(body, upstream_format);
+            responses_warning_only_request_controls_for_translate(
+                body,
+                upstream_format,
+                reasoning_mapped,
+            );
         if !dropped_controls.is_empty() {
             let quoted = dropped_controls
                 .iter()
@@ -2509,6 +2534,7 @@ pub(crate) fn assess_request_translation(
         controls.extend(openai_warning_only_request_controls_for_translate(
             body,
             upstream_format,
+            reasoning_mapped,
         ));
         if !controls.is_empty() {
             let quoted = controls

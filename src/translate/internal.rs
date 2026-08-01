@@ -79,6 +79,7 @@ pub fn translate_request_with_policy(
             body,
             &policy.surface,
             model,
+            None,
         )
         .decision()
     {
@@ -692,6 +693,7 @@ fn openai_completion_to_upstream(
     }
     Ok(())
 }
+pub(crate) mod dialect_emit;
 mod media;
 mod openai_family;
 mod openai_responses;

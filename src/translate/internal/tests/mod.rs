@@ -3072,6 +3072,174 @@ fn translate_request_chat_to_responses_preserves_reasoning_effort_max() {
     assert!(body.get("reasoning_effort").is_none());
 }
 
+// --- Step 3: dialect-switched reasoning-effort emit + level capping ---
+
+/// Resolve a shipped preset to its `DialectBlock` via the public `UpstreamDialect` deserialize +
+/// resolve path (mirrors how config load expands a preset string).
+fn resolve_dialect_preset_for_test(name: &str) -> crate::config::DialectBlock {
+    let dialect: crate::config::UpstreamDialect =
+        serde_json::from_str(&serde_json::json!(name).to_string()).expect("preset parses");
+    dialect.resolve().expect("known preset resolves")
+}
+
+/// Mirror of the proxy's pre-translation extraction: pull a normalized level out of a client body.
+fn client_effort(
+    body: &serde_json::Value,
+    client_format: UpstreamFormat,
+) -> crate::config::ReasoningLevel {
+    super::dialect_emit::parse_client_reasoning_effort(body, client_format)
+        .expect("client reasoning effort should parse")
+}
+
+#[test]
+fn dialect_emit_deepseek_openai_caps_ultra_to_max_and_warns() {
+    // deepseek-openai preset declares levels [low, high, max]; `ultra` exceeds the ceiling.
+    let dialect = resolve_dialect_preset_for_test("deepseek-openai");
+    let effort = client_effort(
+        &json!({ "reasoning_effort": "ultra" }),
+        UpstreamFormat::OpenAiChatCompletions,
+    );
+    let mut upstream_body = json!({
+        "model": "deepseek-chat",
+        "messages": [{ "role": "user", "content": "hi" }],
+        "reasoning_effort": "ultra"
+    });
+
+    let warning = super::dialect_emit::apply_dialect_reasoning_emit(
+        &mut upstream_body,
+        UpstreamFormat::OpenAiChatCompletions,
+        &dialect,
+        effort,
+    );
+
+    assert_eq!(upstream_body["reasoning_effort"], "max", "ultra must be capped to max");
+    let warning = warning.expect("capping must record a portability warning");
+    assert!(
+        warning.contains("capped"),
+        "cap warning should mention capping: {warning}"
+    );
+}
+
+#[test]
+fn dialect_emit_glm_openai_passes_through_within_ceiling() {
+    // glm-openai preset declares levels [none, minimal, high, max]; `medium` sits below the max
+    // ceiling (provider remaps natively), so it is forwarded as-is with no warning.
+    let dialect = resolve_dialect_preset_for_test("glm-openai");
+    let effort = client_effort(
+        &json!({ "reasoning_effort": "medium" }),
+        UpstreamFormat::OpenAiChatCompletions,
+    );
+    let mut upstream_body = json!({
+        "model": "glm-4.6",
+        "messages": [{ "role": "user", "content": "hi" }],
+        "reasoning_effort": "medium"
+    });
+
+    let warning = super::dialect_emit::apply_dialect_reasoning_emit(
+        &mut upstream_body,
+        UpstreamFormat::OpenAiChatCompletions,
+        &dialect,
+        effort,
+    );
+
+    assert_eq!(
+        upstream_body["reasoning_effort"], "medium",
+        "within-ceiling level passes through"
+    );
+    assert!(
+        warning.is_none(),
+        "no warning expected within ceiling, got {warning:?}"
+    );
+}
+
+#[test]
+fn dialect_emit_anthropic_effort_emits_output_config_effort() {
+    let dialect = crate::config::DialectBlock {
+        reasoning: crate::config::ReasoningMechanism::AnthropicEffort,
+        reasoning_echo: Some(true),
+        reasoning_levels: None,
+    };
+    let effort = client_effort(
+        &json!({ "reasoning_effort": "high" }),
+        UpstreamFormat::OpenAiChatCompletions,
+    );
+    let mut upstream_body = json!({
+        "model": "claude-opus-4-7",
+        "max_tokens": 1024,
+        "messages": [{ "role": "user", "content": "hi" }]
+    });
+
+    let warning = super::dialect_emit::apply_dialect_reasoning_emit(
+        &mut upstream_body,
+        UpstreamFormat::Anthropic,
+        &dialect,
+        effort,
+    );
+
+    assert_eq!(upstream_body["output_config"]["effort"], "high");
+    assert!(
+        warning.is_none(),
+        "high is within the default ceiling; no warning expected"
+    );
+}
+
+#[test]
+fn dialect_emit_anthropic_thinking_emits_budget_tokens() {
+    let dialect = crate::config::DialectBlock {
+        reasoning: crate::config::ReasoningMechanism::AnthropicThinking,
+        reasoning_echo: Some(true),
+        reasoning_levels: None,
+    };
+    let effort = client_effort(
+        &json!({ "reasoning_effort": "high" }),
+        UpstreamFormat::OpenAiChatCompletions,
+    );
+    let mut upstream_body = json!({
+        "model": "claude-haiku-4-5",
+        "max_tokens": 4096,
+        "messages": [{ "role": "user", "content": "hi" }]
+    });
+
+    let warning = super::dialect_emit::apply_dialect_reasoning_emit(
+        &mut upstream_body,
+        UpstreamFormat::Anthropic,
+        &dialect,
+        effort,
+    );
+
+    assert_eq!(upstream_body["thinking"]["type"], "enabled");
+    assert_eq!(upstream_body["thinking"]["budget_tokens"], 16000);
+    assert!(
+        warning.is_none(),
+        "high maps cleanly to a budget; no warning expected"
+    );
+}
+
+#[test]
+fn no_dialect_anthropic_upstream_still_warn_drops_reasoning_effort() {
+    // Regression guard: with no dialect configured, a cross-protocol reasoning_effort must still
+    // be warn-dropped byte-for-byte (the dialect-aware suppression must not fire on None).
+    let body = json!({
+        "model": "claude-opus-4-7",
+        "messages": [{ "role": "user", "content": "hi" }],
+        "reasoning_effort": "high"
+    });
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+        &body,
+    );
+    let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
+        panic!("expected warn-drop decision, got {:?}", assessment.decision());
+    };
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.contains("reasoning_effort") && warning.contains("dropped")
+        }),
+        "expected a reasoning_effort drop warning, got {warnings:?}"
+    );
+}
+
 #[test]
 fn translate_request_responses_to_openai_drops_stop_request_extension() {
     let mut body = json!({
@@ -11950,6 +12118,7 @@ fn assess_openai_to_anthropic_with_model(
         body,
         &crate::config::ModelSurface::default(),
         resolved_upstream_model,
+        None,
     )
 }
 
@@ -11979,6 +12148,7 @@ fn assess_openai_responses_to_anthropic_with_model(
         body,
         &crate::config::ModelSurface::default(),
         resolved_upstream_model,
+        None,
     )
 }
 

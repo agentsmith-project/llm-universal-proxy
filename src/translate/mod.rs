@@ -13,6 +13,7 @@ pub use request::translate_request;
 pub use response::translate_response;
 
 pub(crate) use assessment::{assess_request_translation_with_surface, TranslationDecision};
+pub(crate) use internal::dialect_emit::{apply_dialect_reasoning_emit, parse_client_reasoning_effort};
 pub(crate) use internal::tools::internal_replay_marker_key;
 pub(crate) use internal::validate_public_request_tool_names;
 pub(crate) use request::{translate_request_with_policy, RequestTranslationPolicy};
