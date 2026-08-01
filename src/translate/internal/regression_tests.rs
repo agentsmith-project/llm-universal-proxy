@@ -89,10 +89,38 @@ fn claude_server_tool_use_is_preserved_as_marked_openai_tool_call() {
 
 #[test]
 fn marked_openai_server_tool_call_restores_server_tool_use_block() {
-    let message = json!({
+    let mut message = json!({
         "role": "assistant",
         "tool_calls": [{
             "id": "toolu_server_1",
+            "type": "function",
+            "proxied_tool_kind": "anthropic_server_tool_use",
+            "function": {
+                "name": "web_search",
+                "arguments": "{\"query\":\"rust\"}"
+            }
+        }]
+    });
+    // Only a proxy-attested marker (valid process-local keyed-MAC) restores
+    // `server_tool_use`; a forged marker degrades to `tool_use` (see sibling test).
+    super::tools::attest_proxied_tool_kind(&mut message["tool_calls"][0]);
+
+    let blocks = openai_message_to_claude_blocks(&message)
+        .expect("translate blocks")
+        .expect("assistant blocks");
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0]["type"], "server_tool_use");
+    assert_eq!(blocks[0]["name"], "web_search");
+}
+
+#[test]
+fn unattested_openai_server_tool_call_marker_falls_back_to_tool_use_block() {
+    // A client-forged `proxied_tool_kind` without a valid proxy MAC must degrade to an
+    // ordinary `tool_use` instead of being vouched to the upstream as `server_tool_use`.
+    let message = json!({
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "forged_1",
             "type": "function",
             "proxied_tool_kind": "anthropic_server_tool_use",
             "function": {
@@ -106,7 +134,7 @@ fn marked_openai_server_tool_call_restores_server_tool_use_block() {
         .expect("translate blocks")
         .expect("assistant blocks");
     assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0]["type"], "server_tool_use");
+    assert_eq!(blocks[0]["type"], "tool_use");
     assert_eq!(blocks[0]["name"], "web_search");
 }
 

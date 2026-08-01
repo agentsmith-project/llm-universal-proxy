@@ -2172,7 +2172,7 @@ fn convert_claude_message_to_openai_impl(
                 if let Some(name) = block.get("name").and_then(Value::as_str) {
                     validate_public_tool_name_not_reserved(name)?;
                 }
-                tool_calls.push(serde_json::json!({
+                let mut tool_call = serde_json::json!({
                     "id": block.get("id"),
                     "type": "function",
                     "proxied_tool_kind": "anthropic_server_tool_use",
@@ -2183,7 +2183,12 @@ fn convert_claude_message_to_openai_impl(
                             .and_then(|input| serde_json::to_string(input).ok())
                             .unwrap_or_else(|| "{}".to_string())
                     }
-                }));
+                });
+                // The proxy is the sole attester of a server-tool origin; stamp the
+                // process-local keyed-MAC so round-tripped echoes validate but
+                // client-forged markers do not.
+                tools::attest_proxied_tool_kind(&mut tool_call);
+                tool_calls.push(tool_call);
             }
             "tool_result" => {
                 let semantic_content =
@@ -2250,10 +2255,6 @@ fn anthropic_image_block_to_openai_part(block: &Value) -> Result<Value, String> 
         .ok_or_else(|| anthropic_block_not_portable_message("image", "OpenAI Chat Completions"))?;
     match source.get("type").and_then(Value::as_str) {
         Some("base64") => {
-            let media = source
-                .get("media_type")
-                .and_then(Value::as_str)
-                .unwrap_or("image/png");
             let data = source.get("data").and_then(Value::as_str).unwrap_or("");
             let Some(data) = validate_inline_base64_payload(data) else {
                 return Err(
@@ -2261,6 +2262,17 @@ fn anthropic_image_block_to_openai_part(block: &Value) -> Result<Value, String> 
                         .to_string(),
                 );
             };
+            // Well-formed Anthropic base64 image sources always carry an explicit
+            // `media_type`. An absent typed-media MIME has no trustworthy provenance, so
+            // fail closed instead of guessing (never emit a fabricated `data:<mime>` URI).
+            let media = source
+                .get("media_type")
+                .and_then(Value::as_str)
+                .filter(|media| !media.is_empty())
+                .ok_or_else(|| {
+                    "Anthropic image source.type=base64 requires canonical non-empty base64 `data`."
+                        .to_string()
+                })?;
             Ok(serde_json::json!({
                 "type": "image_url",
                 "image_url": { "url": format!("data:{};base64,{}", media, data) }

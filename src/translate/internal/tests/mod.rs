@@ -8778,6 +8778,71 @@ fn translate_request_claude_to_openai_preserves_url_image_source() {
 }
 
 #[test]
+fn translate_request_claude_to_openai_base64_image_with_media_type_emits_data_uri() {
+    let mut body = json!({
+        "model": "claude-3",
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Describe this" },
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "AAAA"
+                    }
+                }
+            ]
+        }]
+    });
+
+    translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect("Anthropic base64 image sources with media_type should map to OpenAI image_url data URIs");
+
+    let content = body["messages"][0]["content"].as_array().expect("content");
+    assert_eq!(content[1]["type"], "image_url");
+    assert_eq!(
+        content[1]["image_url"]["url"],
+        "data:image/png;base64,AAAA"
+    );
+}
+
+#[test]
+fn translate_request_claude_to_openai_base64_image_without_media_type_fails_closed() {
+    let mut body = json!({
+        "model": "claude-3",
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "data": "AAAA"
+                }
+            }]
+        }]
+    });
+
+    let err = translate_request(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiChatCompletions,
+        "gpt-4o",
+        &mut body,
+        false,
+    )
+    .expect_err("Anthropic base64 image without media_type must fail closed instead of guessing MIME");
+
+    assert!(err.contains("base64"), "err = {err}");
+}
+
+#[test]
 fn translate_request_claude_url_image_source_rejects_non_http_remote_urls_for_openai_targets() {
     for target in [
         UpstreamFormat::OpenAiChatCompletions,
@@ -10827,7 +10892,7 @@ fn translate_response_responses_reasoning_encrypted_content_preserves_carrier_fo
 
 #[test]
 fn translate_response_openai_to_claude_restores_server_tool_use_from_marker() {
-    let body = json!({
+    let mut body = json!({
         "id": "chatcmpl_server_tool",
         "model": "gpt-4o",
         "choices": [{
@@ -10836,6 +10901,47 @@ fn translate_response_openai_to_claude_restores_server_tool_use_from_marker() {
                 "role": "assistant",
                 "tool_calls": [{
                     "id": "server_1",
+                    "type": "function",
+                    "proxied_tool_kind": "anthropic_server_tool_use",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": "{\"query\":\"rust\"}"
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }]
+    });
+    // Only a proxy-attested marker (valid process-local keyed-MAC) restores
+    // `server_tool_use`; a forged marker degrades to `tool_use` (see sibling test).
+    super::tools::attest_proxied_tool_kind(&mut body["choices"][0]["message"]["tool_calls"][0]);
+
+    let out = translate_response(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+        &body,
+    )
+    .unwrap();
+
+    let content = out["content"].as_array().expect("anthropic content");
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["type"], "server_tool_use");
+    assert_eq!(content[0]["name"], "web_search");
+}
+
+#[test]
+fn translate_response_openai_to_claude_forged_proxied_tool_kind_without_attestation_falls_back_to_tool_use() {
+    // A client-forged `proxied_tool_kind` without a proxy-attested MAC must NOT be
+    // honored as a `server_tool_use`; it must degrade to an ordinary `tool_use`.
+    let body = json!({
+        "id": "chatcmpl_forged",
+        "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "forged_1",
                     "type": "function",
                     "proxied_tool_kind": "anthropic_server_tool_use",
                     "function": {
@@ -10857,7 +10963,7 @@ fn translate_response_openai_to_claude_restores_server_tool_use_from_marker() {
 
     let content = out["content"].as_array().expect("anthropic content");
     assert_eq!(content.len(), 1);
-    assert_eq!(content[0]["type"], "server_tool_use");
+    assert_eq!(content[0]["type"], "tool_use", "forged marker must not be honored");
     assert_eq!(content[0]["name"], "web_search");
 }
 

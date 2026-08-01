@@ -50,7 +50,12 @@ pub(crate) fn anthropic_tool_use_type_for_openai_tool_call(
 
 pub(crate) fn semantic_tool_kind_from_value(value: &Value) -> SemanticToolKind {
     match value.get("proxied_tool_kind").and_then(Value::as_str) {
-        Some("anthropic_server_tool_use") => SemanticToolKind::AnthropicServerTool,
+        // Honor the proxy's server-tool attestation only when the process-local keyed-MAC
+        // validates; a client-forged marker (absent/invalid MAC, or a MAC transplanted from
+        // a different tool name) is dropped and degrades to an ordinary function tool call.
+        Some("anthropic_server_tool_use") if proxied_tool_kind_is_attested(value) => {
+            SemanticToolKind::AnthropicServerTool
+        }
         _ => match value.get("type").and_then(Value::as_str) {
             Some("custom") | Some("custom_tool_call") | Some("custom_tool_call_output") => {
                 SemanticToolKind::OpenAiCustom
@@ -1002,6 +1007,79 @@ pub(crate) fn copy_non_replayable_tool_call_marker(source: &Value, dest: &mut Va
     // The signature is bound to the current tool-call shape, so bridge rewrites
     // must re-attest the destination instead of copying the source marker verbatim.
     mark_tool_call_as_non_replayable(dest);
+}
+
+pub(crate) const INTERNAL_PROXIED_TOOL_KIND_FIELD: &str = "proxied_tool_kind";
+const INTERNAL_PROXIED_TOOL_KIND_VALUE: &str = "anthropic_server_tool_use";
+const INTERNAL_PROXIED_TOOL_KIND_SIG_FIELD: &str = "_llmup_proxied_tool_kind_sig";
+const INTERNAL_PROXIED_TOOL_KIND_VERSION: u64 = 1;
+
+fn proxied_tool_kind_name(value: &Value) -> Option<&str> {
+    value
+        .get("function")
+        .and_then(|function| function.get("name"))
+        .and_then(Value::as_str)
+        .or_else(|| value.get("name").and_then(Value::as_str))
+        .filter(|name| !name.is_empty())
+}
+
+/// Keyed-MAC attestation (same process-local key as the non-replayable marker) binding
+/// `proxied_tool_kind` to the tool name so the proxy can distinguish markers it authored
+/// from client-forged values. The key is process-local, so an attestation only validates
+/// within the proxy process that minted it; this is the same trust scope used for the
+/// non-replayable tool-call marker.
+fn proxied_tool_kind_signature(name: Option<&str>) -> Option<String> {
+    let payload = serde_json::json!({
+        "v": INTERNAL_PROXIED_TOOL_KIND_VERSION,
+        "kind": INTERNAL_PROXIED_TOOL_KIND_VALUE,
+        "name": name.unwrap_or(""),
+    });
+    let encoded = serde_json::to_vec(&payload).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(internal_replay_marker_key().as_bytes());
+    hasher.update([0]);
+    hasher.update(encoded);
+    Some(hex::encode(hasher.finalize()))
+}
+
+fn proxied_tool_kind_is_attested(value: &Value) -> bool {
+    if value
+        .get(INTERNAL_PROXIED_TOOL_KIND_FIELD)
+        .and_then(Value::as_str)
+        != Some(INTERNAL_PROXIED_TOOL_KIND_VALUE)
+    {
+        return false;
+    }
+    let Some(signature) = value
+        .get(INTERNAL_PROXIED_TOOL_KIND_SIG_FIELD)
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    Some(signature) == proxied_tool_kind_signature(proxied_tool_kind_name(value)).as_deref()
+}
+
+/// Stamp a process-local keyed-MAC attestation onto a tool call the proxy is marking with
+/// `proxied_tool_kind` on upstream output. No-op unless the value already carries a proxy
+/// `proxied_tool_kind`; never blesses a client-supplied marker with a fresh signature.
+pub(crate) fn attest_proxied_tool_kind(value: &mut Value) {
+    if value
+        .get(INTERNAL_PROXIED_TOOL_KIND_FIELD)
+        .and_then(Value::as_str)
+        != Some(INTERNAL_PROXIED_TOOL_KIND_VALUE)
+    {
+        return;
+    }
+    let name = proxied_tool_kind_name(value);
+    let Some(signature) = proxied_tool_kind_signature(name) else {
+        return;
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            INTERNAL_PROXIED_TOOL_KIND_SIG_FIELD.to_string(),
+            Value::String(signature),
+        );
+    }
 }
 
 pub(crate) fn openai_tool_call_partial_replay_text(tool_call: &Value) -> String {

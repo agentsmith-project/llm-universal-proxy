@@ -28,3 +28,6 @@ pub(crate) use shared::{
     validate_responses_public_stream_event_tool_identity,
     validate_responses_public_tool_call_item_identity,
 };
+
+#[cfg(test)]
+pub(crate) use shared::attest_proxied_tool_kind;

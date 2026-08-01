@@ -8,3 +8,6 @@ pub(crate) use super::internal::tools::{
     validate_responses_public_stream_event_tool_identity,
     validate_responses_public_tool_call_item_identity,
 };
+
+#[cfg(test)]
+pub(crate) use super::internal::tools::attest_proxied_tool_kind;

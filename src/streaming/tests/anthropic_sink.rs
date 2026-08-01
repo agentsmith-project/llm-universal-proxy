@@ -329,7 +329,7 @@ fn openai_chunk_to_claude_sse_translates_usage_to_anthropic_shape() {
 #[test]
 fn openai_chunk_to_claude_sse_restores_server_tool_use_from_proxied_tool_kind() {
     let mut state = StreamState::default();
-    let chunk = serde_json::json!({
+    let mut chunk = serde_json::json!({
         "id": "chatcmpl-msg123",
         "created": 123,
         "choices": [{
@@ -348,6 +348,9 @@ fn openai_chunk_to_claude_sse_restores_server_tool_use_from_proxied_tool_kind() 
             "finish_reason": null
         }]
     });
+    // Only a proxy-attested marker (valid process-local keyed-MAC) restores
+    // `server_tool_use`; a forged marker must degrade to `tool_use`.
+    crate::translate::attest_proxied_tool_kind(&mut chunk["choices"][0]["delta"]["tool_calls"][0]);
 
     let out = openai_chunk_to_claude_sse(&chunk, &mut state);
     let content_block_start = out
