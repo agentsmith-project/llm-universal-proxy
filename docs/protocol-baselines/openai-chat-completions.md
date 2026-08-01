@@ -5,11 +5,14 @@
 - `captured_at_utc`: `2026-04-17T06:59:44Z`
 - `snapshot_bucket`: `2026-04-16`
 - `snapshot_bucket_note`: Snapshot artifacts are stored under the `2026-04-16` bucket because this capture completed at `2026-04-16T23:59:44-07:00` in `America/Los_Angeles`.
-- `online_recheck_at_utc`: `2026-05-16T00:00:00Z`
+- `online_recheck_at_utc`: `2026-07-31T00:00:00Z`
 - `source_urls`:
   - `https://developers.openai.com/api/reference/resources/chat/index.md`
-  - `https://developers.openai.com/api/docs/guides/prompt-caching`
+  - `https://developers.openai.com/api/docs/changelog`
+  - `https://developers.openai.com/api/docs/deprecations`
   - `https://developers.openai.com/api/docs/guides/reasoning`
+  - `https://developers.openai.com/api/docs/guides/prompt-caching`
+  - `https://developers.openai.com/api/docs/guides/latest-model`
   - `https://developers.openai.com/api/docs/guides/streaming-responses`
   - `https://developers.openai.com/api/docs/guides/migrate-to-responses`
 - `snapshot_manifest`: `docs/protocol-baselines/snapshots/2026-04-16/openai-manifest.md`
@@ -21,7 +24,7 @@
   - Pricing, rate limits, and model quality comparisons.
   - Realtime or WebSocket protocol design.
 
-The captured Chat Completions reference is still current, but its own header says new projects should try Responses first. See also: [OpenAI Responses API baseline](openai-responses.md).
+The Chat Completions endpoint remains mainline supported with no deprecation date (the Assistants API is the surface shutting down, on 2026-08-26); its own header still says new projects should try Responses first. See also: [OpenAI Responses API baseline](openai-responses.md).
 
 ## Formal surface
 
@@ -56,6 +59,10 @@ The captured reference also includes newer documented controls such as:
 - `service_tier`
 - `parallel_tool_calls`
 - `web_search_options`
+- `moderation`
+- `safety_identifier`
+- `prompt_cache_options`
+- `prompt_cache_breakpoint`
 
 ### Message model
 
@@ -101,7 +108,7 @@ The captured tool surface includes:
 - `tool_choice`
 - `parallel_tool_calls`
 
-`tool_choice` is not just `auto` or `none`; the reference also documents forcing a specific tool. Tool names, tool IDs, and incremental argument fragments are part of the documented Chat wire surface.
+`tool_choice` is not just `auto` or `none`; the reference also documents forcing a specific tool. As of this recheck, `tool_choice` also supports an "allowed tools" option (`mode: auto|required` plus a `tools[]` list) backing `gpt-5.6` programmatic tool calling. Tool names, tool IDs, and incremental argument fragments are part of the documented Chat wire surface.
 
 ### Built-in web search control
 
@@ -121,6 +128,15 @@ When web search is used, assistant messages may include `annotations[]` entries 
 ### Structured outputs
 
 Chat Completions uses `response_format` for output shaping. The captured reference documents plain text, JSON object, and JSON schema-oriented modes.
+
+### Service tier and other newer controls
+
+The captured reference documents these additional request-level controls:
+
+- `service_tier`: enum of `auto`, `default`, `flex`, `scale`, `priority`, and `fast`. `fast` (Fast mode) replaces Priority Processing as of 2026-07-30; `priority` auto-routes to `fast`.
+- `moderation`: an object `{ model, policy }` where `policy.input` and `policy.output` each carry a `mode` of `"score"` or `"block"`.
+- `safety_identifier`: an identifier carried on the request for safety routing.
+- `verbosity`: enum of `low`, `medium`, and `high`. On Chat Completions `verbosity` stays a top-level field; the `text.verbosity` nesting is Responses-only.
 
 ## Response baseline
 
@@ -215,13 +231,17 @@ The captured request field is `reasoning_effort`. Current documented values are:
 - `medium`
 - `high`
 - `xhigh`
+- `max`
 
 The captured reference also includes model-specific notes:
 
+- `gpt-5.6` and `gpt-5.5` default to `medium`
 - `gpt-5.1` defaults to `none` and supports `none`, `low`, `medium`, and `high`
 - models before `gpt-5.1` default to `medium` and do not support `none`
 - `gpt-5-pro` defaults to and only supports `high`
-- `xhigh` is supported for models after `gpt-5.1-codex-max`
+- `xhigh` and `max` are supported on the current `gpt-5.6-*` family
+
+Current Chat-available model lines (recheck 2026-07-31): `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4`. The `gpt-5-chat-latest`, `gpt-5.1-chat-latest`, `gpt-5-codex`, and `gpt-5.2-codex` aliases were shut down on 2026-07-23.
 
 Two protocol consequences matter for implementations:
 
@@ -232,31 +252,31 @@ Unlike Responses, the captured Chat reference does not define a standalone `reas
 
 ## Prompt caching
 
-Both Chat Completions and Responses now expose explicit prompt-cache controls. On Chat, the relevant fields are:
+Both Chat Completions and Responses expose explicit prompt-cache controls. The forward mechanism on Chat is:
 
-- `prompt_cache_key`
-- `prompt_cache_retention`
+- `prompt_cache_options`: an object `{ mode, ttl }` where `mode` is `implicit` or `explicit` and `ttl` defaults to `30m`
+- `prompt_cache_breakpoint`: a per-block marker placed in the `messages` content to delimit cacheable prefixes
 
-The captured Chat reference says `prompt_cache_key` replaces `user` for caching optimization. It also documents `prompt_cache_retention` values as:
+The legacy explicit controls remain documented for older models:
 
-- `"in-memory"`
-- `"24h"`
+- `prompt_cache_key`: replaces `user` for caching optimization. On `gpt-5.6-*` and newer, `prompt_cache_key` is required for reliable cache matching.
+- `prompt_cache_retention`: deprecated for `gpt-5.6-*` and newer. Still accepted as `"in_memory"` or `"24h"` for older models. The non-ZDR default is now `"24h"` (changed 2026-05-29).
 
-The separately captured prompt-caching guide uses `in_memory` and `24h`. That is an official-doc inconsistency as of 2026-04-16.
+Legacy spelling note: the captured API reference used `"in-memory"` while the prompt-caching guide examples use `"in_memory"`. The proxy should keep treating the value as provider-native rather than normalizing or validating it.
 
 Other captured prompt-caching details:
 
 - in-memory retention is generally 5 to 10 minutes of inactivity, up to 1 hour
 - extended retention can keep cached prefixes active up to 24 hours
 - prompt caches are organization-scoped, not shared across orgs
+- caching uses a 1024-token cacheability threshold with 128-token hit increments
 - cache hits surface through `usage.prompt_tokens_details.cached_tokens`
 
-Online recheck on 2026-05-16:
+Online recheck on 2026-07-31:
 
-- The current prompt-caching guide still describes automatic caching for cacheable prompts and still exposes `prompt_cache_key` / `prompt_cache_retention` as the explicit controls for improving routing and retention.
-- The guide still says caching is enabled for recent OpenAI models and uses a 1024-token cacheability threshold with 128-token hit increments.
-- The guide continues to document `prompt_cache_retention: "in_memory"` and `"24h"` in guide examples, while the earlier captured API reference used `"in-memory"`; the proxy should keep treating the value as provider-native rather than normalizing or validating it.
-- No official OpenAI-domain page found during this recheck changed the Chat prompt-cache wire shape captured on 2026-04-16.
+- `prompt_cache_options` / `prompt_cache_breakpoint` are the documented forward controls; `prompt_cache_retention` is deprecated for `gpt-5.6-*` and newer but still valid for older models.
+- The non-ZDR default retention moved to `"24h"` as of 2026-05-29.
+- No change to the cacheability threshold, org scoping, or `cached_tokens` accounting.
 
 ## Conversation state and stored resources
 

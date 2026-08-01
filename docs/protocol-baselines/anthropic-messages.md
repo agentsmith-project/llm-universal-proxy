@@ -5,24 +5,26 @@
 - `captured_at_utc`: `2026-04-17T07:04:42Z`
 - `snapshot_bucket`: `2026-04-16`
 - `snapshot_bucket_note`: This capture completed at `2026-04-17T00:04:42-07:00` in `America/Los_Angeles` and remained in the `2026-04-16` bucket because the collection workflow grouped it with the rest of that day's snapshot batch.
-- `online_recheck_at_utc`: `2026-05-16T00:00:00Z`
+- `online_recheck_at_utc`: `2026-07-31T00:00:00Z`
 - `source_urls`:
-  - `https://docs.anthropic.com/en/api/messages`
-  - `https://docs.anthropic.com/en/docs/build-with-claude/streaming`
-  - `https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use`
-  - `https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking`
-  - `https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching`
-  - `https://docs.anthropic.com/en/docs/build-with-claude/citations`
-  - `https://docs.anthropic.com/en/docs/build-with-claude/token-counting`
-  - `https://docs.anthropic.com/en/api/service-tiers`
-  - `https://docs.anthropic.com/en/api/beta-headers`
-  - `https://docs.claude.com/en/docs/build-with-claude/context-editing`
-  - `https://docs.anthropic.com/en/api/handling-stop-reasons`
-  - `https://docs.anthropic.com/en/docs/build-with-claude/search-results`
-  - `https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/web-search-tool`
-  - `https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/code-execution-tool`
-  - `https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/fine-grained-tool-streaming`
-  - `https://docs.anthropic.com/en/release-notes/api`
+  - `https://platform.claude.com/docs/en/api/messages`
+  - `https://platform.claude.com/docs/en/api/streaming`
+  - `https://platform.claude.com/docs/en/api/service-tiers`
+  - `https://platform.claude.com/docs/en/api/beta-headers`
+  - `https://platform.claude.com/docs/en/api/handling-stop-reasons`
+  - `https://platform.claude.com/docs/en/about-claude/models/overview`
+  - `https://platform.claude.com/docs/en/release-notes/api`
+  - `https://platform.claude.com/docs/en/build-with-claude/extended-thinking`
+  - `https://platform.claude.com/docs/en/build-with-claude/prompt-caching`
+  - `https://platform.claude.com/docs/en/build-with-claude/citations`
+  - `https://platform.claude.com/docs/en/build-with-claude/token-counting`
+  - `https://platform.claude.com/docs/en/build-with-claude/search-results`
+  - `https://platform.claude.com/docs/en/build-with-claude/context-editing`
+  - `https://platform.claude.com/docs/en/build-with-claude/streaming`
+  - `https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use`
+  - `https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool`
+  - `https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool`
+  - `https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming`
 - `snapshot_manifest`: `docs/protocol-baselines/snapshots/2026-04-16/anthropic-manifest.json`
 - `scope`:
   - Native Anthropic Messages wire contract and closely coupled features that materially change request and response handling.
@@ -47,6 +49,12 @@ The captured baseline covers these primary endpoints:
 | `POST /v1/messages` | Generate assistant turns | Supports streaming, tools, extended thinking, citations, prompt caching, service tiers, context management, and server tools |
 | `POST /v1/messages/count_tokens` | Estimate request input tokens | Accepts the same structured prompt ingredients as `messages.create`; free but separately rate limited |
 
+### Model identifiers (July 2026)
+
+- Current lineup: `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5` (model ID `claude-haiku-4-5-20251001`).
+- Legacy active: `claude-opus-4-8` / `4-7` / `4-6`, `claude-sonnet-4-6` / `4-5`.
+- Retired: `claude-sonnet-4-20250514` and `claude-opus-4-20250514` retired 2026-06-15; `claude-opus-4-1` deprecated (retires 2026-08-05).
+
 ## Headers and versioning
 
 ### Required request headers
@@ -66,6 +74,24 @@ The captured baseline covers these primary endpoints:
 - Invalid beta names return `invalid_request_error` with `Unsupported beta header: ...`.
 - A feature can move from beta to GA and stop requiring a beta header while leaving the payload shape intact. Search results are an example of this.
 
+### Current in-market beta headers
+
+- `compact-2026-01-12`
+- `task-budgets-2026-03-13`
+- `cache-diagnosis-2026-04-07`
+- `fast-mode-2026-02-01`
+- `server-side-fallback-2026-06-01`
+- `server-side-fallback-2026-07-01`
+- `mid-conversation-tool-changes-2026-07-01`
+- `mcp-client-2025-11-20`
+- `advisor-tool-2026-03-01`
+- `mcp-tunnels-2026-06-22`
+- `agent-memory-2026-07-22` (replaces `managed-agents-2026-04-01` on memory-store endpoints; sending both returns 400)
+- `skills-2025-10-02`
+- `code-execution-2025-08-25`
+- `files-api-2025-04-14`
+- `output-300k-2026-03-24`
+
 ## Core request contract
 
 ### Required top-level fields
@@ -78,7 +104,22 @@ The captured baseline covers these primary endpoints:
 
 ### Common optional top-level fields
 
-Current docs list `system`, `stream`, `metadata`, `stop_sequences`, `temperature`, `top_p`, `top_k`, `tools`, `tool_choice`, `thinking`, `cache_control`, `service_tier`, `container`, and `context_management` as Anthropic-native top-level controls.
+Current docs list `system`, `stream`, `metadata`, `stop_sequences`, `temperature`, `top_p`, `top_k`, `tools`, `tool_choice`, `thinking`, `cache_control`, `service_tier`, `container`, `context_management`, `output_config`, `inference_geo`, `speed`, `fallbacks`, `mcp_servers`, and `diagnostics` as Anthropic-native top-level controls. `context_management` remains beta-scoped (`context-management-2025-06-27`).
+
+### Newer optional top-level controls
+
+| Field | Purpose | Notes |
+| --- | --- | --- |
+| `output_config` | Container for thinking-depth and output-format controls | GA. Holds `effort` (`low`/`medium`/`high`/`xhigh`/`max`) and `format` (`json_schema`). Primary thinking-depth control on 4.6+ |
+| `inference_geo` | Data-residency routing | Selects the inference region for the request |
+| `speed` | Latency-optimized mode | `"fast"`; beta `fast-mode-2026-02-01`; Opus 5 / 4.8 only |
+| `fallbacks` | Server-side refusal fallback | Beta `server-side-fallback-2026-06-01` / `server-side-fallback-2026-07-01` |
+| `mcp_servers` | MCP connector | Beta `mcp-client-2025-11-20`; paired with a `tools[]` entry `{ "type": "mcp_toolset", "mcp_server_name" }` |
+| `diagnostics` | Cache diagnostics | Beta `cache-diagnosis-2026-04-07` |
+
+### Sampling-parameter constraint
+
+- `temperature`, `top_p`, and `top_k` now return HTTP 400 on Opus 4.7+ and on Sonnet 5 / Fable 5 / Opus 5 when set to non-default values.
 
 ### Message structure
 
@@ -94,7 +135,7 @@ Current docs list `system`, `stream`, `metadata`, `stop_sequences`, `temperature
 
 ```json
 {
-  "model": "claude-sonnet-4-6",
+  "model": "claude-sonnet-5",
   "max_tokens": 1024,
   "system": "You are a precise assistant.",
   "messages": [
@@ -124,9 +165,20 @@ Anthropic Messages is fundamentally a typed-content protocol. Correct implementa
 | `tool_result` | user input | Returned to Claude in the next user turn; must point at a prior `tool_use_id` |
 | `thinking` | assistant output | Extended-thinking block; includes `thinking` text and `signature` |
 | `redacted_thinking` | assistant output | Preserve verbatim; appears when thinking content is not exposed in cleartext |
-| `container_upload` | user input | File reference block for code execution containers |
-| `server_tool_use` | assistant output | Anthropic-managed tool invocation, e.g. `web_search` or `code_execution` |
+| `container_upload` | user input and assistant output | File reference block for code execution containers; now appears on both input and output paths |
+| `server_tool_use` | assistant output | Anthropic-managed tool invocation, e.g. `web_search`, `web_fetch`, or `code_execution` |
 | `web_search_tool_result` | assistant output | Anthropic-managed web-search result block tied to a `server_tool_use` |
+| `web_fetch_tool_result` | assistant output | Anthropic-managed web-fetch result block tied to a `server_tool_use` |
+| `code_execution_tool_result` | assistant output | Anthropic-managed code-execution result block |
+| `bash_code_execution_tool_result` | assistant output | Anthropic-managed bash code-execution result block |
+| `text_editor_code_execution_tool_result` | assistant output | Anthropic-managed text-editor code-execution result block |
+| `tool_search_tool_result` | assistant output | Anthropic-managed tool-search result block |
+| `mcp_tool_use` | assistant output | MCP-connector tool invocation sourced from `mcp_servers` |
+| `mcp_tool_result` | assistant output | MCP-connector tool result block tied to an `mcp_tool_use` |
+| `compaction` | assistant output | Compaction block returned by the compaction feature; must be echoed back in the next request |
+| `fallback` | assistant output | Model-boundary marker emitted during server-side fallback |
+| `mid_conv_system` | user input | Mid-conversation system block appended to `messages[]` |
+| `tool_reference` | inside `tool_addition` / `tool_removal` | References a tool entry within a mid-conversation tool-change block |
 
 ### Taxonomy notes that matter to implementers
 
@@ -155,7 +207,18 @@ Non-streaming responses return a top-level assistant message object with the usu
 - `content`
 - `stop_reason`
 - `stop_sequence`
+- `stop_details`
 - `usage`
+
+### `stop_details`
+
+`stop_details` is populated only when `stop_reason == "refusal"`. Its shape is:
+
+```json
+{ "type": "refusal", "category": "...", "explanation": "..." }
+```
+
+`category` is one of `cyber`, `bio`, `frontier_llm`, `reasoning_extraction`, `general_harms`, or `null`. It is absent for all other stop reasons.
 
 ### Usage object expectations
 
@@ -163,10 +226,16 @@ The exact `usage` shape is feature-dependent and may grow new subfields. Common 
 
 - `input_tokens`
 - `output_tokens`
+- `output_tokens_details.thinking_tokens`
 - `cache_creation_input_tokens`
+- `cache_creation.ephemeral_1h_input_tokens`
+- `cache_creation.ephemeral_5m_input_tokens`
 - `cache_read_input_tokens`
-- `service_tier`
-- `server_tool_use` (for example, `web_search_requests`)
+- `inference_geo`
+- `service_tier` (`standard` | `priority` | `batch`)
+- `server_tool_use.web_search_requests`
+- `server_tool_use.web_fetch_requests`
+- `speed`
 
 Do not assume `usage` only contains input and output token counts. In streaming responses, `stop_reason` remains `null` until `message_delta`.
 
@@ -207,6 +276,8 @@ Anthropic explicitly warns that new event types may appear over time. A robust p
 - For current models, `input_json_delta` is emitted one complete key/value property at a time, so tool-input streams may pause between chunks.
 - Fine-grained tool streaming can deliver invalid or partial JSON while the tool input is still being generated.
 - With `thinking.display: "omitted"`, no `thinking_delta` text is sent; the block opens, gets a `signature_delta`, and closes.
+- A `fallback` block arrives as a `content_block_start` / `content_block_stop` pair with no `content_block_delta` between them; it is a model-boundary marker for server-side fallback, not streamed content.
+- Error recovery from a truncated assistant turn diverges by model family: 4.6+ forbids assistant-prefill continuation (continue with a `user` message instead), while 4.5 and earlier still allow assistant prefill.
 
 ### Streaming assembler requirements
 
@@ -272,9 +343,24 @@ Server tools are Anthropic-managed capabilities such as web search and code exec
 
 Current docs treat `server_tool_use` and tool-specific result blocks as assistant-side content, distinct from client-tool `tool_use` / `tool_result` loops.
 
+### Server-tool version strings
+
+Concrete tool-type versions in the current docs:
+
+- Web search: `web_search_20250305`, `web_search_20260209` (dynamic filtering), and `web_search_20260318` (newest). The newest accepts `response_inclusion` (`"full"` | `"excluded"`) and `allowed_callers`.
+- Web fetch: analogous web-fetch tool-type versions follow the same dating scheme.
+- Code execution: `code_execution_20260120` and `code_execution_20260521`.
+
+### Other server-side tool features
+
+- MCP connector: declare servers under top-level `mcp_servers` and reference them with a `tools[]` entry of `{ "type": "mcp_toolset", "mcp_server_name" }` (beta `mcp-client-2025-11-20`).
+- Advisor tool: beta `advisor-tool-2026-03-01`.
+- Tool search (`tool_search_tool_regex_20251119` / `tool_search_tool_bm25_20251119`) and memory (`memory_20250818`) are GA.
+- Mid-conversation tool changes (beta `mid-conversation-tool-changes-2026-07-01`): emit `tool_addition` / `tool_removal` / `tool_reference` on a system message and require `defer_loading: true` on the affected tool definitions. Supported on Opus 5 / 4.8, Fable 5 / Mythos 5.
+
 ### Fine-grained tool streaming
 
-The current feature docs describe fine-grained tool streaming as available on all models and platforms.
+Fine-grained tool streaming is GA and available on all models and platforms (no beta header required).
 
 Enable it by:
 
@@ -289,18 +375,27 @@ Extended thinking materially changes the request contract, block taxonomy, tool 
 
 ### Supported configurations
 
-Anthropic's current docs distinguish between adaptive and manual thinking:
+Adaptive thinking is the default on 4.6+. The depth control has moved from a token budget to effort:
 
-- For Claude Opus 4.7 and later, use adaptive thinking: `thinking: { "type": "adaptive" }` with `effort`
-- Manual thinking on Opus 4.7+ (`{ "type": "enabled", "budget_tokens": N }`) returns a 400
-- Manual thinking is still accepted on some earlier current models but is deprecated
-- Manual `budget_tokens` minimum is `1024`
+- On 4.6+ use adaptive thinking. Effort replaces `budget_tokens` as the depth control and lives in `output_config.effort` (`low` / `medium` / `high` / `xhigh` / `max`; `xhigh` was added with Opus 4.7).
+- `thinking: { "type": "enabled", "budget_tokens": N }` is removed: it returns 400 on Opus 4.7 / 4.8 / 5, Sonnet 5, and Fable 5 / Mythos 5, and is deprecated on 4.6.
+- Haiku 4.5 is the only current model that still supports manual extended thinking; manual `budget_tokens` minimum is `1024`.
+
+### Task budgets
+
+- The separate Task Budgets feature (beta `task-budgets-2026-03-13`) exposes `output_config.task_budget` to cap thinking spend across a multi-step task.
 
 ### Display modes
 
-- `display` defaults to `"omitted"`
-- Use `display: "summarized"` to receive thinking summaries
-- When display is omitted, streaming emits only `signature_delta` for the thinking block, not `thinking_delta`
+- `thinking.display` is `"omitted"` or `"summarized"`.
+- Default is `"omitted"` on 4.7+, `"summarized"` on 4.6.
+- Raw chain of thought is never returned on Fable 5 / Mythos 5 / Opus 5: thinking blocks carry empty text under `display: "omitted"`.
+- When display is omitted, streaming emits only `signature_delta` for the thinking block, not `thinking_delta`.
+
+### Disabling thinking
+
+- `thinking: { "type": "disabled" }` returns 400 on Fable 5 / Mythos 5 at any effort.
+- On Opus 5 it is accepted only at effort ≤ `high` (400 at `xhigh` / `max`).
 
 ### Compatibility constraints
 
@@ -329,7 +424,7 @@ Anthropic's tool-use guidance for thinking is unusually strict:
 
 ### Caching interaction
 
-- Changing thinking budget invalidates cached prompt prefixes that include messages.
+- Changing the thinking configuration (effort, or budget on the models that still accept it) invalidates cached prompt prefixes that include messages.
 - Cached system prompts and tool definitions can still remain valid when thinking parameters change.
 
 Some SDKs require streaming when `max_tokens > 21333` to avoid client-side HTTP timeouts. That is an SDK behavior, not a wire-level API restriction.
@@ -376,8 +471,8 @@ Prompt caching is a native Anthropic feature with its own TTLs, pricing, and inv
 
 - Prompt caching is eligible for Zero Data Retention
 - `usage` may include both `cache_creation_input_tokens` and `cache_read_input_tokens`
-- Online recheck on 2026-05-16: the current prompt-caching guide still documents both top-level automatic caching and block-level explicit breakpoints. It now names newer Claude 4.x model families in the cache pricing table, including Opus 4.7/4.6/4.5, Sonnet 4.6/4.5, and Haiku 4.5, but those catalog additions do not change the wire shape.
-- Online recheck on 2026-05-16: the current Messages API reference says `max_tokens: 0` can be used to populate the prompt cache without generating a response; that is a native Anthropic operational trick, not a portable generation semantic.
+- Online recheck on 2026-07-31: the current prompt-caching guide still documents both top-level automatic caching and block-level explicit breakpoints. The cache pricing table now names the July 2026 lineup (Fable 5, Opus 5 / 4.8 / 4.7 / 4.6, Sonnet 5 / 4.6, Haiku 4.5), but those catalog additions do not change the wire shape.
+- Online recheck on 2026-07-31: the current Messages API reference says `max_tokens: 0` can be used to populate the prompt cache without generating a response; that is a native Anthropic operational trick, not a portable generation semantic.
 
 ## Context management, container reuse, and service tiers
 
@@ -403,6 +498,20 @@ Default behavior note:
 
 - When thinking is enabled and the caller does not explicitly configure `clear_thinking_20251015`, Anthropic defaults to keeping only thinking blocks from the most recent assistant turn
 - Anthropic recommends preserving all thinking blocks with `keep: "all"` when maximizing cache hits matters
+
+### Compaction
+
+Compaction is a separate feature from the clearing strategies above and requires `anthropic-beta: compact-2026-01-12`.
+
+- Enable it via `context_management.edits: [{ "type": "compact_20260112" }]`.
+- The response returns a `compaction` content block that the caller must echo back in the next request.
+- Available on Opus 4.6+ and Fable 5 / Sonnet 5.
+
+### Mid-conversation system messages
+
+- A system message can be appended mid-conversation as `{ "role": "system", "content": ... }` inside `messages[]`; this is distinct from the top-level `system` prompt.
+- No beta header is required.
+- Supported on Opus 4.8 / 5, Fable 5, and Mythos 5 (not Sonnet 5).
 
 ### `container`
 
@@ -556,6 +665,13 @@ Anthropic's `stop_reason` is part of successful responses and must be handled as
 
 - `model_context_window_exceeded` is enabled by default on Sonnet 4.5 and newer
 - Earlier models require `anthropic-beta: model-context-window-exceeded-2025-08-26`
+
+### Refusal and pause_turn semantics
+
+- On Fable 5 / Opus 5 / Sonnet 5, `refusal` is classifier-driven: the response is HTTP 200 with `stop_reason: "refusal"` and a populated `stop_details` object (including `category`).
+- Pre-output refusals are unbilled (no output tokens are charged).
+- The server-side `fallbacks` control is opt-in for routing a refusal to a fallback model.
+- `pause_turn` resume semantics: resend the assistant response back to Anthropic in a subsequent request to continue the paused turn; do not treat it as a terminal error.
 
 ### Streaming notes
 

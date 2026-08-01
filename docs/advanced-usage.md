@@ -49,7 +49,7 @@ model_aliases:
   fast: "openai_chat:provider-fast-model"
   sonnet: "anthropic_messages:claude-sonnet-like"
   opus: "anthropic_messages:claude-opus-like"
-  gemini-flash: "google_chat:gemini-2.0-flash"
+  gemini-flash: "google_chat:gemini-3.6-flash"
 ```
 
 The provider key belongs to the proxy, not to the client. In `proxy_key` mode, the provider keys are read by the proxy from the configured env sources, and clients only send the local proxy key.

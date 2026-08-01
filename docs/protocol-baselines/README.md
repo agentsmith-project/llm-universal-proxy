@@ -2,7 +2,7 @@
 
 - Status: active
 - Vendor snapshot/captured date: 2026-04-16
-- Latest online recheck date: 2026-05-16
+- Latest online recheck date: 2026-07-31
 - Proxy posture updated date: 2026-04-26
 - Audience: proxy implementers, test authors, and maintainers refreshing protocol docs
 - This file is intentionally only an entrypoint and update guide.

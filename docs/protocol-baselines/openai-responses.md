@@ -6,13 +6,17 @@
 - `snapshot_bucket`: `2026-04-16`
 - `snapshot_bucket_note`: Snapshot artifacts are stored under the `2026-04-16` bucket because this capture completed at `2026-04-16T23:59:44-07:00` in `America/Los_Angeles`.
 - `proxy_posture_updated`: `2026-04-26`
-- `online_recheck_at_utc`: `2026-05-16T00:00:00Z`
+- `online_recheck_at_utc`: `2026-07-31T00:00:00Z`
 - `source_urls`:
   - `https://developers.openai.com/api/reference/resources/responses/index.md`
   - `https://developers.openai.com/api/reference/resources/conversations/index.md`
+  - `https://developers.openai.com/api/docs/changelog`
+  - `https://developers.openai.com/api/docs/guides/latest-model`
+  - `https://developers.openai.com/api/docs/models`
   - `https://developers.openai.com/api/docs/guides/conversation-state`
   - `https://developers.openai.com/api/docs/guides/prompt-caching`
   - `https://developers.openai.com/api/docs/guides/reasoning`
+  - `https://developers.openai.com/api/docs/guides/responses-multi-agent`
   - `https://developers.openai.com/api/docs/guides/streaming-responses`
   - `https://developers.openai.com/api/docs/guides/migrate-to-responses`
 - `snapshot_manifest`: `docs/protocol-baselines/snapshots/2026-04-16/openai-manifest.md`
@@ -81,6 +85,8 @@ The captured reference also includes operational controls such as:
 - `service_tier`
 - `safety_identifier`
 - `prompt`
+- `moderation` (`{ model, policy }`)
+- `prompt_cache_options`
 
 ### Input model
 
@@ -123,6 +129,8 @@ State controls are first-class:
 - `conversation` binds the request to a server-side conversation object
 - `previous_response_id` and `conversation` cannot be used together
 
+Open verification item: the "previous_response_id and conversation cannot be used together" rule could not be re-verified this cycle and should be re-confirmed against the full create reference.
+
 The captured `conversation` semantics are explicit:
 
 - items from the conversation are prepended to the request
@@ -158,11 +166,17 @@ User-defined:
 Built-in:
 
 - `file_search`
-- `web_search` and preview/versioned variants
+- `web_search` and preview/versioned variants (gained `return_token_budget` and can return image results)
 - `code_interpreter`
 - `computer_use_preview` and related computer-use variants
+- `computer`
 - `image_generation`
-- remote `mcp`
+- `programmatic_tool_calling`
+- `shell`
+- `local_shell`
+- `tool_search`
+- `apply_patch`
+- remote `mcp`, with controls including `connector_id` (hosted connectors: Dropbox, Gmail, Google Calendar, Google Drive, Microsoft Teams, Outlook Calendar, Outlook Email, SharePoint), `tunnel_id` / Secure MCP Tunnel, `require_approval`, `allowed_tools`, `defer_loading`, and `allowed_callers` (`direct` | `programmatic`)
 
 Important control fields:
 
@@ -171,6 +185,13 @@ Important control fields:
 - `parallel_tool_calls`
 - `max_tool_calls`
 
+New item-level fields captured in the reference:
+
+- `phase` (`commentary` | `final_answer`)
+- `caller` (`direct` | `programmatic`)
+- `namespace`
+- `additional_tools`
+
 Compared with Chat, Responses exposes much richer built-in tool state directly in typed output items and streaming events.
 
 ### Reasoning and output shaping
@@ -178,6 +199,8 @@ Compared with Chat, Responses exposes much richer built-in tool state directly i
 Responses reasoning is first-class. The captured request field is `reasoning`, with:
 
 - `effort`
+- `mode`
+- `context`
 - `summary`
 - deprecated `generate_summary`
 
@@ -189,13 +212,24 @@ Current documented `reasoning.effort` values:
 - `medium`
 - `high`
 - `xhigh`
+- `max`
+
+`reasoning.mode` (GPT-5.6):
+
+- `standard`
+- `pro`
+
+`reasoning.context` (GPT-5.6):
+
+- `auto`
+- `current_turn`
+- `all_turns`
 
 Model notes captured in the reference:
 
-- `gpt-5.1` defaults to `none` and supports `none`, `low`, `medium`, and `high`
-- models before `gpt-5.1` default to `medium` and do not support `none`
-- `gpt-5-pro` defaults to and only supports `high`
-- `xhigh` is supported for models after `gpt-5.1-codex-max`
+- the GPT-5.6 family defaults to `medium` effort in both `standard` and `pro` modes and supports the full effort ladder
+- the GPT-5.6 family defaults to `all_turns` context
+- pre-GPT-5.6 models carry reasoning tokens without rendering reasoning
 
 `max_output_tokens` includes visible output tokens and reasoning tokens.
 
@@ -261,6 +295,7 @@ Important reasoning-specific behavior:
 - reasoning items can carry `summary`
 - reasoning items can carry `encrypted_content` when explicitly requested via `include`
 - the reference says encrypted reasoning enables reasoning items to be reused across turns when managing context statelessly
+- `encrypted_content` is now returned by default in stateless (`store: false`) mode; the legacy `include: ["reasoning.encrypted_content"]` is accepted for compatibility but no longer required
 
 ### Usage accounting
 
@@ -321,6 +356,11 @@ Protocol consequences:
 
 Like Chat, Responses also supports `stream_options.include_obfuscation`, and the docs say obfuscation fields are included by default unless disabled.
 
+## Background, async, and orchestration
+
+- Multi-agent (beta, GPT-5.6 only) coordinates subagents in parallel. The exact multi-agent request field is TBD pending the full create reference.
+- Fast mode (2026-07-30) replaces Priority Processing; the existing `priority` control auto-routes to `fast`.
+
 ## Conversation state
 
 The captured conversation-state guide makes Responses state management much more explicit than Chat.
@@ -344,33 +384,21 @@ Responses can store a response object, participate in a continuation chain, or b
 
 ## Prompt caching
 
-Responses uses the same core prompt-cache controls as Chat:
+Caching is governed by `prompt_cache_options: { mode: "implicit" | "explicit" }`, supplemented by per-content-block `prompt_cache_breakpoint: { mode: "explicit" }` attached to `input_text`, `input_image`, and `input_file`.
 
-- `prompt_cache_key`
-- `prompt_cache_retention`
+Current behavior and controls captured in the reference:
 
-The captured create reference documents `prompt_cache_retention` values as:
-
-- `"in-memory"`
-- `"24h"`
-
-The separately captured prompt-caching guide uses `in_memory` and `24h`. As with Chat, that is an official-doc inconsistency in the captured sources.
-
-Useful guide-level details for implementers and operators:
-
-- in-memory retention is generally 5 to 10 minutes of inactivity, up to 1 hour
-- extended retention keeps cached prefixes active up to 24 hours
-- repeated requests for the same prefix and cache key can overflow to additional machines at higher rates, reducing hit effectiveness
+- non-ZDR default retention changed to `24h` on 2026-05-29 (previously `in_memory`)
+- `prompt_cache_retention` is deprecated for GPT-5.6+ in favor of `prompt_cache_options.ttl`, which accepts only `"30m"`
+- `prompt_cache_key` is required for reliable cache matching on GPT-5.6+
+- cache writes cost 1.25x uncached input on GPT-5.6+
+- the cacheability threshold is 1024 tokens
 - prompt caches are scoped to an organization
+- repeated requests for the same prefix and cache key can overflow to additional machines at higher rates, reducing hit effectiveness
 
 Measure cache behavior via `usage.input_tokens_details.cached_tokens`.
 
-Online recheck on 2026-05-16:
-
-- The current prompt-caching guide still treats caching as automatic and exposes `prompt_cache_key` / `prompt_cache_retention` as provider-native optimization controls on OpenAI request surfaces.
-- The guide still says caching is enabled for recent OpenAI models and uses a 1024-token cacheability threshold with 128-token hit increments.
-- The guide still uses `prompt_cache_retention: "in_memory"` and `"24h"` while the captured create reference used `"in-memory"`; the proxy should preserve the caller-provided spelling and avoid translating this into a cross-provider TTL.
-- No official OpenAI-domain page found during this recheck changed the Responses prompt-cache wire shape captured on 2026-04-16.
+Legacy note (retain for compatibility, do not rely on for GPT-5.6+): earlier captured sources documented `prompt_cache_key` and `prompt_cache_retention` as the core controls, and the create reference used `"in-memory"` while the prompt-caching guide used `"in_memory"` alongside `"24h"`. That official-doc spelling inconsistency still stands; the proxy should preserve the caller-provided spelling and avoid translating it into a cross-provider TTL.
 
 ## Stored resources
 
@@ -393,6 +421,12 @@ Some Responses tools point at separately managed resources rather than embedding
 - remote MCP server descriptors and auth material
 
 These resources are referenced by the Responses surface rather than embedded into response or conversation storage.
+
+## Deprecations and removals
+
+- DALL·E 2/3 removed (2026-05-12)
+- Realtime API Beta removed (2026-05-12)
+- `prompt_cache_retention` deprecated for GPT-5.6+ (see Prompt caching)
 
 ## See also
 

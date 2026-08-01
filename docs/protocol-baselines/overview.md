@@ -2,7 +2,7 @@
 
 - Layer: capability-diff overview
 - Status: active
-- Last refreshed: 2026-05-16
+- Last refreshed: 2026-07-31
 - Scope: explains how to read the baseline set without duplicating vendor-specific wire docs
 
 ## Why the docs are split
