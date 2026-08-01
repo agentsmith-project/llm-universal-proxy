@@ -553,6 +553,7 @@ os.execv(real_git, [real_git, *args])
         release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"
         )
+        release_jobs = workflow_jobs(RELEASE_WORKFLOW)
 
         self.assertIn("Container Image Smoke", ci)
         self.assertIn("push: false", ci)
@@ -561,9 +562,28 @@ os.execv(real_git, [real_git, *args])
             ci,
         )
         self.assertIn("GHCR_IMAGE: ghcr.io/agentsmith-project/llm-universal-proxy", release)
-        self.assertIn("platforms: linux/amd64,linux/arm64", release)
-        self.assertIn("push: true", release)
-        self.assertIn("${{ env.GHCR_IMAGE }}:latest", release)
+
+        # Multi-arch coverage now comes from the per-arch matrix (one platform
+        # per native runner) instead of a single buildx platforms literal.
+        self.assertIn("platform: linux/amd64", release)
+        self.assertIn("platform: linux/arm64", release)
+
+        # GHCR publish scope (push: true / packages: write) is enforced on the
+        # container-build push boundary, and the rolling :latest tag is governed
+        # by the container-manifest job.
+        container_build = release_jobs.get("container-build", "")
+        self.assertTrue(
+            container_build, "release workflow must define container-build job"
+        )
+        self.assertIn("push: true", container_build)
+        self.assertIn("packages: write", container_build)
+        self.assertIn("id: push_image", container_build)
+        container_manifest = release_jobs.get("container-manifest", "")
+        self.assertTrue(
+            container_manifest, "release workflow must define container-manifest job"
+        )
+        self.assertIn("${{ env.GHCR_IMAGE }}:latest", container_manifest)
+
         self.assertIn('DOCKER_BUILD_RECORD_UPLOAD: "false"', release)
         self.assertIn("pattern: llm-universal-proxy-*", release)
         self.assertIn(

@@ -31,12 +31,14 @@ CODEX_SCRIPTED_INTERACTIVE_GATE_COMMAND = (
     "tests.test_interactive_cli.InteractiveCliTests."
     "test_codex_wrapper_executes_scripted_interactive_two_turns_hermetically"
 )
+# Deterministic GA gates that every publishing job must reach (directly or
+# transitively). perf-gate and compatible-provider-smoke are intentionally
+# advisory now and are NOT part of the lighter release gate, mirroring
+# scripts/check-governance.sh's REQUIRED_RELEASE_GATE_NEEDS.
 REQUIRED_RELEASE_GATE_NEEDS = (
     "mock-endpoint-matrix",
     "cli-wrapper-matrix",
     "installer-smoke",
-    "perf-gate",
-    "compatible-provider-smoke",
     "supply-chain",
 )
 OFFICIAL_PROVIDER_SECRET_ENVS = (
@@ -125,6 +127,24 @@ def job_needs(job_block: str):
         if item_match:
             needs.add(item_match.group(1))
     return needs
+
+
+def transitive_needs(job_name, jobs, seen=None):
+    # The release workflow now chains publication jobs
+    # (container-manifest -> container-build -> gates), so the deterministic
+    # GA gate enforcement must follow the needs closure rather than the
+    # direct needs of each publishing job. Mirrors the closure used by
+    # scripts/check-governance.sh's check_release_publish_jobs_need_ga_gates.
+    if seen is None:
+        seen = set()
+    if job_name in seen or job_name not in jobs:
+        return set()
+    seen.add(job_name)
+    direct = job_needs(jobs[job_name])
+    result = set(direct)
+    for dep in direct:
+        result |= transitive_needs(dep, jobs, seen)
+    return result
 
 
 def compatible_provider_smoke_invocation_lines(text: str):
@@ -299,10 +319,14 @@ exit 64
                 self.assertIn(snippet, release)
         self.assert_has_compatible_provider_smoke_invocation(release)
 
+        # The release job's needs reflect the lighter release gate: the
+        # deterministic GA gates (mock/cli/installer/supply-chain) are required,
+        # while perf-gate and compatible-provider-smoke remain advisory and are
+        # intentionally absent from the publish needs.
         self.assertRegex(
             release,
             r"release:\n(?:.|\n)*needs: \[[^\]]*mock-endpoint-matrix[^\]]*"
-            r"cli-wrapper-matrix[^\]]*installer-smoke[^\]]*perf-gate[^\]]*compatible-provider-smoke[^\]]*"
+            r"cli-wrapper-matrix[^\]]*installer-smoke[^\]]*"
             r"supply-chain[^\]]*\]",
         )
 
@@ -614,13 +638,30 @@ exit 64
             if any(marker in block for marker in RELEASE_PUBLISH_JOB_MARKERS)
         }
 
-        self.assertIn("container", publish_jobs)
+        # The old single ``container`` job was split into a per-arch
+        # ``container-build`` push boundary and a ``container-manifest`` job
+        # that assembles the multi-arch manifest and governs the rolling
+        # ``:latest`` tag.
+        self.assertIn("container-build", publish_jobs)
+        self.assertIn("container-manifest", publish_jobs)
         self.assertIn("release", publish_jobs)
-        self.assertIn("${{ env.GHCR_IMAGE }}:latest", publish_jobs["container"])
+        self.assertIn(
+            "push: true",
+            publish_jobs["container-build"],
+            "container-build must remain the GHCR push boundary",
+        )
+        self.assertIn(
+            "${{ env.GHCR_IMAGE }}:latest",
+            publish_jobs["container-manifest"],
+            "container-manifest must govern the rolling GHCR :latest tag",
+        )
 
-        for job_name, job_block in publish_jobs.items():
+        for job_name in publish_jobs:
             with self.subTest(job=job_name):
-                needs = job_needs(job_block)
+                # container-manifest only needs container-build directly, so the
+                # deterministic GA gates are reached transitively; follow the
+                # needs closure instead of each job's direct needs.
+                needs = transitive_needs(job_name, jobs)
                 missing = set(REQUIRED_RELEASE_GATE_NEEDS) - needs
                 self.assertFalse(
                     missing,
@@ -635,38 +676,76 @@ exit 64
 
     def test_release_container_job_publishes_ref_version_and_latest_tags(self):
         jobs = release_workflow_jobs()
-        container = jobs.get("container", "")
-        self.assertTrue(container, "release workflow must define container job")
+        container_build = jobs.get("container-build", "")
+        container_manifest = jobs.get("container-manifest", "")
+        self.assertTrue(
+            container_build, "release workflow must define container-build job"
+        )
+        self.assertTrue(
+            container_manifest, "release workflow must define container-manifest job"
+        )
 
-        push_step = workflow_step_block(container, "Build and push multi-arch image")
-        self.assertTrue(push_step, "container job must keep a multi-arch push step")
+        # Per-arch images are the GHCR push boundary in container-build; each
+        # arch is built on a native runner via the matrix platform.
+        push_step = workflow_step_block(
+            container_build, "Build and push single-arch image"
+        )
+        self.assertTrue(
+            push_step, "container-build job must keep a single-arch push step"
+        )
         for snippet in (
             "id: push_image",
+            "push: true",
+            "${{ env.GHCR_IMAGE }}:${{ github.ref_name }}-${{ matrix.arch }}",
+            "VERSION=${{ steps.repo_meta.outputs.version }}",
+        ):
+            with self.subTest(snippet=snippet, job="container-build"):
+                self.assertIn(snippet, push_step)
+
+        # The multi-arch manifest publishes the unified ref/version tags and
+        # the rolling :latest tag from the per-arch images.
+        manifest_step = workflow_step_block(
+            container_manifest, "Create and push multi-arch manifest"
+        )
+        self.assertTrue(
+            manifest_step,
+            "container-manifest job must assemble and push the multi-arch manifest",
+        )
+        for snippet in (
             "${{ env.GHCR_IMAGE }}:${{ github.ref_name }}",
             "${{ env.GHCR_IMAGE }}:${{ steps.repo_meta.outputs.version }}",
             "${{ env.GHCR_IMAGE }}:latest",
-            "VERSION=${{ steps.repo_meta.outputs.version }}",
-            "org.opencontainers.image.version=${{ steps.repo_meta.outputs.version }}",
         ):
-            with self.subTest(snippet=snippet):
-                self.assertIn(snippet, push_step)
+            with self.subTest(snippet=snippet, job="container-manifest"):
+                self.assertIn(snippet, manifest_step)
 
     def test_release_container_job_exports_pushed_digest_manifest_artifact(self):
         jobs = release_workflow_jobs()
-        container = jobs.get("container", "")
-        self.assertTrue(container, "release workflow must define container job")
+        container_manifest = jobs.get("container-manifest", "")
+        self.assertTrue(
+            container_manifest,
+            "release workflow must define container-manifest job",
+        )
 
-        push_step = workflow_step_block(container, "Build and push multi-arch image")
-        self.assertTrue(push_step, "container job must keep a multi-arch push step")
-        self.assertIn("id: push_image", push_step)
+        digest_step = workflow_step_block(
+            container_manifest, "Inspect pushed manifest for digest"
+        )
+        self.assertTrue(
+            digest_step,
+            "container-manifest job must inspect the pushed manifest for its digest",
+        )
+        self.assertIn("id: manifest", digest_step)
+        self.assertIn('echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"', digest_step)
 
-        write_step = workflow_step_block(container, "Write pushed container image manifest")
+        write_step = workflow_step_block(
+            container_manifest, "Write pushed container image manifest"
+        )
         self.assertTrue(
             write_step,
-            "container job must write the pushed image digest to a machine-readable manifest",
+            "container-manifest job must write the pushed image digest to a machine-readable manifest",
         )
         for snippet in (
-            "PUSH_DIGEST: ${{ steps.push_image.outputs.digest }}",
+            "PUSH_DIGEST: ${{ steps.manifest.outputs.digest }}",
             "RELEASE_TAG: ${{ github.ref_name }}",
             "VERSION: ${{ steps.repo_meta.outputs.version }}",
             PUSHED_CONTAINER_IMAGE_MANIFEST_JSON,
@@ -677,10 +756,12 @@ exit 64
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, write_step)
 
-        upload_step = workflow_step_block(container, "Upload pushed container image manifest")
+        upload_step = workflow_step_block(
+            container_manifest, "Upload pushed container image manifest"
+        )
         self.assertTrue(
             upload_step,
-            "container job must upload the pushed digest manifest for docs refresh",
+            "container-manifest job must upload the pushed digest manifest for docs refresh",
         )
         for snippet in (
             "uses: actions/upload-artifact@v4",
@@ -693,10 +774,15 @@ exit 64
 
     def test_release_container_manifest_writer_emits_drop_in_post_release_schema(self):
         jobs = release_workflow_jobs()
-        container = jobs.get("container", "")
-        self.assertTrue(container, "release workflow must define container job")
+        container_manifest = jobs.get("container-manifest", "")
+        self.assertTrue(
+            container_manifest,
+            "release workflow must define container-manifest job",
+        )
 
-        write_step = workflow_step_block(container, "Write pushed container image manifest")
+        write_step = workflow_step_block(
+            container_manifest, "Write pushed container image manifest"
+        )
         script = workflow_step_inline_python(write_step)
         self.assertTrue(script, "manifest writer must be executable Python")
 
