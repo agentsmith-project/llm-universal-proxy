@@ -287,12 +287,23 @@ pub(super) fn dedupe_tool_call_state_by_call_id(
         .or_insert(existing_entry);
 }
 
+/// Upper bound on the trailing-overlap trim scan in `merge_seeded_tool_arguments`.
+///
+/// The common valid case is found at `trim = 0` (tried first); the scan only
+/// exists to recover from a small partial-JSON overlap between the seed tail and
+/// the delta head, which is always tiny (a few streaming tokens). Capping it
+/// prevents a pathological large seed (e.g. a ~1 MB `content_block_start`
+/// `input`) from degrading to O(n^2) byte-ops / allocation churn in a single
+/// call; when no small trim yields valid JSON we fall back to plain
+/// concatenation, which is the existing designated fallback and remains correct.
+const MAX_SEEDED_TRIM_SCAN: usize = 4096;
+
 pub(super) fn merge_seeded_tool_arguments(seed: &str, delta: &str) -> String {
     if delta.is_empty() {
         return seed.to_string();
     }
 
-    for trim in 0..=seed.len() {
+    for trim in 0..=seed.len().min(MAX_SEEDED_TRIM_SCAN) {
         let end = seed.len().saturating_sub(trim);
         if !seed.is_char_boundary(end) {
             continue;

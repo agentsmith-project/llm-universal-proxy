@@ -892,6 +892,36 @@ fn claude_tool_use_seeded_input_and_json_delta_are_both_preserved() {
 }
 
 #[test]
+fn merge_seeded_tool_arguments_large_seed_is_bounded() {
+    // Regression guard for an algorithmic DoS in the seeded tool-argument merge.
+    // A large (~256 KiB) complete-JSON seed plus a delta that cannot form valid
+    // JSON at any small trim point: under the old code the merge scanned the full
+    // `0..=seed.len()` range, doing a fresh allocation + full `serde_json::from_str`
+    // on a seed-sized buffer each iteration -- O(n^2) in the seed size, which is
+    // ~10^10+ byte-ops (multi-minute hang / OOM) for a 256 KiB seed. The trim scan
+    // is now capped, so this degrades to the designated plain-concatenation
+    // fallback promptly and returns a sane result.
+    let big = "a".repeat(256 * 1024);
+    let seed = format!(r#"{{"data":"{}"}}"#, big);
+    // `"extra"` cannot close the truncated object at any small trim offset, so no
+    // trim in the bounded range yields valid JSON -> plain-concat fallback.
+    let delta = "\"extra\"";
+
+    let start = std::time::Instant::now();
+    let merged = merge_seeded_tool_arguments(&seed, delta);
+    let elapsed = start.elapsed();
+
+    assert_eq!(merged, format!("{seed}{delta}"));
+    // Bounded: the old O(n^2) loop took minutes at this seed size; allow generous
+    // slack for slow CI while remaining far below the pathological time.
+    assert!(
+        elapsed.as_secs() < 20,
+        "merge took {:?}; expected bounded completion",
+        elapsed
+    );
+}
+
+#[test]
 fn claude_tool_use_keeps_arguments_buffered_until_block_stop_even_if_json_becomes_valid_early() {
     let mut state = StreamState::default();
     let _ = claude_event_to_openai_chunks(
