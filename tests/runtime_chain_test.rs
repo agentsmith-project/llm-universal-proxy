@@ -1280,6 +1280,7 @@ fn runtime_namespace_config(
             proxy: None,
             limits: None,
             surface_defaults: None,
+            dialect: None,
         }],
         model_aliases: std::collections::BTreeMap::new(),
         hooks: RuntimeHookConfig::default(),

@@ -30,6 +30,7 @@ async fn build_runtime_namespace_state_exposes_resolved_per_upstream_clients() {
             proxy: None,
             limits: None,
             surface_defaults: None,
+            dialect: None,
         }],
         model_aliases: Default::default(),
         hooks: Default::default(),
@@ -115,6 +116,7 @@ async fn dashboard_runtime_snapshot_tracks_live_namespace_state() {
             proxy: None,
             limits: None,
             surface_defaults: None,
+            dialect: None,
         }],
         model_aliases: Default::default(),
         hooks: crate::config::HookConfig {

@@ -9,8 +9,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::formats::UpstreamFormat;
 
+mod dialect;
 mod model_surface;
 
+pub use self::dialect::{DialectBlock, ReasoningLevel, ReasoningMechanism, UpstreamDialect};
 pub use self::model_surface::{
     ApplyPatchTransport, ModelModalities, ModelModality, ModelSurface, ModelSurfacePatch,
     ModelToolSurface,
@@ -622,6 +624,9 @@ pub struct UpstreamConfig {
     /// Optional default client-visible surface for aliases on this upstream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_defaults: Option<ModelSurfacePatch>,
+    /// Optional per-upstream reasoning dialect. Parsed and validated but not acted on yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialect: Option<UpstreamDialect>,
 }
 
 /// One local model alias that resolves to a named upstream and upstream model.
@@ -718,6 +723,8 @@ pub struct RuntimeUpstreamConfig {
     pub proxy: Option<ProxyConfig>,
     pub limits: Option<ModelLimits>,
     pub surface_defaults: Option<ModelSurfacePatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dialect: Option<UpstreamDialect>,
 }
 
 impl<'de> Deserialize<'de> for RuntimeUpstreamConfig {
@@ -740,6 +747,7 @@ impl<'de> Deserialize<'de> for RuntimeUpstreamConfig {
             proxy: wire.proxy,
             limits: wire.limits,
             surface_defaults: wire.surface_defaults,
+            dialect: wire.dialect,
         })
     }
 }
@@ -763,6 +771,8 @@ struct RuntimeUpstreamConfigWire {
     limits: Option<ModelLimits>,
     #[serde(default)]
     surface_defaults: Option<ModelSurfacePatch>,
+    #[serde(default)]
+    dialect: Option<UpstreamDialect>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -904,6 +914,8 @@ struct UpstreamConfigFile {
     limits: Option<ModelLimits>,
     #[serde(default)]
     surface_defaults: Option<ModelSurfacePatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dialect: Option<UpstreamDialect>,
 }
 
 #[derive(Debug, Clone)]
@@ -1081,6 +1093,7 @@ impl Config {
                 proxy: item.proxy,
                 limits: item.limits,
                 surface_defaults: item.surface_defaults,
+                dialect: item.dialect,
             })
             .collect();
 
@@ -1204,6 +1217,11 @@ impl Config {
             }
             if let Some(surface_defaults) = &upstream.surface_defaults {
                 surface_defaults.validate(&format!("upstream `{}`", upstream.name))?;
+            }
+            if let Some(dialect) = &upstream.dialect {
+                dialect.resolve().map_err(|error| {
+                    format!("upstream `{}` dialect: {}", upstream.name, error)
+                })?;
             }
         }
 
@@ -1364,6 +1382,7 @@ impl TryFrom<RuntimeConfigPayload> for Config {
                 proxy: item.proxy,
                 limits: item.limits,
                 surface_defaults: item.surface_defaults,
+                dialect: item.dialect,
             })
             .collect::<Vec<_>>();
 
@@ -1415,6 +1434,7 @@ impl From<&Config> for RuntimeConfigPayload {
                     proxy: item.proxy.clone(),
                     limits: item.limits.clone(),
                     surface_defaults: item.surface_defaults.clone(),
+                    dialect: item.dialect.clone(),
                 })
                 .collect(),
             model_aliases: value.model_aliases.clone(),
@@ -1918,6 +1938,7 @@ upstreams:
                 }),
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             }],
             model_aliases: BTreeMap::new(),
             hooks: RuntimeHookConfig::default(),
@@ -2300,6 +2321,7 @@ upstreams:
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             }],
             ..Config::default()
         };
@@ -2325,6 +2347,7 @@ upstreams:
                     proxy: None,
                     limits: None,
                     surface_defaults: None,
+                    dialect: None,
                 },
                 UpstreamConfig {
                     name: "openai".to_string(),
@@ -2335,6 +2358,7 @@ upstreams:
                     proxy: None,
                     limits: None,
                     surface_defaults: None,
+                    dialect: None,
                 },
             ],
             ..Config::default()
@@ -2356,6 +2380,7 @@ upstreams:
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             }],
             ..Config::default()
         };
@@ -2385,6 +2410,7 @@ upstreams:
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             }],
             ..Config::default()
         };
@@ -2406,6 +2432,7 @@ upstreams:
                     proxy: None,
                     limits: None,
                     surface_defaults: None,
+                    dialect: None,
                 },
                 UpstreamConfig {
                     name: "b".to_string(),
@@ -2416,6 +2443,7 @@ upstreams:
                     proxy: None,
                     limits: None,
                     surface_defaults: None,
+                    dialect: None,
                 },
             ],
             ..Config::default()
@@ -2530,6 +2558,7 @@ upstreams:
             proxy: None,
             limits: None,
             surface_defaults: None,
+            dialect: None,
         };
 
         for rendered in [
@@ -2697,6 +2726,7 @@ upstreams:
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             }],
             model_aliases: BTreeMap::new(),
             hooks: RuntimeHookConfig::default(),
@@ -2758,6 +2788,7 @@ upstreams:
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             }],
             ..Config::default()
         };
@@ -2892,6 +2923,7 @@ upstreams:
                 }),
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             }],
             model_aliases: Default::default(),
             hooks: HookConfig {
@@ -3048,5 +3080,197 @@ upstreams:
         assert!(!sanitized.contains("user:pass@"));
         assert!(!sanitized.contains("?api_key="));
         assert!(!sanitized.contains("#frag"));
+    }
+
+    // --- Step 2: dialect config plumbing ---
+
+    #[test]
+    fn config_from_yaml_str_parses_dialect_preset_string() {
+        let config = Config::from_yaml_str(
+            r#"
+upstreams:
+  DEEPSEEK:
+    api_root: https://api.deepseek.com
+    format: openai-chat-completions
+    dialect: deepseek-openai
+"#,
+        )
+        .expect("preset dialect should parse");
+        config.validate().expect("known preset is valid");
+        let upstream = config.upstream("DEEPSEEK").expect("upstream present");
+        let dialect = upstream.dialect.as_ref().expect("dialect present");
+        let resolved = dialect.resolve().expect("preset resolves");
+        assert_eq!(resolved.reasoning, ReasoningMechanism::OpenAiEffort);
+        assert_eq!(resolved.reasoning_echo, Some(true));
+        assert_eq!(
+            resolved.reasoning_levels,
+            Some(vec![
+                ReasoningLevel::Low,
+                ReasoningLevel::High,
+                ReasoningLevel::Max,
+            ])
+        );
+    }
+
+    #[test]
+    fn config_from_yaml_str_parses_dialect_detailed_block() {
+        let config = Config::from_yaml_str(
+            r#"
+upstreams:
+  ACME:
+    api_root: https://api.acme.example/v1
+    format: openai-chat-completions
+    dialect:
+      reasoning: anthropic-effort
+      reasoning_echo: false
+      reasoning_levels: [low, high]
+"#,
+        )
+        .expect("detailed dialect should parse");
+        config.validate().expect("valid detailed block");
+        let upstream = config.upstream("ACME").expect("upstream present");
+        let resolved = upstream
+            .dialect
+            .as_ref()
+            .expect("dialect present")
+            .resolve()
+            .expect("detailed resolves");
+        assert_eq!(resolved.reasoning, ReasoningMechanism::AnthropicEffort);
+        assert_eq!(resolved.reasoning_echo, Some(false));
+        assert_eq!(
+            resolved.reasoning_levels,
+            Some(vec![ReasoningLevel::Low, ReasoningLevel::High])
+        );
+    }
+
+    #[test]
+    fn config_validate_rejects_unknown_dialect_preset() {
+        let config = Config::from_yaml_str(
+            r#"
+upstreams:
+  WEIRD:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    dialect: no-such-preset
+"#,
+        )
+        .expect("unknown preset string still parses as PresetName");
+        let error =
+            config.validate().expect_err("unknown preset must fail validation");
+        assert!(error.contains("unknown dialect preset"), "{error}");
+        assert!(error.contains("no-such-preset"), "{error}");
+    }
+
+    #[test]
+    fn config_validate_rejects_invalid_dialect_levels() {
+        let config = Config::from_yaml_str(
+            r#"
+upstreams:
+  DEMO:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    dialect:
+      reasoning: openai-effort
+      reasoning_levels: [high, low]
+"#,
+        )
+        .expect("out-of-order levels still parse as a Detailed block");
+        let error =
+            config.validate().expect_err("out-of-order levels must fail validation");
+        assert!(error.contains("reasoning_levels"), "{error}");
+    }
+
+    #[test]
+    fn config_without_dialect_parses_unchanged_regression_guard() {
+        let config = Config::from_yaml_str(
+            r#"
+upstreams:
+  default:
+    api_root: https://api.openai.com/v1
+    format: openai-chat-completions
+"#,
+        )
+        .expect("config without dialect parses");
+        config.validate().expect("config without dialect is valid");
+        let upstream = config.upstream("default").expect("upstream present");
+        assert!(
+            upstream.dialect.is_none(),
+            "dialect must default to None when absent"
+        );
+    }
+
+    #[test]
+    fn config_from_yaml_str_rejects_unknown_field_in_dialect_block() {
+        let result = Config::from_yaml_str(
+            r#"
+upstreams:
+  DEMO:
+    api_root: https://api.example.com/v1
+    format: openai-chat-completions
+    dialect:
+      reasoning: openai-effort
+      not_a_field: true
+"#,
+        );
+        // The untagged enum rejects a detailed block carrying an unknown field
+        // (deny_unknown_fields on DialectBlock).
+        assert!(
+            result.is_err(),
+            "unknown dialect field must be rejected: {result:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_config_payload_accepts_dialect_preset_and_detailed() {
+        let payload: RuntimeConfigPayload = serde_json::from_value(serde_json::json!({
+            "listen": "127.0.0.1:0",
+            "upstreams": [
+                {
+                    "name": "deepseek",
+                    "api_root": "https://api.deepseek.com",
+                    "fixed_upstream_format": "openai-chat-completions",
+                    "dialect": "deepseek-openai"
+                },
+                {
+                    "name": "acme",
+                    "api_root": "https://api.acme.example/v1",
+                    "fixed_upstream_format": "openai-chat-completions",
+                    "dialect": {
+                        "reasoning": "auto-only",
+                        "reasoning_echo": true
+                    }
+                }
+            ],
+            "model_aliases": {}
+        }))
+        .expect("runtime payload should accept dialect");
+
+        let config = Config::try_from(payload).expect("runtime dialect config is valid");
+        let deepseek = config.upstream("deepseek").unwrap();
+        let resolved = deepseek.dialect.as_ref().unwrap().resolve().unwrap();
+        assert_eq!(resolved.reasoning, ReasoningMechanism::OpenAiEffort);
+        let acme = config.upstream("acme").unwrap();
+        let resolved_acme = acme.dialect.as_ref().unwrap().resolve().unwrap();
+        assert_eq!(resolved_acme.reasoning, ReasoningMechanism::AutoOnly);
+    }
+
+    #[test]
+    fn runtime_config_payload_rejects_unknown_dialect_preset_at_validate() {
+        let payload: RuntimeConfigPayload = serde_json::from_value(serde_json::json!({
+            "listen": "127.0.0.1:0",
+            "upstreams": [
+                {
+                    "name": "weird",
+                    "api_root": "https://api.example.com/v1",
+                    "fixed_upstream_format": "openai-chat-completions",
+                    "dialect": "no-such-preset"
+                }
+            ],
+            "model_aliases": {}
+        }))
+        .expect("unknown preset string parses as PresetName");
+        let error = Config::try_from(payload)
+            .expect_err("unknown preset must fail validation");
+        assert!(error.contains("unknown dialect preset"), "{error}");
     }
 }

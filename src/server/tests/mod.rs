@@ -61,6 +61,7 @@ pub(super) fn test_upstream_config_with_fixed_format(
         proxy: None,
         limits: None,
         surface_defaults: None,
+        dialect: None,
     }
 }
 
@@ -79,6 +80,7 @@ pub(super) fn redaction_upstream_config(
         proxy: None,
         limits: None,
         surface_defaults: None,
+        dialect: None,
     }
 }
 
@@ -322,6 +324,7 @@ pub(super) fn app_state_for_single_upstream_with_timeout(
         proxy: None,
         limits: None,
         surface_defaults: None,
+        dialect: None,
     };
     let config = crate::config::Config {
         listen: "127.0.0.1:0".to_string(),

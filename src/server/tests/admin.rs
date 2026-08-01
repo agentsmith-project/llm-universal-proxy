@@ -190,6 +190,7 @@ async fn admin_namespace_state_sanitizes_urls_and_redacts_sensitive_headers() {
             }),
             limits: None,
             surface_defaults: None,
+            dialect: None,
         }],
         model_aliases: Default::default(),
         hooks: crate::config::HookConfig {
@@ -346,6 +347,7 @@ async fn admin_namespace_state_reports_environment_proxy_without_echoing_url() {
             proxy: None,
             limits: None,
             surface_defaults: None,
+            dialect: None,
         }],
         model_aliases: Default::default(),
         hooks: Default::default(),
@@ -457,6 +459,7 @@ async fn admin_namespace_state_reports_namespace_proxy_source() {
             proxy: None,
             limits: None,
             surface_defaults: None,
+            dialect: None,
         }],
         model_aliases: Default::default(),
         hooks: Default::default(),

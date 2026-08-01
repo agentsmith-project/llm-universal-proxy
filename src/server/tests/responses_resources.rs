@@ -1640,6 +1640,7 @@ async fn handle_openai_responses_resource_uses_upstream_state_client() {
         proxy: None,
         limits: None,
         surface_defaults: None,
+        dialect: None,
     };
     let config = crate::config::Config {
         listen: "127.0.0.1:0".to_string(),

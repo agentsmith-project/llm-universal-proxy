@@ -6617,6 +6617,7 @@ fn resolve_requested_model_or_error_requires_model_for_multi_upstream_namespace(
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             },
             crate::config::UpstreamConfig {
                 name: "b".to_string(),
@@ -6627,6 +6628,7 @@ fn resolve_requested_model_or_error_requires_model_for_multi_upstream_namespace(
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             },
         ],
         model_aliases: Default::default(),
@@ -6664,6 +6666,7 @@ fn resolve_requested_model_or_error_explains_previous_response_boundary() {
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             },
             crate::config::UpstreamConfig {
                 name: "b".to_string(),
@@ -6674,6 +6677,7 @@ fn resolve_requested_model_or_error_explains_previous_response_boundary() {
                 proxy: None,
                 limits: None,
                 surface_defaults: None,
+                dialect: None,
             },
         ],
         model_aliases: Default::default(),

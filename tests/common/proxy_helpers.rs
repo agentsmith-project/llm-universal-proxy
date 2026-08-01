@@ -19,6 +19,7 @@ pub fn proxy_config(upstream_base: &str, format: UpstreamFormat) -> Config {
             proxy: None,
             limits: None,
             surface_defaults: None,
+            dialect: None,
         }],
         model_aliases: Default::default(),
         hooks: Default::default(),

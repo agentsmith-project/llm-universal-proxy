@@ -791,6 +791,7 @@ mod tests {
             proxy: None,
             limits: None,
             surface_defaults: None,
+            dialect: None,
         }
     }
 }
