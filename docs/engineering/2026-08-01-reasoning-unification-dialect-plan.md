@@ -80,17 +80,26 @@ Fixed internal default; not user-configurable unless a later need appears (YAGNI
 
 ## 4. `dialect` config schema
 
-Optional. Add a single field to `UpstreamConfig` (`src/config.rs:604`, which is `#[serde(deny_unknown_fields)]`) and to its runtime mirror `RuntimeUpstreamConfig` (`src/config.rs:710`):
+Optional. Add a single field to `UpstreamConfig` (`src/config.rs:604`, which is `#[serde(deny_unknown_fields)]`) and to its runtime mirrors `RuntimeUpstreamConfig` (`src/config.rs:710`) and `RuntimeUpstreamConfigWire` (`src/config.rs:749`):
 
 ```rust
 #[serde(default, skip_serializing_if = "Option::is_none")]
 pub dialect: Option<UpstreamDialect>,
 ```
 
+The field accepts **two forms**, selected via a serde `untagged` enum:
+
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UpstreamDialect {
+    Preset(PresetName),     // string shorthand — a known preset, expanded at config-parse time
+    Detailed(DialectBlock), // full block — parsed directly, for custom/unknown providers
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UpstreamDialect {
+pub struct DialectBlock {
     pub reasoning: ReasoningMechanism,            // required
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_echo: Option<bool>,             // default: per-mechanism (see below)
@@ -100,11 +109,27 @@ pub struct UpstreamDialect {
 
 pub enum ReasoningMechanism { OpenAiEffort, AnthropicEffort, AnthropicThinking, AutoOnly, None }
 pub enum ReasoningLevel { None, Minimal, Low, Medium, High, Xhigh, Max, Ultra }
+pub struct PresetName(String); // validated against the §4.1 preset registry at parse time
 ```
 
+- `dialect: "<preset>"` (the `Preset` variant) — a known name from the §4.1 registry. Resolved to its `DialectBlock` by a lookup table **at config-parse time**, not by runtime provider branching.
+- `dialect: { ... }` (the `Detailed` variant) — parsed directly as a `DialectBlock` for any custom/unknown provider.
 - `reasoning` — selects the emit shape from §3.2. This is the switch that turns on Feature A's mapping for this upstream.
 - `reasoning_echo` — declares whether the provider returns `reasoning_content` / thinking blocks. When false (or unset-false), the proxy's response normalizer skips reasoning surfacing for this upstream. Default per mechanism: `openai-effort`/`anthropic-effort`/`anthropic-thinking` → `true`; `auto-only` → `true` (Qwen-style: auto-reasons but does echo `reasoning_content`); `none` → `false`.
 - `reasoning_levels` — optional ordered subset of the union declaring the provider's supported ceiling. If absent, the mechanism default from §3.2 is used. This is how a user tells the proxy "DeepSeek caps at `[low, high, max]`" without the proxy hardcoding it.
+
+### 4.1 Named presets
+
+A preset is a shipped `<provider>-<wire-format>` name that expands to a fixed `DialectBlock`. Naming convention: `<provider-lowercase>-<wire-format>`, e.g. `deepseek-openai`, `glm-anthropic`. The format suffix documents which `format:` the preset applies to and future-proofs against a provider that speaks multiple wire formats with different dialects (e.g. `glm-openai` vs `glm-anthropic`). The registry is `const` data shipped with the proxy (based on the §2 research), not runtime code branches:
+
+| Preset name | `reasoning` | `reasoning_echo` | `reasoning_levels` | For use with `format:` |
+| --- | --- | --- | --- | --- |
+| `deepseek-openai` | `openai-effort` | `true` | `[low, high, max]` | `openai-chat-completions` |
+| `glm-openai` | `openai-effort` | `true` | `[none, minimal, high, max]` | `openai-chat-completions` (coding endpoint) |
+| `glm-anthropic` | `auto-only` | `false` | — | `anthropic` |
+| `qwen-openai` | `auto-only` | `true` | — | `openai-chat-completions` |
+
+Semantics: a preset name is resolved to its `DialectBlock` once, during config parse (a lookup-table substitution). After parse there is no behavioral difference between the preset form and writing the equivalent `Detailed` block by hand. An unknown preset name is a config error. Future presets (e.g. `mistral-openai`, `kimi-openai`) are additions to the registry table only.
 
 ### Examples (grounded in the §2 research)
 
@@ -113,54 +138,55 @@ upstreams:
   DEEPSEEK:
     api_root: https://api.deepseek.com
     format: openai-chat-completions
-    dialect:
-      reasoning: openai-effort
-      reasoning_echo: true
-      reasoning_levels: [low, high, max]   # V4; minimal/medium/xhigh remapped by provider
+    dialect: deepseek-openai          # = {openai-effort, echo:true, levels:[low,high,max]} — V4
 
   GLM_CODING:
     api_root: https://open.bigmodel.cn/api/coding/paas/v4
     format: openai-chat-completions
-    dialect:
-      reasoning: openai-effort              # GLM-5.2+; older models accept only the binary toggle
-      reasoning_echo: true
-      reasoning_levels: [none, minimal, high, max]   # effectively only high vs max are distinct
+    dialect: glm-openai               # = {openai-effort, echo:true, levels:[none,minimal,high,max]}
 
   GLM_ANTHROPIC:
     api_root: https://open.bigmodel.cn/api/anthropic
     format: anthropic
-    dialect:
-      reasoning: auto-only                  # Anthropic endpoint reasoning fields are undocumented
-      reasoning_echo: false                 # thinking-block echo unconfirmed; do not surface
+    dialect: glm-anthropic            # = {auto-only, echo:false}
 
   QWEN:
     api_root: https://dashscope.aliyuncs.com/compatible-mode/v1
     format: openai-chat-completions
+    dialect: qwen-openai              # = {auto-only, echo:true}
+
+  # Custom/unknown provider — use the detailed block form
+  ACME_REASONER:
+    api_root: https://api.acme.example/v1
+    format: openai-chat-completions
     dialect:
-      reasoning: auto-only                  # enable_thinking/thinking_budget are non-standard, not translatable
-      reasoning_echo: true                  # Qwen does return reasoning_content
+      reasoning: openai-effort
+      reasoning_echo: true
+      reasoning_levels: [low, medium, high]   # provider-specific ceiling
 ```
 
-Note: the GLM_ANTHROPIC block above corrects the illustrative assumption that it speaks `anthropic-thinking`; the research in §2 shows that endpoint does not document `thinking`/`budget_tokens`/`output_config.effort`, so the honest classification is `auto-only`.
+Note: the `glm-anthropic` preset corrects the illustrative assumption that the GLM Anthropic endpoint speaks `anthropic-thinking`; the research in §2 shows that endpoint does not document `thinking`/`budget_tokens`/`output_config.effort`, so the honest classification is `auto-only` with `echo:false`.
 
 ## 5. Sequencing (TDD)
 
 Implementation order, smallest safe steps first. Every step is one PR-sized change: test first, then code, in the same change.
 
 1. **Extend the normalized model + union type (no behavior change).** Introduce `ReasoningLevel` / `ReasoningMechanism` enums and a typed `reasoning_effort` representation. Keep the existing `NormalizedRequestControls.reasoning_effort: Option<Value>` field (`src/translate/internal/models.rs:145`) as the raw value; add a parsed typed view next to it. Tests: enum parse/round-trip, ordering.
-2. **`dialect` config plumbing.** Add `UpstreamDialect` to `UpstreamConfig` + `RuntimeUpstreamConfig` + YAML load + validation (mechanism required; `reasoning_levels` must be an ordered subset of the union; reject duplicates). Tests: config parse, deny-unknown-fields, validation errors. No runtime effect yet.
+2. **`dialect` config plumbing.** Add `UpstreamDialect` to `UpstreamConfig` + `RuntimeUpstreamConfig` + `RuntimeUpstreamConfigWire` (`src/config.rs:749`) + YAML load + validation (mechanism required; `reasoning_levels` must be an ordered subset of the union; reject duplicates).
+   - **Preset registry.** Define the §4.1 lookup table as `const` data, plus the `#[serde(untagged)]` `UpstreamDialect` enum so `dialect:"deepseek-openai"` deserializes via the `PresetName` newtype and `dialect:{...}` via `DialectBlock`. A preset string is **expanded to its `DialectBlock` at config-parse time** (a lookup-table substitution) — not a runtime provider branch.
+   - Tests: both forms parse (preset string + detailed block); unknown preset name → error; deny-unknown-fields; validation errors. No runtime effect yet.
 3. **Feature B switch + Feature A emit (the core).** At the upstream-body emit sites, branch on `dialect.reasoning` when a dialect is present:
    - OpenAI Chat emit (`src/translate/internal/openai_responses.rs:1044`) and Responses emit (`:1529`, `:1905`) already forward `reasoning_effort`; extend them to apply the cap from `reasoning_levels`.
    - Add the new Anthropic emit paths (`output_config.effort` for `anthropic-effort`; `thinking`+`budget_tokens` from §3.3 for `anthropic-thinking`) where the request body is built for an Anthropic upstream. This is the new code; today reasoning_effort is warn-dropped for Anthropic targets (`src/translate/internal/assessment.rs:536`, `SharedControlProfile` at `:272`).
    - Level cap → emit `x-llmup-portability-warning` (same header channel used by existing portability warnings).
    - When `dialect` is **absent**, behavior is byte-identical to today (passthrough on OpenAI targets; warn-and-drop to Anthropic). Tests: (a) DeepSeek-dialect `ultra`→`max`+warn; (b) GLM-coding `medium` passes through to `reasoning_effort:"medium"`; (c) anthropic-effort `high`→`output_config.effort:"high"`; (d) anthropic-thinking `high`→`thinking:{type:enabled,budget_tokens:16000}`; (e) no-dialect Anthropic target still warn-drops (regression guard).
-4. **Response echo gating.** Make the existing response-side reasoning normalizers (`src/translate/internal/response_protocols.rs:100` `normalize_openai_completion_response`, `:124` `prepare_openai_message_for_claude_response`) honor `reasoning_echo`. When `reasoning_echo:false`, skip surfacing reasoning for that upstream. Default unchanged. Tests: GLM_ANTHROPIC (echo false) omits reasoning; Qwen (echo true) surfaces `reasoning_content`.
+4. **Response echo gating.** Make the existing response-side reasoning normalizers (`src/translate/internal/response_protocols.rs:100` `normalize_openai_completion_response`, `:124` `prepare_openai_message_for_claude_response`) honor `reasoning_echo`. When `reasoning_echo:false`, skip surfacing reasoning for that upstream. The Anthropic-format thinking-block response path (exercised by `tests/reasoning_test.rs:122`) also needs echo gating for `glm-anthropic`'s `echo:false`. Default unchanged. Tests: GLM_ANTHROPIC (echo false) omits reasoning; Qwen (echo true) surfaces `reasoning_content`.
 5. **`extra_body.openai.reasoning_effort` allowlist.** Relax the enum at `src/translate/internal.rs:1884` (currently `minimal`/`low`/`medium`/`high`) to the union vocabulary, reusing the `ReasoningLevel` parser from step 1. Tests: accept `xhigh`/`max`/`none`; reject unknown strings.
 6. **Integration coverage.** Add cases to `tests/reasoning_test.rs` (mock upstreams already exercise `reasoning_content`/thinking): cross-protocol `reasoning_effort` → `output_config.effort`, and cap-and-warn for `ultra`.
 
 ## 6. Non-goals (scope guard)
 
-- **No provider name branching in code.** DeepSeek/GLM/Qwen specifics are declared per-upstream via `dialect`; the proxy never matches on upstream name or API root.
+- **No provider name branching in code.** DeepSeek/GLM/Qwen specifics are declared per-upstream via `dialect`; the proxy never matches on upstream name or API root. Named presets (§4.1) are a **config-time lookup-table expansion** — a preset string is substituted by its `DialectBlock` during config parse, which is allowed and is not name branching. What remains prohibited is **runtime** `if upstream_name == "deepseek"` / API-root matching inside the request/response code paths.
 - **No new wire protocols.** No Gemini/MCP/Responses-as-a-new-client additions. The three existing `UpstreamFormat` values (`src/formats.rs:8`) are the only targets.
 - **No interface change for existing configs.** Any config without a `dialect` block must behave exactly as today (no new warnings, no new drops, no new fields required).
 - **No Qwen `enable_thinking`/`thinking_budget` emission.** Those are non-standard and model-specific; mapping unified effort to them is out of scope. Qwen is classified `auto-only`. (A generic `enable-thinking-budget` mechanism is deferred until a second provider needs it — YAGNI.)
