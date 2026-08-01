@@ -125,6 +125,29 @@ pub fn build_codex_model_catalog_for_profiles(
     Ok(payload)
 }
 
+/// Build a Codex-shaped `ModelsResponse { models: [...] }` catalog covering
+/// every resolvable model alias in `config`, for serving over HTTP when the
+/// client is Codex (User-Agent contains "codex"). Each alias is resolved
+/// independently through the shared `codex_catalog_entry` builder so the
+/// `ModelInfo` shape stays defined in one place; aliases that fail to resolve
+/// (e.g. `max_output_tokens >= context_window`) are skipped rather than
+/// failing the whole endpoint. This is the HTTP analogue of
+/// `build_codex_model_catalog_for_profiles` (which the file-based launcher
+/// uses): HTTP callers get the same richness file-side callers get.
+pub fn build_codex_model_catalog_for_config(config: &Config) -> Value {
+    let models = config
+        .model_aliases
+        .keys()
+        .filter_map(|alias| AgentModelProfile::from_config(config, alias).ok())
+        .filter_map(|profile| codex_catalog_entry(&profile).ok().map(Value::Object))
+        .collect::<Vec<_>>();
+    let payload = json!({ "models": models });
+    // Best-effort guard against leaking reserved internal tool artifacts; a
+    // failure here does not break the HTTP endpoint.
+    let _ = reject_internal_tool_artifacts(&payload, "codex model catalog");
+    payload
+}
+
 fn codex_catalog_entry(profile: &AgentModelProfile) -> Result<Map<String, Value>, String> {
     let mut entry = default_codex_catalog_entry(&profile.alias);
     let codex_auto_compact_token_limit =

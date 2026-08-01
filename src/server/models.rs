@@ -22,26 +22,28 @@ const PUBLIC_MODEL_NAMESPACE: &str = "llmup";
 pub(super) async fn handle_openai_models(
     State(_state): State<Arc<AppState>>,
     auth_context: Option<Extension<RequestAuthContext>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let Some(auth_context) = data_auth::request_auth_context_from_extension(auth_context) else {
         return data_auth::missing_request_auth_context_response(
             UpstreamFormat::OpenAiChatCompletions,
         );
     };
-    handle_openai_models_inner(&auth_context, DEFAULT_NAMESPACE).await
+    handle_openai_models_inner(&auth_context, DEFAULT_NAMESPACE, &headers).await
 }
 
 pub(super) async fn handle_openai_models_namespaced(
     State(_state): State<Arc<AppState>>,
     Path(namespace): Path<String>,
     auth_context: Option<Extension<RequestAuthContext>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let Some(auth_context) = data_auth::request_auth_context_from_extension(auth_context) else {
         return data_auth::missing_request_auth_context_response(
             UpstreamFormat::OpenAiChatCompletions,
         );
     };
-    handle_openai_models_inner(&auth_context, &namespace).await
+    handle_openai_models_inner(&auth_context, &namespace, &headers).await
 }
 
 pub(super) async fn handle_openai_model(
@@ -73,22 +75,24 @@ pub(super) async fn handle_openai_model_namespaced(
 pub(super) async fn handle_anthropic_models(
     State(_state): State<Arc<AppState>>,
     auth_context: Option<Extension<RequestAuthContext>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let Some(auth_context) = data_auth::request_auth_context_from_extension(auth_context) else {
         return data_auth::missing_request_auth_context_response(UpstreamFormat::Anthropic);
     };
-    handle_anthropic_models_inner(&auth_context, DEFAULT_NAMESPACE).await
+    handle_anthropic_models_inner(&auth_context, DEFAULT_NAMESPACE, &headers).await
 }
 
 pub(super) async fn handle_anthropic_models_namespaced(
     State(_state): State<Arc<AppState>>,
     Path(namespace): Path<String>,
     auth_context: Option<Extension<RequestAuthContext>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let Some(auth_context) = data_auth::request_auth_context_from_extension(auth_context) else {
         return data_auth::missing_request_auth_context_response(UpstreamFormat::Anthropic);
     };
-    handle_anthropic_models_inner(&auth_context, &namespace).await
+    handle_anthropic_models_inner(&auth_context, &namespace, &headers).await
 }
 
 pub(super) async fn handle_anthropic_model(
@@ -116,14 +120,18 @@ pub(super) async fn handle_anthropic_model_namespaced(
 async fn handle_openai_models_inner(
     auth_context: &RequestAuthContext,
     namespace: &str,
+    headers: &HeaderMap,
 ) -> Response<Body> {
     let request_redactor = redactor_for_model_request(auth_context);
     match namespace_config(auth_context, namespace) {
-        Some(config) => redacted_json_response(
-            StatusCode::OK,
-            openai_model_list(&config),
-            &request_redactor,
-        ),
+        Some(config) => {
+            let body = if is_codex_user_agent(headers) {
+                codex_models_catalog(&config)
+            } else {
+                openai_model_list(&config)
+            };
+            redacted_json_response(StatusCode::OK, body, &request_redactor)
+        }
         None => redacted_error_response(
             UpstreamFormat::OpenAiChatCompletions,
             StatusCode::NOT_FOUND,
@@ -161,14 +169,18 @@ async fn handle_openai_model_inner(
 async fn handle_anthropic_models_inner(
     auth_context: &RequestAuthContext,
     namespace: &str,
+    headers: &HeaderMap,
 ) -> Response<Body> {
     let request_redactor = redactor_for_model_request(auth_context);
     match namespace_config(auth_context, namespace) {
-        Some(config) => redacted_json_response(
-            StatusCode::OK,
-            anthropic_model_list(&config),
-            &request_redactor,
-        ),
+        Some(config) => {
+            let body = if is_codex_user_agent(headers) {
+                codex_models_catalog(&config)
+            } else {
+                anthropic_model_list(&config)
+            };
+            redacted_json_response(StatusCode::OK, body, &request_redactor)
+        }
         None => redacted_error_response(
             UpstreamFormat::Anthropic,
             StatusCode::NOT_FOUND,
@@ -284,6 +296,25 @@ fn public_model_metadata(
         "surface": surface,
     });
     (limits, surface, metadata)
+}
+
+/// Codex CLI (and clients whose User-Agent contains "codex") fetch `/models`
+/// and expect `ModelsResponse { models: [ModelInfo] }` rather than the
+/// standard OpenAI `{object:"list", data:[...]}` shape. See
+/// `docs/engineering/2026-08-01-codex-compat-feedback-plan.md` §3 P2.
+fn is_codex_user_agent(headers: &HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|ua| ua.to_ascii_lowercase().contains("codex"))
+}
+
+/// Build the Codex `ModelsResponse { models: [...] }` body for `config` by
+/// reusing the shared catalog builder (`build_codex_model_catalog_for_config`),
+/// which produces `ModelInfo`-shaped entries from the runtime config's model
+/// aliases + their merged `surface_defaults`/`limits` metadata.
+fn codex_models_catalog(config: &Config) -> Value {
+    crate::user_tools::agent_model_profile::build_codex_model_catalog_for_config(config)
 }
 
 fn openai_model_list(config: &Config) -> Value {

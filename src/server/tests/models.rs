@@ -311,6 +311,7 @@ async fn anthropic_models_list_and_object_promote_effective_limits_from_llmup_li
     let response = crate::server::models::handle_anthropic_models(
         State(state.clone()),
         Some(axum::Extension(auth_context)),
+        HeaderMap::new(),
     )
     .await
     .into_response();
@@ -356,6 +357,7 @@ async fn anthropic_models_omit_top_level_limit_fields_without_effective_values()
     let response = crate::server::models::handle_anthropic_models(
         State(state),
         Some(axum::Extension(auth_context)),
+        HeaderMap::new(),
     )
     .await
     .into_response();
@@ -445,6 +447,7 @@ async fn openai_models_do_not_expose_anthropic_top_level_limit_fields() {
     let response = crate::server::models::handle_openai_models(
         State(state.clone()),
         Some(axum::Extension(auth_context)),
+        HeaderMap::new(),
     )
     .await
     .into_response();
@@ -495,6 +498,7 @@ async fn protected_openai_models_use_request_runtime_snapshot_after_auth_race() 
     let response = crate::server::models::handle_openai_models(
         State(state),
         Some(axum::Extension(auth_context)),
+        HeaderMap::new(),
     )
     .await
     .into_response();
@@ -540,6 +544,7 @@ async fn openai_models_list_redacts_alias_and_metadata_known_secrets() {
     let response = crate::server::models::handle_openai_models(
         State(proxy_state),
         Some(axum::Extension(proxy_auth_context)),
+        HeaderMap::new(),
     )
     .await
     .into_response();
@@ -595,6 +600,7 @@ async fn openai_models_list_redacts_alias_and_metadata_known_secrets() {
     let response = crate::server::models::handle_openai_models(
         State(client_state),
         Some(axum::Extension(client_auth_context)),
+        HeaderMap::new(),
     )
     .await
     .into_response();
@@ -665,5 +671,163 @@ async fn openai_model_not_found_redacts_client_and_server_keys() {
         &body_text,
         &[CLIENT_PROVIDER_REDACTION_SECRET],
         "OpenAI model not found client key",
+    );
+}
+
+fn header_map_with_user_agent(user_agent: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::USER_AGENT,
+        HeaderValue::from_str(user_agent).expect("test user-agent header value"),
+    );
+    headers
+}
+
+/// Assert a single Codex `ModelInfo` entry carries every required field pinned
+/// by `codex-rs/protocol/src/openai_models.rs:368-452` (`slug`, `display_name`,
+/// `supported_reasoning_levels`, `shell_type`, `visibility`, `supported_in_api`,
+/// `priority`, `base_instructions`, `truncation_policy`), plus the
+/// surface-derived `context_window` (richness parity with the file catalog).
+fn assert_codex_model_info_has_required_fields(model: &Value, expected_slug: &str) {
+    assert_eq!(model["slug"], expected_slug, "model = {model:?}");
+    assert_eq!(model["display_name"], expected_slug, "model = {model:?}");
+    assert!(
+        model["supported_reasoning_levels"].is_array(),
+        "model = {model:?}"
+    );
+    assert!(model["shell_type"].is_string(), "model = {model:?}");
+    assert!(model["visibility"].is_string(), "model = {model:?}");
+    assert_eq!(model["supported_in_api"], true, "model = {model:?}");
+    assert!(model["priority"].is_i64(), "model = {model:?}");
+    assert!(model["base_instructions"].is_string(), "model = {model:?}");
+    assert!(
+        model.get("truncation_policy").is_some(),
+        "model = {model:?}"
+    );
+    assert_eq!(model["context_window"], 200_000, "model = {model:?}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn openai_models_return_codex_catalog_for_codex_user_agent() {
+    let state = state_for_models_config(
+        models_catalog_metadata_config(
+            "ds-flash",
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        ),
+        data_auth::DataAccess::ClientProviderKey,
+    )
+    .await;
+    let auth_context = client_mode_models_auth_context(&state).await;
+
+    let response = crate::server::models::handle_openai_models(
+        State(state),
+        Some(axum::Extension(auth_context)),
+        header_map_with_user_agent("codex/0.146.0"),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = models_response_json(response).await;
+    // Codex expects ModelsResponse { models: [...] }, NOT OpenAI list shape.
+    assert!(
+        body.get("object").is_none(),
+        "Codex shape must omit `object`: {body}"
+    );
+    assert!(
+        body.get("data").is_none(),
+        "Codex shape must omit `data`: {body}"
+    );
+    let models = body["models"]
+        .as_array()
+        .expect("Codex ModelsResponse `models` array");
+    let model = models
+        .iter()
+        .find(|entry| entry["slug"].as_str() == Some("ds-flash"))
+        .expect("ds-flash ModelInfo entry");
+    assert_codex_model_info_has_required_fields(model, "ds-flash");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_models_return_codex_catalog_for_codex_user_agent() {
+    let state = state_for_models_config(
+        models_catalog_metadata_config("haiku", crate::formats::UpstreamFormat::Anthropic),
+        data_auth::DataAccess::ClientProviderKey,
+    )
+    .await;
+    let auth_context = client_mode_models_auth_context(&state).await;
+
+    let response = crate::server::models::handle_anthropic_models(
+        State(state),
+        Some(axum::Extension(auth_context)),
+        header_map_with_user_agent("codex-cli/0.146 (codex)"),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = models_response_json(response).await;
+    assert!(
+        body.get("data").is_none(),
+        "Codex shape must omit Anthropic `data`: {body}"
+    );
+    let models = body["models"]
+        .as_array()
+        .expect("Codex ModelsResponse `models` array");
+    let model = models
+        .iter()
+        .find(|entry| entry["slug"].as_str() == Some("haiku"))
+        .expect("haiku ModelInfo entry");
+    assert_codex_model_info_has_required_fields(model, "haiku");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn openai_models_return_standard_shape_for_non_codex_user_agent() {
+    let state = state_for_models_config(
+        models_catalog_metadata_config(
+            "sonnet",
+            crate::formats::UpstreamFormat::OpenAiChatCompletions,
+        ),
+        data_auth::DataAccess::ClientProviderKey,
+    )
+    .await;
+    let auth_context = client_mode_models_auth_context(&state).await;
+
+    // A non-Codex User-Agent must keep today's standard OpenAI shape verbatim.
+    let response = crate::server::models::handle_openai_models(
+        State(state.clone()),
+        Some(axum::Extension(auth_context)),
+        header_map_with_user_agent("python-openai/1.50"),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = models_response_json(response).await;
+    assert_eq!(body["object"], "list", "{body}");
+    assert!(body["data"].is_array(), "{body}");
+    assert!(
+        body.get("models").is_none(),
+        "non-Codex UA must not return Codex shape: {body}"
+    );
+    let model = model_by_id(&body, "sonnet");
+    assert_eq!(model["object"], "model", "{model:?}");
+
+    // Absent User-Agent (HeaderMap::new()) is also non-Codex -> standard shape.
+    let auth_context = client_mode_models_auth_context(&state).await;
+    let response = crate::server::models::handle_openai_models(
+        State(state),
+        Some(axum::Extension(auth_context)),
+        HeaderMap::new(),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = models_response_json(response).await;
+    assert_eq!(body["object"], "list", "{body}");
+    assert!(
+        body.get("models").is_none(),
+        "absent UA must not return Codex shape: {body}"
     );
 }
