@@ -63,6 +63,62 @@ fn openai_chunk_to_responses_sse_allocates_unique_output_indices_per_item_kind()
 }
 
 #[test]
+fn openai_chunk_to_responses_sse_propagates_model_to_created_and_terminal() {
+    // The OpenAI->Claude streaming sink reads chunk["model"]; the
+    // OpenAI->Responses sink must do the same and surface it on the
+    // synthesized response.created and terminal response objects, mirroring
+    // the model field the non-streaming path carries. Inputs constructed
+    // directly; no process-global env touched.
+    let mut state = StreamState::default();
+    let text_chunk = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "model": "gpt-4o-2024",
+        "created": 123,
+        "choices": [{ "index": 0, "delta": { "content": "Hi" }, "finish_reason": null }]
+    });
+    let finish_chunk = serde_json::json!({
+        "id": "chatcmpl-msg123",
+        "model": "gpt-4o-2024",
+        "created": 123,
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+    });
+
+    let events = openai_chunk_to_responses_sse(&text_chunk, &mut state)
+        .into_iter()
+        .chain(openai_chunk_to_responses_sse(&finish_chunk, &mut state))
+        .map(|bytes| parse_sse_json(&bytes))
+        .collect::<Vec<_>>();
+
+    let created = events
+        .iter()
+        .find(|event| event.get("type").and_then(Value::as_str) == Some("response.created"))
+        .expect("response.created event");
+    assert_eq!(
+        created["response"]["model"].as_str(),
+        Some("gpt-4o-2024"),
+        "response.created missing upstream model: {created}"
+    );
+
+    let terminal = events
+        .iter()
+        .find(|event| {
+            matches!(
+                event.get("type").and_then(Value::as_str),
+                Some("response.completed")
+                    | Some("response.incomplete")
+                    | Some("response.failed")
+            )
+        })
+        .expect("terminal response event");
+    assert_eq!(
+        terminal["response"]["model"].as_str(),
+        Some("gpt-4o-2024"),
+        "terminal response missing upstream model: {terminal}"
+    );
+    assert_eq!(state.model.as_deref(), Some("gpt-4o-2024"));
+}
+
+#[test]
 fn openai_chat_stream_to_responses_allocates_distinct_output_indices_for_reasoning_message_and_tool_calls(
 ) {
     let mut state = StreamState::default();

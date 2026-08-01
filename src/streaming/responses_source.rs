@@ -6,6 +6,18 @@ pub(super) fn responses_failed_code_to_openai_finish_stream(code: Option<&str>) 
     responses_failed_code_to_openai_finish(code)
 }
 
+/// Propagate the Responses `response.model` into the stream state so every
+/// emitted OpenAI chunk carries it (mirroring the non-streaming
+/// `responses_response_to_openai` path which propagates `body["model"]`).
+/// Falls back to `"unknown"` only when no model is known at all.
+fn capture_responses_model(resp: &Value, state: &mut StreamState) {
+    match resp.get("model").and_then(Value::as_str) {
+        Some(model) => state.model = Some(model.to_string()),
+        None if state.model.is_none() => state.model = Some("unknown".to_string()),
+        None => {}
+    }
+}
+
 fn finalize_custom_tool_call_bridge_delta(
     tool_call: &mut ToolCallState,
     full_input: &str,
@@ -86,7 +98,7 @@ pub fn responses_event_to_openai_chunks(event: &Value, state: &mut StreamState) 
     if ty == "response.created" {
         let resp = event.get("response").unwrap_or(event);
         state.message_id = resp.get("id").and_then(Value::as_str).map(String::from);
-        state.model = Some("unknown".to_string());
+        capture_responses_model(resp, state);
         emit_openai_assistant_role_if_needed(state, &mut out);
         return out;
     }
@@ -329,6 +341,7 @@ pub fn responses_event_to_openai_chunks(event: &Value, state: &mut StreamState) 
     if ty == "response.completed" || ty == "response.incomplete" || ty == "response.failed" {
         out.extend(responses_terminal_custom_tool_bridge_chunk(event, state));
         if let Some(resp) = event.get("response") {
+            capture_responses_model(resp, state);
             if let Some(u) = resp.get("usage") {
                 state.usage = Some(responses_usage_to_openai_usage_stream(u));
             }

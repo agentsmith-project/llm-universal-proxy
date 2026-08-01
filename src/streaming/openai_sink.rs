@@ -773,6 +773,7 @@ pub(super) fn emit_openai_responses_terminal(
         "id": response_id,
         "object": "response",
         "created_at": created,
+        "model": state.model,
         "status": if failed_error.is_some() {
             "failed"
         } else if incomplete_reason.is_some() {
@@ -1396,6 +1397,19 @@ pub(super) fn openai_chunk_to_responses_sse(
         .or(state.message_id.as_deref());
     let response_id = state.responses_response_id(upstream_response_id);
 
+    // Capture the upstream model on the first chunk that carries it (same
+    // source the OpenAI->Claude sink and the non-streaming OpenAI->Responses
+    // path use) so synthesized Responses objects can surface it.
+    if state.model.is_none() {
+        if let Some(model) = choice
+            .and_then(|c| c.get("model"))
+            .or(chunk.get("model"))
+            .and_then(Value::as_str)
+        {
+            state.model = Some(model.to_string());
+        }
+    }
+
     if !state.responses_started {
         state.responses_started = true;
         state.responses_completed_message_items.clear();
@@ -1413,6 +1427,7 @@ pub(super) fn openai_chunk_to_responses_sse(
                 "object": "response",
                 "created_at": created,
                 "status": "in_progress",
+                "model": state.model,
                 "background": false,
                 "error": null,
                 "incomplete_details": null,

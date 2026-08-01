@@ -64,6 +64,69 @@ fn responses_event_created_inits_state_and_emits_role_chunk() {
 }
 
 #[test]
+fn responses_stream_propagates_response_model_to_every_openai_chunk() {
+    // The non-streaming path (responses_response_to_openai) propagates
+    // body["model"]; the streaming path must do the same instead of
+    // hardcoding "unknown". Inputs are constructed directly; no env touched.
+    let created = serde_json::json!({
+        "type": "response.created",
+        "response": {
+            "id": "resp_abc",
+            "object": "response",
+            "status": "in_progress",
+            "model": "gpt-4o-2024"
+        }
+    });
+    let delta = serde_json::json!({
+        "type": "response.output_text.delta",
+        "delta": "hi",
+        "output_index": 0
+    });
+    let completed = serde_json::json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_abc",
+            "status": "completed",
+            "model": "gpt-4o-2024",
+            "usage": { "input_tokens": 1, "output_tokens": 2 }
+        }
+    });
+    let mut state = StreamState::default();
+    let mut chunks = Vec::new();
+    chunks.extend(responses_event_to_openai_chunks(&created, &mut state));
+    chunks.extend(responses_event_to_openai_chunks(&delta, &mut state));
+    chunks.extend(responses_event_to_openai_chunks(&completed, &mut state));
+
+    assert!(!chunks.is_empty(), "expected at least one emitted chunk");
+    assert_eq!(state.model.as_deref(), Some("gpt-4o-2024"));
+    for chunk in &chunks {
+        assert_ne!(
+            chunk["model"].as_str(),
+            Some("unknown"),
+            "streaming chunk hardcoded unknown model: {chunk}"
+        );
+        assert_eq!(
+            chunk["model"].as_str(),
+            Some("gpt-4o-2024"),
+            "streaming chunk did not carry response model: {chunk}"
+        );
+    }
+}
+
+#[test]
+fn responses_stream_without_model_falls_back_to_unknown() {
+    let created = serde_json::json!({
+        "type": "response.created",
+        "response": { "id": "resp_abc", "object": "response", "status": "in_progress" }
+    });
+    let mut state = StreamState::default();
+    let chunks = responses_event_to_openai_chunks(&created, &mut state);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0]["model"].as_str(), Some("unknown"));
+    assert_eq!(state.model.as_deref(), Some("unknown"));
+}
+
+#[test]
 fn responses_reasoning_delta_produces_openai_reasoning_chunk() {
     let event = serde_json::json!({
         "type": "response.reasoning_summary_text.delta",
