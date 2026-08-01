@@ -1151,15 +1151,26 @@ async fn handle_request_core_with_downstream_cancellation(
     // Step 3: resolve the upstream's reasoning dialect (if any) and the client's normalized
     // reasoning effort up front. Both feed the body-mutation gate below and the dialect-aware
     // reasoning emit pass applied to the final upstream body. When no dialect is configured,
-    // `dialect_reasoning_emit_applies` is false and every downstream branch is unchanged.
+    // `dialect_reasoning_emit_applies` and `dialect_echo_suppresses` are false and every
+    // downstream branch is unchanged.
     let resolved_dialect = upstream_state
         .config
         .dialect
         .as_ref()
         .and_then(|dialect| dialect.resolve().ok());
-    let client_reasoning_effort =
-        crate::translate::parse_client_reasoning_effort(&original_body, client_format);
-    let dialect_reasoning_emit_applies = resolved_dialect.is_some() && client_reasoning_effort.is_some();
+    // The client's reasoning effort only matters when a dialect is configured (it feeds the
+    // dialect-aware emit pass below), so skip parsing on the no-dialect hot path.
+    let client_reasoning_effort = resolved_dialect
+        .as_ref()
+        .and_then(|_| crate::translate::parse_client_reasoning_effort(&original_body, client_format));
+    let dialect_reasoning_emit_applies = client_reasoning_effort.is_some();
+    // Symmetric with the emit gate: when the dialect suppresses the reasoning echo
+    // (`reasoning_echo: Some(false)`), force the JSON/translate path regardless of whether the
+    // client sent a reasoning effort, so the response reaches `translate_response_with_context`
+    // where the echo strip happens. Without this, a no-effort same-format request would take the
+    // raw-passthrough path and surface thinking/reasoning_content despite echo:false.
+    let dialect_echo_suppresses =
+        resolved_dialect.as_ref().and_then(|d| d.reasoning_echo) == Some(false);
 
     let mut llmup = classify_request_processing(RequestProcessingInput {
         client_format,
@@ -1173,7 +1184,8 @@ async fn handle_request_core_with_downstream_cancellation(
             upstream_format,
             &original_body,
             &request_translation_policy,
-        ) || dialect_reasoning_emit_applies,
+        ) || dialect_reasoning_emit_applies
+            || dialect_echo_suppresses,
         state_bridge,
     });
     tracker.set_request_processing(llmup);

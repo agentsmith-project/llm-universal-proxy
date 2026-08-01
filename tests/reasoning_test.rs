@@ -1205,3 +1205,72 @@ async fn dialect_echo_true_surfaces_reasoning_content_end_to_end() {
         "reasoning_content must surface when reasoning_echo is true: {body:?}"
     );
 }
+
+#[tokio::test]
+async fn dialect_echo_false_strips_thinking_on_same_format_passthrough_without_client_effort() {
+    // M1: same-format Anthropic→Anthropic with reasoning_echo:false must strip thinking from the
+    // response even when the client sends NO reasoning effort. The echo-suppression gate must
+    // force the JSON/translate path (rather than raw passthrough) so the response reaches the
+    // echo strip. Without the symmetric gate, thinking leaks to the client despite echo:false.
+    let (mock_base, _mock) = spawn_anthropic_thinking_mock().await;
+    let dialect = detailed_dialect(ReasoningMechanism::AutoOnly, Some(false), None);
+    let config =
+        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = authenticated_reqwest_client();
+    let res = client
+        .post(format!("{proxy_base}/anthropic/v1/messages"))
+        .json(&json!({
+            "model": "claude-3",
+            "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let body: Value = res.json().await.unwrap();
+    let content = body["content"].as_array().expect("anthropic content array");
+    assert!(
+        content.iter().all(|block| block["type"] != "thinking"),
+        "thinking must be stripped when reasoning_echo is false on same-format passthrough without effort: {body:?}"
+    );
+    assert!(
+        content.iter().any(|block| block["type"] == "text" && block["text"] == "Hi"),
+        "text block must remain after echo strip: {body:?}"
+    );
+}
+
+#[tokio::test]
+async fn dialect_echo_true_surfaces_thinking_on_same_format_passthrough_without_client_effort() {
+    // M1 regression complement: with reasoning_echo:true, thinking surfaces normally on
+    // same-format passthrough even when the client sends NO reasoning effort — the echo gate
+    // must not over-suppress when echo is not disabled.
+    let (mock_base, _mock) = spawn_anthropic_thinking_mock().await;
+    let dialect = detailed_dialect(ReasoningMechanism::AutoOnly, Some(true), None);
+    let config =
+        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = authenticated_reqwest_client();
+    let res = client
+        .post(format!("{proxy_base}/anthropic/v1/messages"))
+        .json(&json!({
+            "model": "claude-3",
+            "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let body: Value = res.json().await.unwrap();
+    let content = body["content"].as_array().expect("anthropic content array");
+    assert!(
+        content.iter().any(|block| block["type"] == "thinking"),
+        "thinking must surface when reasoning_echo is true on same-format passthrough: {body:?}"
+    );
+}

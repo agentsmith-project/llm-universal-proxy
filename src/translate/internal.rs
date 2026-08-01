@@ -787,6 +787,8 @@ impl ResponseTranslationContext {
     }
 
     /// Whether reasoning content must be stripped from the translated response for this upstream.
+    // TODO: streaming responses are not yet echo-gated; echo:false only suppresses non-streaming
+    // responses today.
     pub(crate) fn suppress_reasoning(&self) -> bool {
         self.reasoning_echo == Some(false)
     }
