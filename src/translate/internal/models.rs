@@ -167,15 +167,9 @@ pub(crate) struct NormalizedOpenAiFamilyCustomTool {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct NormalizedOpenAiFamilyNamespaceTool {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum NormalizedOpenAiFamilyToolDef {
     Function(NormalizedOpenAiFamilyFunctionTool),
     Custom(NormalizedOpenAiFamilyCustomTool),
-    Namespace(NormalizedOpenAiFamilyNamespaceTool),
 }
 
 #[derive(Debug, Clone, PartialEq)]

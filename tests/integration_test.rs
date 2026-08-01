@@ -8030,7 +8030,7 @@ async fn responses_namespace_tools_warn_and_omit_emits_portability_header() {
         "portable function tool should survive translation: {upstream_tool_names:?}"
     );
     assert!(
-        !upstream_tool_names.iter().any(|name| *name == "spawn_agent"),
+        !upstream_tool_names.contains(&"spawn_agent"),
         "namespaced nested tool should be omitted from upstream: {upstream_tool_names:?}"
     );
 }

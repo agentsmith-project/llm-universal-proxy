@@ -916,7 +916,6 @@ pub(crate) fn request_scoped_openai_custom_bridge_conflict_name(
             NormalizedOpenAiFamilyToolDef::Custom(custom) => {
                 custom_names.insert(custom.name.clone());
             }
-            NormalizedOpenAiFamilyToolDef::Namespace(_) => {}
         }
     }
     function_names
@@ -1271,8 +1270,7 @@ pub(crate) fn normalized_responses_tool_definition(
         // are warn-and-omit: they fall through to the `Ok(None)` non-function path used by
         // `web_search` / `computer`, so the existing warn-and-omit pipeline drops them from
         // the translated `tools` array and emits an `x-llmup-portability-warning` header
-        // (PRD §2.4 row "Built-in / non-function tools" + §2.6). The `Namespace` classifier
-        // variant remains below as a guarded seam for the deferred reversible namespace bridge.
+        // (PRD §2.4 row "Built-in / non-function tools" + §2.6).
         _ => Ok(None),
     }
 }
@@ -1375,10 +1373,6 @@ pub(crate) fn normalized_tool_definition_to_openai(
                 "custom": Value::Object(payload)
             }))
         }
-        NormalizedOpenAiFamilyToolDef::Namespace(namespace) => Err(format!(
-            "OpenAI Responses namespace tool `{}` cannot be faithfully translated to OpenAI Chat Completions",
-            namespace.name
-        )),
     }
 }
 
@@ -1449,10 +1443,6 @@ pub(crate) fn normalized_tool_definition_to_responses(
             }
             Value::Object(payload)
         }
-        NormalizedOpenAiFamilyToolDef::Namespace(namespace) => serde_json::json!({
-            "type": "namespace",
-            "name": namespace.name
-        }),
     }
 }
 

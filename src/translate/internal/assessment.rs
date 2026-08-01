@@ -762,19 +762,9 @@ pub(super) fn responses_nonportable_tool_choice_message(
     }
 }
 
-pub(super) fn responses_nonportable_tool_definition_message(
-    body: &Value,
-    target_label: &str,
-) -> Option<String> {
+pub(super) fn responses_nonportable_tool_definition_message(body: &Value) -> Option<String> {
     let tools = body.get("tools").and_then(Value::as_array)?;
-    tools.iter().find_map(|tool| match normalized_responses_tool_definition(tool) {
-        Ok(Some(NormalizedOpenAiFamilyToolDef::Namespace(namespace))) => Some(format!(
-            "OpenAI Responses namespace tool `{}` cannot be faithfully translated to {target_label}",
-            namespace.name
-        )),
-        Err(message) => Some(message),
-        _ => None,
-    })
+    tools.iter().find_map(|tool| normalized_responses_tool_definition(tool).err())
 }
 
 pub(super) fn responses_has_warning_only_nonportable_tool_definitions(body: &Value) -> bool {
@@ -2453,10 +2443,7 @@ pub(crate) fn assess_request_translation_with_dialect(
         if let Some(message) = responses_nonportable_input_item_message(body, upstream_format) {
             assessment.reject(message);
         }
-        if let Some(message) = responses_nonportable_tool_definition_message(
-            body,
-            translation_target_label(upstream_format),
-        ) {
+        if let Some(message) = responses_nonportable_tool_definition_message(body) {
             assessment.reject(message);
         } else if responses_has_warning_only_nonportable_tool_definitions(body) {
             assessment.warning(format!(
