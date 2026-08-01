@@ -733,7 +733,7 @@ use openai_responses::{
 };
 use response_protocols::{
     is_minimax_model, normalize_openai_completion_response, openai_message_reasoning_text,
-    openai_response_to_claude,
+    openai_response_to_claude, strip_openai_completion_reasoning, strip_response_reasoning,
 };
 use tools::{
     anthropic_tool_use_type_for_openai_tool_call, copy_non_replayable_tool_call_marker,
@@ -760,6 +760,10 @@ use tools::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResponseTranslationContext {
     request_scoped_tool_bridge_context: Option<tools::ToolBridgeContext>,
+    /// The resolved `reasoning_echo` of the upstream's dialect, if a dialect is configured.
+    /// When `Some(false)` the proxy must not surface reasoning in the translated response;
+    /// every other value (including `None`, i.e. no dialect) leaves reasoning surfaced as today.
+    reasoning_echo: Option<bool>,
 }
 
 impl ResponseTranslationContext {
@@ -770,8 +774,21 @@ impl ResponseTranslationContext {
         self
     }
 
+    /// Carry the upstream dialect's resolved `reasoning_echo` into the response layer. Only an
+    /// explicit `Some(false)` suppresses reasoning surfacing; `None` (no dialect) and `Some(true)`
+    /// leave the response unchanged.
+    pub fn with_reasoning_echo(mut self, value: Option<bool>) -> Self {
+        self.reasoning_echo = value;
+        self
+    }
+
     fn request_scoped_tool_bridge_context(&self) -> Option<&tools::ToolBridgeContext> {
         self.request_scoped_tool_bridge_context.as_ref()
+    }
+
+    /// Whether reasoning content must be stripped from the translated response for this upstream.
+    pub(crate) fn suppress_reasoning(&self) -> bool {
+        self.reasoning_echo == Some(false)
     }
 }
 
@@ -805,10 +822,14 @@ pub fn translate_response_with_context(
 
     if upstream_format == client_format {
         validate_public_response_tool_names(client_format, body)?;
-        return Ok(body.clone());
+        let mut out = body.clone();
+        if context.suppress_reasoning() {
+            strip_response_reasoning(client_format, &mut out);
+        }
+        return Ok(out);
     }
     let bridge_context = context.request_scoped_tool_bridge_context();
-    let openai = if upstream_format == UpstreamFormat::Anthropic
+    let mut openai = if upstream_format == UpstreamFormat::Anthropic
         && client_format == UpstreamFormat::OpenAiResponses
     {
         claude_response_to_openai_with_reasoning_replay(body, bridge_context)?
@@ -819,6 +840,11 @@ pub fn translate_response_with_context(
     } else {
         upstream_response_to_openai(upstream_format, body, bridge_context)?
     };
+    // Step 4: when the upstream dialect declares `reasoning_echo: Some(false)`, strip reasoning
+    // from the OpenAI pivot before it can surface in any client shape (Chat/Responses/Anthropic).
+    if context.suppress_reasoning() {
+        strip_openai_completion_reasoning(&mut openai);
+    }
     if client_format == UpstreamFormat::OpenAiChatCompletions {
         return Ok(openai);
     }
@@ -1883,12 +1909,14 @@ fn validated_anthropic_extra_body_openai_controls(
 
     let reasoning_effort = if let Some(reasoning_effort) = object.get("reasoning_effort") {
         match reasoning_effort.as_str() {
-            Some("minimal" | "low" | "medium" | "high") => Some(reasoning_effort.clone()),
-            Some(_) => {
-                return Err(anthropic_extra_body_openai_controls_message(
-                    "extra_body.openai.reasoning_effort must be one of \"minimal\", \"low\", \"medium\", or \"high\"",
-                ));
-            }
+            Some(s) => match crate::config::ReasoningLevel::parse(s) {
+                Ok(_) => Some(Value::String(s.to_string())),
+                Err(_) => {
+                    return Err(anthropic_extra_body_openai_controls_message(
+                        "extra_body.openai.reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra",
+                    ));
+                }
+            },
             None => {
                 return Err(anthropic_extra_body_openai_controls_message(
                     "extra_body.openai.reasoning_effort must be a string",
@@ -1908,7 +1936,7 @@ fn validated_anthropic_extra_body_openai_controls(
 
 fn anthropic_extra_body_openai_controls_message(detail: &str) -> String {
     format!(
-        "extra_body.openai supports non-empty string `prompt_cache_key`, optional `prompt_cache_retention`: \"in_memory\" or \"24h\", and optional `reasoning_effort`: \"minimal\", \"low\", \"medium\", or \"high\"; {detail}"
+        "extra_body.openai supports non-empty string `prompt_cache_key`, optional `prompt_cache_retention`: \"in_memory\" or \"24h\", and optional `reasoning_effort`: one of none, minimal, low, medium, high, xhigh, max, ultra; {detail}"
     )
 }
 

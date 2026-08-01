@@ -1,11 +1,22 @@
 //! Shared proxy configuration helpers for integration tests.
 
 use super::runtime_proxy::upstream_api_root;
-use llm_universal_proxy::config::{Config, DebugTraceConfig, ProxyConfig, UpstreamConfig};
+use llm_universal_proxy::config::{
+    Config, DebugTraceConfig, ProxyConfig, UpstreamConfig, UpstreamDialect,
+};
 use llm_universal_proxy::formats::UpstreamFormat;
 use std::time::Duration;
 
 pub fn proxy_config(upstream_base: &str, format: UpstreamFormat) -> Config {
+    proxy_config_with_dialect(upstream_base, format, None)
+}
+
+/// Like [`proxy_config`] but attaches a reasoning `dialect` to the default upstream.
+pub fn proxy_config_with_dialect(
+    upstream_base: &str,
+    format: UpstreamFormat,
+    dialect: Option<UpstreamDialect>,
+) -> Config {
     Config {
         listen: "127.0.0.1:0".to_string(),
         upstream_timeout: Duration::from_secs(30),
@@ -19,7 +30,7 @@ pub fn proxy_config(upstream_base: &str, format: UpstreamFormat) -> Config {
             proxy: None,
             limits: None,
             surface_defaults: None,
-            dialect: None,
+            dialect,
         }],
         model_aliases: Default::default(),
         hooks: Default::default(),

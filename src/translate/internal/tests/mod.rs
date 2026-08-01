@@ -3807,6 +3807,216 @@ fn translate_response_openai_tool_only_turn_does_not_emit_empty_responses_messag
     assert_eq!(output[0]["type"], "function_call");
 }
 
+// --- Step 4: response reasoning_echo gating ---
+
+fn response_context_with_echo(echo: Option<bool>) -> ResponseTranslationContext {
+    ResponseTranslationContext::default().with_reasoning_echo(echo)
+}
+
+fn openai_completion_reasoning_body() -> serde_json::Value {
+    json!({
+        "id": "chatcmpl_echo",
+        "model": "mock",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "Hi",
+                "reasoning_content": "think",
+                "reasoning_details": [{ "text": "think" }]
+            },
+            "finish_reason": "stop"
+        }]
+    })
+}
+
+#[test]
+fn translate_response_openai_reasoning_suppressed_when_dialect_echo_false_to_anthropic() {
+    let body = openai_completion_reasoning_body();
+    let out = translate_response_with_context(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+        &body,
+        response_context_with_echo(Some(false)),
+    )
+    .unwrap();
+    let content = out["content"].as_array().expect("anthropic content");
+    assert!(
+        content.iter().all(|b| b["type"] != "thinking"),
+        "thinking must be absent when reasoning_echo is false: {out:?}"
+    );
+    assert!(
+        content.iter().any(|b| b["type"] == "text"),
+        "text must remain: {out:?}"
+    );
+}
+
+#[test]
+fn translate_response_openai_reasoning_surfaced_when_dialect_echo_true_to_anthropic() {
+    let body = openai_completion_reasoning_body();
+    let out = translate_response_with_context(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+        &body,
+        response_context_with_echo(Some(true)),
+    )
+    .unwrap();
+    let content = out["content"].as_array().expect("anthropic content");
+    assert!(
+        content.iter().any(|b| b["type"] == "thinking"),
+        "thinking must be present when reasoning_echo is true: {out:?}"
+    );
+}
+
+#[test]
+fn translate_response_openai_reasoning_surfaced_when_no_dialect_to_anthropic() {
+    // Regression guard: default context (no dialect) surfaces reasoning as today.
+    let body = openai_completion_reasoning_body();
+    let out = translate_response_with_context(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+        &body,
+        ResponseTranslationContext::default(),
+    )
+    .unwrap();
+    let content = out["content"].as_array().expect("anthropic content");
+    assert!(
+        content.iter().any(|b| b["type"] == "thinking"),
+        "thinking must be present by default: {out:?}"
+    );
+}
+
+#[test]
+fn translate_response_openai_reasoning_suppressed_when_echo_false_same_format_chat() {
+    // Qwen-style upstream (OpenAI Chat, reasoning_echo: false) on same-format passthrough.
+    let body = openai_completion_reasoning_body();
+    let out = translate_response_with_context(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+        response_context_with_echo(Some(false)),
+    )
+    .unwrap();
+    let msg = &out["choices"][0]["message"];
+    assert!(
+        msg.get("reasoning_content").is_none(),
+        "reasoning_content must be absent: {out:?}"
+    );
+    assert!(
+        msg.get("reasoning_details").is_none(),
+        "reasoning_details must be absent: {out:?}"
+    );
+    assert_eq!(msg["content"], "Hi");
+}
+
+#[test]
+fn translate_response_openai_reasoning_surfaced_when_echo_true_same_format_chat() {
+    let body = openai_completion_reasoning_body();
+    let out = translate_response_with_context(
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+        response_context_with_echo(Some(true)),
+    )
+    .unwrap();
+    let msg = &out["choices"][0]["message"];
+    assert_eq!(msg["reasoning_content"], "think", "reasoning surfaced: {out:?}");
+}
+
+#[test]
+fn translate_response_anthropic_thinking_suppressed_when_echo_false_to_openai_chat() {
+    // GLM_ANTHROPIC-shaped upstream (Anthropic format, reasoning_echo: false) → OpenAI Chat.
+    let body = json!({
+        "id": "msg_echo",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            { "type": "thinking", "thinking": "think" },
+            { "type": "text", "text": "Hi" }
+        ],
+        "model": "claude-3",
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 1, "output_tokens": 2 }
+    });
+    let out = translate_response_with_context(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+        response_context_with_echo(Some(false)),
+    )
+    .unwrap();
+    let msg = &out["choices"][0]["message"];
+    assert!(
+        msg.get("reasoning_content").is_none(),
+        "reasoning_content must be absent: {out:?}"
+    );
+    assert!(
+        msg.get("reasoning_details").is_none(),
+        "reasoning_details must be absent: {out:?}"
+    );
+    assert_eq!(msg["content"], "Hi");
+}
+
+#[test]
+fn translate_response_anthropic_thinking_suppressed_when_echo_false_same_format() {
+    // GLM_ANTHROPIC-shaped upstream on same-format Anthropic passthrough.
+    let body = json!({
+        "id": "msg_echo",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            { "type": "thinking", "thinking": "think" },
+            { "type": "text", "text": "Hi" }
+        ],
+        "model": "claude-3",
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 1, "output_tokens": 2 }
+    });
+    let out = translate_response_with_context(
+        UpstreamFormat::Anthropic,
+        UpstreamFormat::Anthropic,
+        &body,
+        response_context_with_echo(Some(false)),
+    )
+    .unwrap();
+    let content = out["content"].as_array().expect("anthropic content");
+    assert!(
+        content.iter().all(|b| b["type"] != "thinking"),
+        "thinking must be absent when reasoning_echo is false: {out:?}"
+    );
+    assert!(
+        content.iter().any(|b| b["type"] == "text"),
+        "text must remain: {out:?}"
+    );
+}
+
+#[test]
+fn translate_responses_reasoning_suppressed_when_echo_false_same_format() {
+    let body = json!({
+        "id": "resp_echo",
+        "status": "completed",
+        "output": [
+            { "type": "reasoning", "summary": [{ "type": "summary_text", "text": "think" }] },
+            { "type": "message", "content": [{ "type": "output_text", "text": "Hi" }] }
+        ]
+    });
+    let out = translate_response_with_context(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiResponses,
+        &body,
+        response_context_with_echo(Some(false)),
+    )
+    .unwrap();
+    let output = out["output"].as_array().expect("responses output");
+    assert!(
+        output.iter().all(|o| o["type"] != "reasoning"),
+        "reasoning must be absent when reasoning_echo is false: {out:?}"
+    );
+    assert!(
+        output.iter().any(|o| o["type"] == "message"),
+        "message must remain: {out:?}"
+    );
+}
+
 #[test]
 fn translate_response_openai_tool_only_turn_to_responses_does_not_create_empty_message_item() {
     let body = json!({
@@ -7896,6 +8106,52 @@ fn translate_request_claude_to_openai_family_rejects_invalid_extra_body_openai_r
         assert!(
             err.contains("extra_body.openai.reasoning_effort"),
             "label = {label}, err = {err}"
+        );
+    }
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_accepts_union_reasoning_effort_levels() {
+    // Step 5: the allowlist is the full union vocabulary, not just minimal..high.
+    for level in ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] {
+        let mut body = json!({
+            "model": "claude-3",
+            "max_tokens": 32,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": { "openai": { "reasoning_effort": level } }
+        });
+        translate_request(
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiChatCompletions,
+            "gpt-4o",
+            &mut body,
+            false,
+        )
+        .unwrap_or_else(|_| panic!("union level `{level}` should be accepted"));
+        assert_eq!(body["reasoning_effort"], level, "level `{level}` forwarded unchanged");
+    }
+}
+
+#[test]
+fn translate_request_claude_to_openai_family_rejects_unknown_reasoning_effort_union_strings() {
+    for level in ["turbo", "extreme", "MAX", ""] {
+        let mut body = json!({
+            "model": "claude-3",
+            "max_tokens": 32,
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "extra_body": { "openai": { "reasoning_effort": level } }
+        });
+        let err = translate_request(
+            UpstreamFormat::Anthropic,
+            UpstreamFormat::OpenAiChatCompletions,
+            "gpt-4o",
+            &mut body,
+            false,
+        )
+        .expect_err("unknown reasoning_effort must be rejected");
+        assert!(
+            err.contains("extra_body.openai.reasoning_effort"),
+            "level `{level}` err = {err}"
         );
     }
 }

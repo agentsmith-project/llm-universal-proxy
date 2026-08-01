@@ -10,8 +10,11 @@
 mod common;
 
 use common::mock_upstream::*;
-use common::proxy_helpers::proxy_config;
+use common::proxy_helpers::{proxy_config, proxy_config_with_dialect};
 use common::runtime_proxy::start_proxy;
+use llm_universal_proxy::config::{
+    DialectBlock, ReasoningLevel, ReasoningMechanism, UpstreamDialect,
+};
 use llm_universal_proxy::formats::UpstreamFormat;
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -1026,4 +1029,179 @@ async fn reasoning_and_text_both_present_in_response() {
     let output = body["output"].as_array().unwrap();
     assert!(output.iter().any(|o| o["type"] == "reasoning"));
     assert!(output.iter().any(|o| o["type"] == "message"));
+}
+
+// ============================================================
+// G. Per-upstream dialect: cross-protocol effort mapping + echo gating
+// (Steps 4 + 6 of the reasoning/dialect plan)
+// ============================================================
+
+fn detailed_dialect(
+    reasoning: ReasoningMechanism,
+    reasoning_echo: Option<bool>,
+    reasoning_levels: Option<Vec<ReasoningLevel>>,
+) -> UpstreamDialect {
+    UpstreamDialect::Detailed(DialectBlock {
+        reasoning,
+        reasoning_echo,
+        reasoning_levels,
+    })
+}
+
+#[tokio::test]
+async fn dialect_anthropic_effort_maps_cross_protocol_reasoning_effort_to_output_config() {
+    // Step 6: OpenAI Chat `reasoning_effort:"high"` -> Anthropic `output_config:{effort:"high"}`
+    // for an anthropic-effort dialect (cross-protocol effort mapping).
+    let (mock_base, _mock, mut captured) = spawn_capture_anthropic_mock().await;
+    let dialect = detailed_dialect(ReasoningMechanism::AnthropicEffort, Some(true), None);
+    let config =
+        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = authenticated_reqwest_client();
+    let res = client
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "reasoning_effort": "high",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+
+    captured.changed().await.unwrap();
+    let request = captured
+        .borrow()
+        .clone()
+        .expect("captured anthropic request");
+    assert_eq!(
+        request["output_config"]["effort"],
+        "high",
+        "cross-protocol effort must be emitted as output_config.effort: {request:?}"
+    );
+}
+
+#[tokio::test]
+async fn dialect_openai_effort_caps_ultra_to_max_with_portability_warning() {
+    // Step 6: cap-and-warn. `ultra` exceeds the declared ceiling `[low, high, max]` and is capped
+    // to `max` at the upstream, with an `x-llmup-portability-warning` header on the response.
+    let (mock_base, _mock, mut captured) = spawn_capture_openai_completion_mock().await;
+    let dialect = detailed_dialect(
+        ReasoningMechanism::OpenAiEffort,
+        Some(true),
+        Some(vec![
+            ReasoningLevel::Low,
+            ReasoningLevel::High,
+            ReasoningLevel::Max,
+        ]),
+    );
+    let config = proxy_config_with_dialect(
+        &mock_base,
+        UpstreamFormat::OpenAiChatCompletions,
+        Some(dialect),
+    );
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = authenticated_reqwest_client();
+    let res = client
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": "mock",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "reasoning_effort": "ultra",
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+
+    // The upstream received the capped value.
+    captured.changed().await.unwrap();
+    let request = captured
+        .borrow()
+        .clone()
+        .expect("captured openai request");
+    assert_eq!(
+        request["reasoning_effort"],
+        "max",
+        "ultra must be capped to max at the upstream: {request:?}"
+    );
+
+    // The client got a portability warning describing the cap.
+    let warned = res
+        .headers()
+        .get_all("x-llmup-portability-warning")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.contains("capped") && v.contains("ultra") && v.contains("max"));
+    assert!(
+        warned,
+        "expected cap portability warning header, got headers: {:?}",
+        res.headers()
+    );
+}
+
+#[tokio::test]
+async fn dialect_echo_false_omits_reasoning_content_end_to_end() {
+    // Step 4: a GLM_ANTHROPIC-shaped dialect (reasoning_echo: false) suppresses reasoning in the
+    // translated response, end-to-end through the proxy.
+    let (mock_base, _mock) = spawn_anthropic_thinking_mock().await;
+    let dialect = detailed_dialect(ReasoningMechanism::AutoOnly, Some(false), None);
+    let config =
+        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = authenticated_reqwest_client();
+    let res = client
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let body: Value = res.json().await.unwrap();
+    let msg = &body["choices"][0]["message"];
+    assert!(
+        msg.get("reasoning_content").is_none(),
+        "reasoning_content must be omitted when reasoning_echo is false: {body:?}"
+    );
+    assert_eq!(msg["content"], "Hi");
+}
+
+#[tokio::test]
+async fn dialect_echo_true_surfaces_reasoning_content_end_to_end() {
+    // Step 4 complement: with reasoning_echo: true the upstream thinking surfaces as
+    // reasoning_content, mirroring today's no-dialect behavior.
+    let (mock_base, _mock) = spawn_anthropic_thinking_mock().await;
+    let dialect = detailed_dialect(ReasoningMechanism::AutoOnly, Some(true), None);
+    let config =
+        proxy_config_with_dialect(&mock_base, UpstreamFormat::Anthropic, Some(dialect));
+    let (proxy_base, _proxy) = start_proxy(config).await;
+
+    let client = authenticated_reqwest_client();
+    let res = client
+        .post(format!("{proxy_base}/openai/v1/chat/completions"))
+        .json(&json!({
+            "model": "claude-3",
+            "messages": [{ "role": "user", "content": "Hi" }],
+            "stream": false
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "status: {}", res.status());
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["reasoning_content"],
+        "think",
+        "reasoning_content must surface when reasoning_echo is true: {body:?}"
+    );
 }

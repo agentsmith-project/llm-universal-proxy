@@ -121,6 +121,64 @@ pub(super) fn normalize_openai_completion_response(body: &Value) -> Value {
     out
 }
 
+/// Strip reasoning carriers from an OpenAI Chat Completions response body.
+///
+/// Removes `reasoning_content` and `reasoning_details` from every choice's assistant message. This
+/// is the single chokepoint for `reasoning_echo: Some(false)` on cross-format translations: every
+/// upstream shape funnels through this OpenAI pivot before reaching any client format, so removing
+/// the carriers here prevents reasoning from surfacing as Chat `reasoning_content`, Responses
+/// reasoning items, or Anthropic `thinking` blocks.
+pub(super) fn strip_openai_completion_reasoning(body: &mut Value) {
+    let Some(choices) = body.get_mut("choices").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for choice in choices.iter_mut() {
+        let Some(message) = choice.get_mut("message").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        message.remove("reasoning_content");
+        message.remove("reasoning_details");
+    }
+}
+
+/// Strip `thinking`/`redacted_thinking` blocks from an Anthropic message-shaped response body's
+/// top-level `content` array (same-format Anthropic passthrough with `reasoning_echo: Some(false)`).
+pub(super) fn strip_anthropic_response_thinking(body: &mut Value) {
+    let Some(content) = body.get_mut("content").and_then(Value::as_array_mut) else {
+        return;
+    };
+    content.retain(|block| {
+        block
+            .get("type")
+            .and_then(Value::as_str)
+            .map_or(true, |ty| ty != "thinking" && ty != "redacted_thinking")
+    });
+}
+
+/// Strip reasoning output items from an OpenAI Responses body's `output` array (same-format
+/// Responses passthrough with `reasoning_echo: Some(false)`).
+pub(super) fn strip_responses_reasoning_items(body: &mut Value) {
+    let Some(output) = body.get_mut("output").and_then(Value::as_array_mut) else {
+        return;
+    };
+    output.retain(|item| {
+        item.get("type")
+            .and_then(Value::as_str)
+            .map_or(true, |ty| ty != "reasoning")
+    });
+}
+
+/// Format-dispatched reasoning suppression for same-format response passthrough.
+pub(super) fn strip_response_reasoning(format: crate::formats::UpstreamFormat, body: &mut Value) {
+    match format {
+        crate::formats::UpstreamFormat::OpenAiChatCompletions => {
+            strip_openai_completion_reasoning(body)
+        }
+        crate::formats::UpstreamFormat::Anthropic => strip_anthropic_response_thinking(body),
+        crate::formats::UpstreamFormat::OpenAiResponses => strip_responses_reasoning_items(body),
+    }
+}
+
 fn prepare_openai_message_for_claude_response(message: &Value) -> Value {
     let mut prepared = message.clone();
     if openai_message_anthropic_reasoning_replay_blocks(message).is_some() {

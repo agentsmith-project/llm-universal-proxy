@@ -2000,7 +2000,8 @@ async fn handle_request_core_with_downstream_cancellation(
             request_scoped_tool_bridge_context
                 .as_ref()
                 .map(TrustedToolBridgeContext::to_value),
-        );
+        )
+        .with_reasoning_echo(resolved_dialect.as_ref().and_then(|d| d.reasoning_echo));
     let mut out = match translate_response_with_context(
         upstream_format,
         client_format,
