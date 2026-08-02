@@ -2,6 +2,10 @@
 
 ## Unreleased / Next v0.3.4 (not published)
 
+- Fixed `codex-setup --force-v1` duplicating `model_catalog_json` on re-run (strip managed bare keys, not just table headers).
+- Fixed `codex-setup` connection test reporting "0 models reachable" — now reads `slug` with `id` fallback (matching the Codex-UA catalog shape); warns instead of "OK" when 0 models discovered.
+- Added `--reasoning-effort` validation against the 8-level union vocabulary (none→ultra); help text enumerates valid values.
+- Added `--interactive`/`--tui` sequential wizard (via `dialoguer`) — guides users through setup with masked password input, model discovery + selection, reasoning-effort menu, force-v1 toggle, config preview, and confirm-before-install.
 - Advanced the main-branch release identity to Cargo package version `0.3.4` (release tag `v0.3.4`, not published), the next patch version after the published, occupied `v0.3.3` tag, without moving, deleting, or reusing the existing tag.
 
 ## v0.3.3 - 2026-08-02
