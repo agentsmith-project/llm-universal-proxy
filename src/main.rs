@@ -83,6 +83,24 @@ fn server_version() -> String {
 #[tokio::main]
 async fn main() {
     let args_os = std::env::args_os().collect::<Vec<_>>();
+    // Subcommand dispatch for the `codex-setup` user tool. This peek runs
+    // before server arg parsing and outside the `LLMUP_FORCE_SERVER` guard:
+    // codex-setup is a user tool, not a server mode, so it must stay reachable
+    // regardless of that flag. The existing argv[0] dispatch below is
+    // untouched (llmup-config / llmup-codex / llmup-claude).
+    if args_os.len() >= 2 && args_os[1].to_str() == Some("codex-setup") {
+        let rest: Vec<String> = args_os[2..]
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect();
+        match llm_universal_proxy::user_tools::codex_setup::run(&rest).await {
+            Ok(code) => std::process::exit(code),
+            Err(message) => {
+                eprintln!("{message}");
+                std::process::exit(2);
+            }
+        }
+    }
     if !matches!(std::env::var("LLMUP_FORCE_SERVER").as_deref(), Ok("1")) {
         if let Some(program) = args_os.first() {
             if let Some(entrypoint) =

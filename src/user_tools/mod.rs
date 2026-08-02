@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 pub mod agent_launcher;
 pub mod agent_model_profile;
+pub mod codex_setup;
 pub mod config_wizard;
 pub mod env_file;
 
