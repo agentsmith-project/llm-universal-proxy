@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased / Next v0.3.4 (not published)
+## Unreleased / Next v0.3.5 (not published)
+
+- Advanced the main-branch release identity to Cargo package version `0.3.5` (release tag `v0.3.5`, not published), the next patch version after the published, occupied `v0.3.4` tag, without moving, deleting, or reusing the existing tag.
+
+## v0.3.4 - 2026-08-02
 
 - Fixed `codex-setup --force-v1` duplicating `model_catalog_json` on re-run (strip managed bare keys, not just table headers).
 - Fixed `codex-setup` connection test reporting "0 models reachable" — now reads `slug` with `id` fallback (matching the Codex-UA catalog shape); warns instead of "OK" when 0 models discovered.

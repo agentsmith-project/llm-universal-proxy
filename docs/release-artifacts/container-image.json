@@ -2,19 +2,19 @@
   "schema": 1,
   "image": "ghcr.io/agentsmith-project/llm-universal-proxy",
   "published": {
-    "release_tag": "v0.3.3",
-    "version_tag": "0.3.3",
-    "digest": "sha256:ff444204e299c2e46ad6cafd4c4c2c747d2625b13ed35d64e8e2bfe0afe1a177",
-    "cargo_package_version": "0.3.3",
-    "git_sha": "54688b5",
+    "release_tag": "v0.3.4",
+    "version_tag": "0.3.4",
+    "digest": "sha256:6a9eb83a423488f6043a35b406ec13c1a1a2251323d43ce4aaa83a9b42f4109f",
+    "cargo_package_version": "0.3.4",
+    "git_sha": "ee310ee",
     "status": "published",
-    "published_at": "2026-08-02T14:02:37Z",
-    "run_url": "https://github.com/agentsmith-project/llm-universal-proxy/actions/runs/30751234166"
+    "published_at": "2026-08-02T16:28:08Z",
+    "run_url": "https://github.com/agentsmith-project/llm-universal-proxy/actions/runs/30756697859"
   },
   "next_release": {
-    "cargo_package_version": "0.3.4",
-    "release_tag": "v0.3.4",
+    "cargo_package_version": "0.3.5",
+    "release_tag": "v0.3.5",
     "status": "not_published",
-    "main_branch_action": "v0.3.3 is published on GHCR; v0.3.4 is the next release identity, advancing past the published, occupied v0.3.3 tag without moving, deleting, or reusing an existing tag on the main branch."
+    "main_branch_action": "v0.3.4 is published on GHCR; v0.3.5 is the next release identity, advancing past the published, occupied v0.3.4 tag without moving, deleting, or reusing an existing tag on the main branch."
   }
 }
