@@ -815,6 +815,42 @@ pub(super) fn responses_has_warning_only_encrypted_agent_message(body: &Value) -
         .unwrap_or(false)
 }
 
+/// Whether a `function_call_output` / `custom_tool_call_output` input item
+/// carries an `encrypted_content` part alongside at least one surviving text
+/// part. The opaque blob is provider-owned (OpenAI Responses service round-trip
+/// only) and cannot be decrypted by a non-OpenAI upstream; the translator drops
+/// the blob and keeps the text part, so the request stays portable (warned, not
+/// rejected). Mirrors the `agent_message` encrypted posture, but is gated on a
+/// surviving text part: when no text survives the output is encrypted-only and
+/// fails closed (see `responses_nonportable_tool_output_message`).
+pub(super) fn responses_has_warning_only_encrypted_tool_output(body: &Value) -> bool {
+    body.get("input")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter().any(|item| {
+                matches!(
+                    responses_input_item_type(item),
+                    Some("function_call_output") | Some("custom_tool_call_output")
+                ) && item
+                    .get("output")
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| {
+                        let has_encrypted = parts.iter().any(|part| {
+                            part.get("type").and_then(Value::as_str) == Some("encrypted_content")
+                        });
+                        let has_text = parts.iter().any(|part| {
+                            matches!(
+                                part.get("type").and_then(Value::as_str),
+                                Some("input_text") | Some("output_text")
+                            )
+                        });
+                        has_encrypted && has_text
+                    })
+            })
+        })
+        .unwrap_or(false)
+}
+
 pub(super) fn responses_custom_tool_format_reject_message(
     body: &Value,
     target_format: UpstreamFormat,
@@ -1031,7 +1067,18 @@ pub(super) fn responses_nonportable_input_item_message(
     let has_non_compaction_visible_portable_context =
         responses_request_has_non_compaction_visible_portable_context(body);
     items.iter().find_map(|item| {
-        let item_type = responses_input_item_type(item)?;
+        // An item with neither `type` nor `role` is malformed: it has no
+        // identifiable semantics and no safe portable representation. Reject it
+        // explicitly (Invariant #9) instead of silently skipping. Items with a
+        // `role` derive `Some("message")` upstream and are not malformed.
+        let item_type = match responses_input_item_type(item) {
+            Some(item_type) => item_type,
+            None => {
+                return Some(format!(
+                    "OpenAI Responses input item lacks both `type` and `role` and cannot be faithfully translated to {target_label}"
+                ));
+            }
+        };
         if matches!(item_type, "function_call" | "custom_tool_call")
             && item.get("namespace").is_some()
         {
@@ -1073,6 +1120,64 @@ pub(super) fn responses_nonportable_input_item_message(
             "OpenAI Responses input item type `{item_type}` is outside the portable cross-protocol subset and cannot be faithfully translated to {target_label}"
         ))
     })
+}
+
+/// Assessment-owned disposition for `function_call_output` /
+/// `custom_tool_call_output` output arrays. The translation layer's
+/// `responses_tool_output_to_openai_tool_content` drops `encrypted_content`
+/// parts and keeps text; this predicate owns the named reject decisions so they
+/// surface as portability warnings/rejects instead of a buried translation
+/// `Err`:
+/// - a non-text, non-`encrypted_content` typed part (e.g. `input_image`) or an
+///   untyped part reuses the existing reject wording (defense-in-depth; the
+///   translator still `Err`s on these if assessment is bypassed);
+/// - an encrypted-only output with no surviving text part is rejected, because
+///   an empty tool result is not a faithful representation of an opaque payload
+///   (Invariant #9) and would silently corrupt the agent loop.
+pub(super) fn responses_nonportable_tool_output_message(
+    body: &Value,
+    target_format: UpstreamFormat,
+) -> Option<String> {
+    let target_label = translation_target_label(target_format);
+    let items = body.get("input").and_then(Value::as_array)?;
+    for item in items {
+        if !matches!(
+            responses_input_item_type(item),
+            Some("function_call_output") | Some("custom_tool_call_output")
+        ) {
+            continue;
+        }
+        // `output` may legitimately be absent, a bare string, or an object
+        // (handled by the translator); only array outputs are assessed here.
+        let parts = match item.get("output").and_then(Value::as_array) {
+            Some(parts) => parts,
+            None => continue,
+        };
+        let mut has_encrypted = false;
+        let mut has_text = false;
+        for part in parts {
+            match part.get("type").and_then(Value::as_str) {
+                Some("input_text") | Some("output_text") => has_text = true,
+                Some("encrypted_content") => has_encrypted = true,
+                Some(other) => {
+                    return Some(format!(
+                        "OpenAI Responses tool output arrays containing `{other}` cannot be faithfully translated to {target_label}; only text arrays are portable."
+                    ));
+                }
+                None => {
+                    return Some(format!(
+                        "OpenAI Responses tool output arrays containing untyped values cannot be faithfully translated to {target_label}."
+                    ));
+                }
+            }
+        }
+        if has_encrypted && !has_text {
+            return Some(format!(
+                "OpenAI Responses encrypted-only tool output has no portable representation when translating to {target_label}; at least one text part is required so the opaque payload is not dropped silently"
+            ));
+        }
+    }
+    None
 }
 
 fn responses_input_reasoning_encrypted_content_present(body: &Value) -> bool {
@@ -2511,6 +2616,9 @@ pub(crate) fn assess_request_translation_with_dialect(
         if let Some(message) = responses_nonportable_input_item_message(body, upstream_format) {
             assessment.reject(message);
         }
+        if let Some(message) = responses_nonportable_tool_output_message(body, upstream_format) {
+            assessment.reject(message);
+        }
         if let Some(message) = responses_nonportable_tool_definition_message(body) {
             assessment.reject(message);
         } else if responses_has_warning_only_nonportable_tool_definitions(body) {
@@ -2521,6 +2629,11 @@ pub(crate) fn assess_request_translation_with_dialect(
         if responses_has_warning_only_encrypted_agent_message(body) {
             assessment.warning(format!(
                 "OpenAI Responses `agent_message` input carries an `encrypted_content` part whose payload is opaque to {upstream_format}; only the routing metadata envelope remains visible and the encrypted payload body is dropped"
+            ));
+        }
+        if responses_has_warning_only_encrypted_tool_output(body) {
+            assessment.warning(format!(
+                "OpenAI Responses tool output carries an `encrypted_content` part whose payload is opaque to {upstream_format}; the surviving text parts are kept and the encrypted payload is dropped"
             ));
         }
         if let Some(message) = responses_custom_tool_format_reject_message(body, upstream_format) {

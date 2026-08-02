@@ -4286,6 +4286,316 @@ fn translate_request_responses_encrypted_agent_message_warns_and_keeps_header_on
 }
 
 #[test]
+fn translate_request_responses_function_tool_output_encrypted_with_text_warns_and_drops_blob() {
+    let body = json!({
+        "model": "gpt-4o",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_enc_text",
+                "name": "lookup_weather",
+                "arguments": "{\"city\":\"Tokyo\"}"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_enc_text",
+                "output": [
+                    { "type": "input_text", "text": "Sunny" },
+                    { "type": "encrypted_content", "encrypted_content": "OPAQUE_TOOL_BLOB" }
+                ]
+            }
+        ]
+    });
+
+    // Assessment owns the encrypted handling (translation layer has no warning channel).
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+    );
+    let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
+        panic!(
+            "encrypted tool output with surviving text should be AllowWithWarnings, got {:?}",
+            assessment.decision()
+        );
+    };
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("encrypted_content") && w.contains("dropped")),
+        "expected an encrypted_content drop warning, got {warnings:?}"
+    );
+
+    // Translation keeps the surviving text part and drops the opaque blob.
+    let mut body = body;
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect("encrypted tool output with surviving text should still translate (best-effort)");
+
+    let messages = body["messages"].as_array().expect("messages");
+    let content = messages[1]["content"].as_array().expect("tool content");
+    assert_eq!(messages[1]["role"], "tool");
+    assert_eq!(
+        content.len(),
+        1,
+        "only the surviving text part should remain"
+    );
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[0]["text"], "Sunny");
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(
+        !serialized.contains("OPAQUE_TOOL_BLOB"),
+        "opaque blob must not leak: {serialized}"
+    );
+}
+
+#[test]
+fn translate_request_responses_function_tool_output_encrypted_only_rejects() {
+    let body = json!({
+        "model": "gpt-4o",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_enc_only",
+                "name": "lookup_weather",
+                "arguments": "{\"city\":\"Tokyo\"}"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_enc_only",
+                "output": [
+                    { "type": "encrypted_content", "encrypted_content": "OPAQUE_TOOL_BLOB" }
+                ]
+            }
+        ]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+    );
+    let TranslationDecision::Reject(err) = assessment.decision() else {
+        panic!(
+            "encrypted-only tool output should be rejected, got {:?}",
+            assessment.decision()
+        );
+    };
+    assert!(
+        err.contains("encrypted"),
+        "reject should name the encrypted-only tool output: {err}"
+    );
+
+    // The assessment reject surfaces as a translation Err (fail-closed).
+    let mut body = body;
+    let translate_err = translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect_err("encrypted-only tool output should fail closed");
+    assert!(
+        translate_err.contains("encrypted"),
+        "translate err should carry the assessment reject: {translate_err}"
+    );
+}
+
+#[test]
+fn translate_request_responses_custom_tool_output_encrypted_with_text_warns_and_drops_blob() {
+    // Targets Chat Completions and pairs the output with a preceding
+    // `custom_tool_call`: a standalone custom output to a non-Chat upstream is
+    // pre-rejected by `custom_tools_not_portable_message` before reaching the
+    // patched code path.
+    let body = json!({
+        "model": "gpt-4o",
+        "input": [
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_custom_enc",
+                "name": "code_exec",
+                "input": "print('hi')"
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_custom_enc",
+                "output": [
+                    { "type": "input_text", "text": "exit 0" },
+                    { "type": "encrypted_content", "encrypted_content": "OPAQUE_CUSTOM_BLOB" }
+                ]
+            }
+        ]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+    );
+    let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
+        panic!(
+            "encrypted custom tool output with surviving text should be AllowWithWarnings, got {:?}",
+            assessment.decision()
+        );
+    };
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("encrypted_content") && w.contains("dropped")),
+        "expected an encrypted_content drop warning, got {warnings:?}"
+    );
+
+    let mut body = body;
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect("encrypted custom tool output with surviving text should still translate");
+
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(
+        !serialized.contains("OPAQUE_CUSTOM_BLOB"),
+        "opaque blob must not leak: {serialized}"
+    );
+}
+
+#[test]
+fn translate_request_responses_tool_output_media_arrays_rejected_at_assessment() {
+    // Regression guard: the existing translation-layer reject wording must be
+    // preserved AND the reject must now be owned by the assessment layer.
+    let body = json!({
+        "model": "gpt-4o",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_media",
+                "name": "inspect_media",
+                "arguments": "{}"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_media",
+                "output": [
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/cat.png"
+                    }
+                ]
+            }
+        ]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+    );
+    let TranslationDecision::Reject(err) = assessment.decision() else {
+        panic!(
+            "media tool output should be rejected at assessment, got {:?}",
+            assessment.decision()
+        );
+    };
+    assert!(err.contains("tool output"), "err = {err}");
+    assert!(err.contains("input_image"), "err = {err}");
+}
+
+#[test]
+fn translate_request_responses_malformed_input_item_without_type_or_role_rejects() {
+    let body = json!({
+        "model": "gpt-4o",
+        "input": [{ "foo": "bar" }]
+    });
+
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+    );
+    let TranslationDecision::Reject(err) = assessment.decision() else {
+        panic!(
+            "malformed input item (no type, no role) should be rejected, got {:?}",
+            assessment.decision()
+        );
+    };
+    assert!(
+        err.contains("type") && err.contains("role"),
+        "reject should name the missing type/role: {err}"
+    );
+
+    let mut body = body;
+    let translate_err = translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect_err("malformed input item should fail closed");
+    assert!(
+        translate_err.contains("type") && translate_err.contains("role"),
+        "translate err should carry the assessment reject: {translate_err}"
+    );
+}
+
+#[test]
+fn translate_request_responses_marked_custom_tool_output_encrypted_does_not_leak_blob() {
+    // Degraded custom-tool replay path: when all text parts are empty and an
+    // `encrypted_content` part is present, the fallback must not re-serialize
+    // the opaque blob. The empty text part keeps this on the warn path (text
+    // part present) so the request is allowed, then degrades to replay text.
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": "Apply this patch" }]
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_patch",
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n*** Add File: hello.txt\n+hello\n"
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_patch",
+                "output": [
+                    { "type": "input_text", "text": "" },
+                    { "type": "encrypted_content", "encrypted_content": "OPAQUE_DEGRADED_BLOB" }
+                ]
+            }
+        ]
+    });
+    super::tools::mark_tool_call_as_non_replayable(&mut body["input"][1]);
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::Anthropic,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .expect("marked encrypted tool output with empty text should degrade without failing");
+
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(
+        !serialized.contains("OPAQUE_DEGRADED_BLOB"),
+        "opaque blob must not leak via degraded replay: {serialized}"
+    );
+}
+
+#[test]
 fn translate_request_responses_agent_message_with_encrypted_reasoning_not_rejected() {
     let mut body = json!({
         "model": "gpt-4o",

@@ -1387,7 +1387,19 @@ fn responses_tool_output_partial_replay_text(name: Option<&str>, output: Option<
                 .trim()
                 .to_string();
             if text.is_empty() {
-                serde_json::to_string(&Value::Array(items.clone())).ok()
+                // No surviving text: replay the structured output as a fallback,
+                // but drop provider-owned `encrypted_content` parts first so the
+                // opaque blob is never re-serialized. Consistent with the main
+                // translation path (`responses_tool_output_to_openai_tool_content`)
+                // and the assessment warn-and-drop decision.
+                let portable: Vec<Value> = items
+                    .iter()
+                    .filter(|item| {
+                        item.get("type").and_then(Value::as_str) != Some("encrypted_content")
+                    })
+                    .cloned()
+                    .collect();
+                serde_json::to_string(&Value::Array(portable)).ok()
             } else {
                 Some(text)
             }

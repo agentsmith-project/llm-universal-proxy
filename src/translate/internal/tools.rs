@@ -200,6 +200,14 @@ pub(crate) fn responses_tool_output_to_openai_tool_content(
                         "type": "text",
                         "text": item.get("text").cloned().unwrap_or(Value::String(String::new()))
                     })),
+                    // The opaque `encrypted_content` blob is provider-owned and
+                    // cannot be decrypted by a non-OpenAI upstream. The
+                    // assessment layer owns the warn/reject decision; by the
+                    // time translation runs, encrypted-only outputs were already
+                    // rejected and text-surviving outputs were warned. Drop the
+                    // blob here and keep surviving text parts. This arm MUST
+                    // precede the `Some(other)` reject arm.
+                    Some("encrypted_content") => continue,
                     Some(other) => {
                         return Err(format!(
                             "OpenAI Responses tool output arrays containing `{other}` cannot be faithfully translated to {}; only text arrays are portable.",
