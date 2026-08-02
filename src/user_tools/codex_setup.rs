@@ -29,6 +29,13 @@ const SCHEMA_VERSION: u32 = 1;
 const DEFAULT_WIRE_API: &str = "responses";
 const DEVELOPER_INSTRUCTIONS: &str =
     "Complete the delegated task. Return results to the parent agent.";
+/// Local mirror of the 8-level reasoning-effort vocabulary for user-facing
+/// validation and error messages. The single source of truth for the enum is
+/// `config::dialect::ReasoningLevel`; this slice is intentionally CLI-local so
+/// `dialect.rs` stays untouched.
+const VALID_REASONING_EFFORTS: &[&str] = &[
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+];
 
 /// Inputs for file generation. `provider_key` is intentionally **not** stored;
 /// it is used only for the optional live connection test.
@@ -231,7 +238,7 @@ fn strip_managed(content: &str, headers: &[&str], bare_keys: &[&str]) -> String 
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
             // Entering a new table: skip only on an exact header match.
-            skipping_table = headers.iter().any(|header| trimmed == *header);
+            skipping_table = headers.contains(&trimmed);
             if skipping_table {
                 continue;
             }
@@ -491,7 +498,9 @@ OPTIONS:
     --model <alias>            model alias/id routed through llmup (required for install)
     --provider-key <key>       provider key used for the connection test only;
                                the config references the LLMUP_PROXY_KEY env var
-    --reasoning-effort <s>     optional model_reasoning_effort for the sub-agent
+    --reasoning-effort <none|minimal|low|medium|high|xhigh|max|ultra>
+                               optional model_reasoning_effort for the sub-agent; if
+                               omitted, Codex's own default applies
     --context-window <N>       optional model_context_window for the sub-agent
     --force-v1                 derive a per-model catalog pinning multi_agent_version = \"v1\"
                                (requires the codex CLI; falls back to feature-flag-only otherwise)
@@ -561,6 +570,18 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, String> {
         Action::Generate
     };
     opts.action = action;
+
+    // Feature 1: validate --reasoning-effort against the 8-level union
+    // vocabulary. Invalid values are rejected up front with a message that
+    // enumerates every option so the user sees the menu. Omitting the flag is
+    // always valid (Codex's default applies).
+    if let Some(effort) = &opts.reasoning_effort {
+        if !VALID_REASONING_EFFORTS.contains(&effort.as_str()) {
+            return Err(format!(
+                "invalid --reasoning-effort `{effort}`; valid: none|minimal|low|medium|high|xhigh|max|ultra"
+            ));
+        }
+    }
 
     if opts.action == Action::Generate {
         if opts.base_url.is_none() {

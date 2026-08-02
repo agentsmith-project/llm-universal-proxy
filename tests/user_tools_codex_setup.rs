@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use llm_universal_proxy::user_tools::codex_setup::{
-    agent_file_name, agent_name, build_profile_content, detect_codex_version,
-    extract_model_ids, generate_agent_content, generate_provider_block, generate_state_content,
-    install, parse_args, patch_catalog_v1, run_status, run_uninstall, run_with,
-    write_config_file_atomic, Action, CliOptions, GeneratedPaths, SetupInput,
+    agent_file_name, agent_name, build_profile_content, detect_codex_version, extract_model_ids,
+    generate_agent_content, generate_provider_block, generate_state_content, install, parse_args,
+    patch_catalog_v1, run_status, run_uninstall, run_with, write_config_file_atomic, Action,
+    CliOptions, GeneratedPaths, SetupInput,
 };
 
 struct TempDir {
@@ -917,5 +917,90 @@ async fn run_generate_without_provider_key_writes_config_and_skips_connection_te
     assert!(
         home.path().join("llmup").join("state.json").exists(),
         "state should be written even without --provider-key"
+    );
+}
+
+// ===========================================================================
+// Feature 1: --reasoning-effort validation (8-level union vocabulary)
+// ===========================================================================
+
+#[test]
+fn parse_args_accepts_all_eight_reasoning_effort_levels() {
+    for level in [
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+    ] {
+        let opts = parse_args(&[
+            "--base-url".into(),
+            "https://proxy.example.com".into(),
+            "--model".into(),
+            "gpt-5".into(),
+            "--reasoning-effort".into(),
+            level.into(),
+        ])
+        .unwrap_or_else(|e| panic!("valid level `{level}` rejected: {e}"));
+        assert_eq!(
+            opts.reasoning_effort.as_deref(),
+            Some(level),
+            "level `{level}` not stored"
+        );
+    }
+}
+
+#[test]
+fn parse_args_accepted_reasoning_effort_flows_into_agent_toml() {
+    let opts = parse_args(&[
+        "--base-url".into(),
+        "https://proxy.example.com".into(),
+        "--model".into(),
+        "gpt-5".into(),
+        "--reasoning-effort".into(),
+        "high".into(),
+    ])
+    .expect("high is a valid level");
+    let agent = generate_agent_content("gpt-5", opts.reasoning_effort.as_deref(), None);
+    assert!(
+        agent.contains("model_reasoning_effort = \"high\""),
+        "agent TOML missing reasoning effort: {agent}"
+    );
+}
+
+#[test]
+fn parse_args_rejects_invalid_reasoning_effort_listing_all_levels() {
+    let err = parse_args(&[
+        "--base-url".into(),
+        "https://proxy.example.com".into(),
+        "--model".into(),
+        "gpt-5".into(),
+        "--reasoning-effort".into(),
+        "hgih".into(),
+    ])
+    .expect_err("typo `hgih` must be rejected");
+    for level in [
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+    ] {
+        assert!(
+            err.contains(level),
+            "error must enumerate valid level `{level}`: {err}"
+        );
+    }
+}
+
+#[test]
+fn parse_args_omitted_reasoning_effort_defaults_none_and_omitted_from_toml() {
+    let opts = parse_args(&[
+        "--base-url".into(),
+        "https://proxy.example.com".into(),
+        "--model".into(),
+        "gpt-5".into(),
+    ])
+    .expect("omitted reasoning effort is valid");
+    assert!(
+        opts.reasoning_effort.is_none(),
+        "omitted reasoning effort must default to None"
+    );
+    let agent = generate_agent_content("gpt-5", opts.reasoning_effort.as_deref(), None);
+    assert!(
+        !agent.contains("model_reasoning_effort"),
+        "default agent TOML must omit model_reasoning_effort: {agent}"
     );
 }
