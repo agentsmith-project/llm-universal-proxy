@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased / Next v0.3.3 (not published)
+## Unreleased / Next v0.3.4 (not published)
+
+- Advanced the main-branch release identity to Cargo package version `0.3.4` (release tag `v0.3.4`, not published), the next patch version after the published, occupied `v0.3.3` tag, without moving, deleting, or reusing the existing tag.
+
+## v0.3.3 - 2026-08-02
 
 - Added a new `codex-setup` subcommand of the single binary that configures Codex V1 hybrid sub-agents (official main agent plus an `llmup` child). It generates `~/.codex/agents/llmup-<model>.toml` (a custom agent with `model_provider=llmup`) and `~/.codex/llmup.config.toml` (a profile with `[features] multi_agent_v2 = false` plus an optional `model_catalog_json` for per-model V1 pinning via `--force-v1`), and includes a connection test, `--status`, `--uninstall`, and safe write (backup plus atomic) handling.
 - Deprecated and removed the old client-config tools — `llmup-config` (config wizard), `llmup-codex` (launcher), and `llmup-claude` (launcher) — in favor of the single `codex-setup` mental model, and dropped Claude Code auto-config, removing roughly 9,000 lines. `install.sh` now installs a single `llmup` convenience alias.
