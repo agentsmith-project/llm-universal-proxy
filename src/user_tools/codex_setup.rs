@@ -59,6 +59,8 @@ pub struct CliOptions {
     pub reasoning_effort: Option<String>,
     pub context_window: Option<u64>,
     pub action: Action,
+    /// `--force-v1`: derive a per-model catalog pinning V1 (opt-in).
+    pub force_v1: bool,
 }
 
 /// Paths written by [`install`].
@@ -67,6 +69,9 @@ pub struct GeneratedPaths {
     pub profile_path: PathBuf,
     pub agent_path: PathBuf,
     pub state_path: PathBuf,
+    /// Path of the derived V1 catalog, present only when `--force-v1`
+    /// successfully produced one.
+    pub catalog_path: Option<PathBuf>,
 }
 
 // ===========================================================================
@@ -137,15 +142,28 @@ pub fn generate_agent_content(
 ///
 /// Unrelated top-level tables the user may have added are preserved; a re-run
 /// does not duplicate the managed tables.
-pub fn build_profile_content(existing: Option<&str>, base_url: &str) -> String {
+///
+/// When `catalog_json_path` is `Some` (the `--force-v1` path), a top-level
+/// `model_catalog_json = "<path>"` key is emitted. Top-level keys must precede
+/// any TOML table header, so it is written first.
+pub fn build_profile_content(
+    existing: Option<&str>,
+    base_url: &str,
+    catalog_json_path: Option<&str>,
+) -> String {
     let provider_block = generate_provider_block(base_url);
     let features_block = generate_features_block();
     let stripped = strip_managed_tables(
         existing.unwrap_or(""),
         &["[model_providers.llmup]", "[features]"],
     );
-    let mut out = stripped.trim_end().to_string();
-    if !out.is_empty() {
+    let mut out = String::new();
+    if let Some(path) = catalog_json_path {
+        out.push_str(&format!("model_catalog_json = \"{path}\"\n"));
+    }
+    let stripped = stripped.trim_end();
+    if !stripped.is_empty() {
+        out.push_str(stripped);
         out.push('\n');
     }
     out.push('\n');
@@ -202,6 +220,65 @@ pub fn generate_state_content(
          \"created_at\": \"{created_at}\"\n\
          }}\n"
     )
+}
+
+// ===========================================================================
+// --force-v1 catalog derivation
+// ===========================================================================
+
+/// Pure patcher: force every entry in `catalog["models"]` to
+/// `multi_agent_version = "v1"`, preserving all other fields. A model with the
+/// field absent gets it added; one set to `"v2"` or `null` is overwritten to
+/// `"v1"`. The input is returned cloned (never mutated).
+pub fn patch_catalog_v1(catalog: &serde_json::Value) -> serde_json::Value {
+    let mut out = catalog.clone();
+    if let Some(models) = out.get_mut("models").and_then(|m| m.as_array_mut()) {
+        for model in models.iter_mut() {
+            if let Some(obj) = model.as_object_mut() {
+                obj.insert(
+                    "multi_agent_version".to_string(),
+                    serde_json::Value::String("v1".to_string()),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Run `codex debug models --bundled` and return its stdout (the official
+/// catalog JSON). Not unit-tested — requires the `codex` binary; the pure
+/// [`patch_catalog_v1`] is tested instead.
+fn run_codex_debug_models_bundled() -> Result<String, String> {
+    let output = Command::new("codex")
+        .args(["debug", "models", "--bundled"])
+        .output()
+        .map_err(|error| format!("failed to spawn `codex`: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`codex debug models --bundled` exited non-zero: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("`codex` catalog stdout was not valid UTF-8: {error}"))
+}
+
+/// Location of the tool-owned derived V1 catalog (`<codex_home>/llmup/...`).
+fn derived_catalog_path(codex_home: &Path) -> PathBuf {
+    state_dir(codex_home).join("model-catalog.json")
+}
+
+/// Parse a raw bundled-catalog JSON, patch every model to V1, and atomically
+/// write the derived catalog. Returns the path written.
+fn derive_and_write_catalog(codex_home: &Path, raw_json: &str) -> Result<PathBuf, String> {
+    let catalog: serde_json::Value = serde_json::from_str(raw_json)
+        .map_err(|error| format!("failed to parse codex bundled catalog JSON: {error}"))?;
+    let patched = patch_catalog_v1(&catalog);
+    let body = serde_json::to_string_pretty(&patched)
+        .map_err(|error| format!("failed to serialize derived V1 catalog: {error}"))?;
+    let path = derived_catalog_path(codex_home);
+    write_config_file_atomic(&path, &body)?;
+    Ok(path)
 }
 
 // ===========================================================================
@@ -337,6 +414,8 @@ OPTIONS:
                                the config references the LLMUP_PROXY_KEY env var
     --reasoning-effort <s>     optional model_reasoning_effort for the sub-agent
     --context-window <N>       optional model_context_window for the sub-agent
+    --force-v1                 derive a per-model catalog pinning multi_agent_version = \"v1\"
+                               (requires the codex CLI; falls back to feature-flag-only otherwise)
     --status                   show what codex-setup has installed
     --uninstall                remove files managed by codex-setup
     --help, -h                 show this help
@@ -361,6 +440,7 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, String> {
             }
             "--status" => status = true,
             "--uninstall" => uninstall = true,
+            "--force-v1" => opts.force_v1 = true,
             _ => {
                 if let Some(value) = inline_value(arg, "--base-url") {
                     set_once(&mut opts.base_url, "--base-url", value)?;
@@ -518,14 +598,33 @@ fn timestamp_utc() -> String {
 // ===========================================================================
 
 /// Write all managed files under `codex_home`. Returns the written paths.
-pub fn install(input: &SetupInput, codex_home: &Path) -> Result<GeneratedPaths, String> {
+///
+/// Pass `bundled_catalog_json = Some(raw)` (the stdout of
+/// `codex debug models --bundled`) to enable `--force-v1` catalog derivation:
+/// every model's `multi_agent_version` is pinned to `"v1"`, the derived
+/// catalog is written, the profile gains `model_catalog_json`, and the catalog
+/// path is recorded in `state.json` for uninstall. `None` keeps the default
+/// feature-flag-only V1 defense.
+pub fn install(
+    input: &SetupInput,
+    codex_home: &Path,
+    bundled_catalog_json: Option<&str>,
+) -> Result<GeneratedPaths, String> {
     let profile = profile_path(codex_home);
     let agent = agent_path(codex_home, &input.model);
     let state_file = state_path(codex_home);
 
+    // Optional V1 catalog derivation (--force-v1 with a successful codex read).
+    let catalog_path: Option<PathBuf> = match bundled_catalog_json {
+        Some(raw) => Some(derive_and_write_catalog(codex_home, raw)?),
+        None => None,
+    };
+
     // Profile: merge into any existing tool-owned file.
     let existing_profile = fs::read_to_string(&profile).ok();
-    let profile_content = build_profile_content(existing_profile.as_deref(), &input.base_url);
+    let catalog_str = catalog_path.as_ref().and_then(|p| p.to_str());
+    let profile_content =
+        build_profile_content(existing_profile.as_deref(), &input.base_url, catalog_str);
     write_config_file_atomic(&profile, &profile_content)?;
 
     // Agent: fully regenerated per model (tool-owned file).
@@ -539,10 +638,13 @@ pub fn install(input: &SetupInput, codex_home: &Path) -> Result<GeneratedPaths, 
     // State manifest (no keys).
     let codex_version = detect_codex_version();
     let created_at = timestamp_utc();
-    let managed_files = vec![
+    let mut managed_files = vec![
         profile.to_string_lossy().into_owned(),
         agent.to_string_lossy().into_owned(),
     ];
+    if let Some(catalog) = &catalog_path {
+        managed_files.push(catalog.to_string_lossy().into_owned());
+    }
     let state_content = generate_state_content(&codex_version, &managed_files, &created_at);
     write_config_file_atomic(&state_file, &state_content)?;
 
@@ -550,6 +652,7 @@ pub fn install(input: &SetupInput, codex_home: &Path) -> Result<GeneratedPaths, 
         profile_path: profile,
         agent_path: agent,
         state_path: state_file,
+        catalog_path,
     })
 }
 
@@ -728,7 +831,26 @@ async fn run_with(args: &[String], stdout: &mut dyn Write) -> Result<i32, String
                 reasoning_effort: opts.reasoning_effort.clone(),
                 context_window: opts.context_window,
             };
-            let paths = install(&input, &home)?;
+            // --force-v1: read the official catalog and derive a V1-pinned copy.
+            // Failure is non-fatal — we fall back to the feature-flag-only V1
+            // defense already baked into every profile.
+            let bundled_catalog = if opts.force_v1 {
+                match run_codex_debug_models_bundled() {
+                    Ok(raw) => Some(raw),
+                    Err(_) => {
+                        writeln!(
+                            stdout,
+                            "WARNING: --force-v1 requires the codex CLI; \
+                             falling back to feature-flag-only V1 defense."
+                        )
+                        .map_err(io_err)?;
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let paths = install(&input, &home, bundled_catalog.as_deref())?;
 
             writeln!(
                 stdout,
