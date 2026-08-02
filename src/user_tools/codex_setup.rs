@@ -85,6 +85,37 @@ fn normalize_base_url(base_url: &str) -> String {
     trimmed.trim_end_matches('/').to_string()
 }
 
+/// Escape a value for safe interpolation into a TOML basic (double-quoted)
+/// string: `\` → `\\`, `"` → `\"`, newline/tab/CR → `\n`/`\t`/`\r`, and any
+/// remaining control character becomes a `\uXXXX` escape. Prevents TOML
+/// injection via user-supplied `base_url`/`model`/`reasoning_effort`.
+fn escape_toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Return the HTTP-key-leak warning when `base_url` uses an unencrypted
+/// `http://` scheme, else `None`. Pure so the decision is unit-testable.
+fn base_url_http_warning(base_url: &str) -> Option<&'static str> {
+    let trimmed = base_url.trim().to_ascii_lowercase();
+    if trimmed.starts_with("http://") {
+        Some("Warning: provider key will be sent over unencrypted HTTP")
+    } else {
+        None
+    }
+}
+
 /// File name for a model's custom agent, e.g. `llmup-gpt-5.toml`.
 pub fn agent_file_name(model: &str) -> String {
     format!("llmup-{model}.toml")
@@ -98,10 +129,11 @@ pub fn agent_name(model: &str) -> String {
 /// Generate the `[model_providers.llmup]` table.
 pub fn generate_provider_block(base_url: &str) -> String {
     let normalized = normalize_base_url(base_url);
+    let escaped = escape_toml_basic_string(&normalized);
     format!(
         "[model_providers.{PROVIDER_ID}]\n\
          name = \"LLMUP\"\n\
-         base_url = \"{normalized}\"\n\
+         base_url = \"{escaped}\"\n\
          wire_api = \"{DEFAULT_WIRE_API}\"\n\
          requires_openai_auth = false\n\
          env_key = \"{ENV_KEY_NAME}\"\n"
@@ -120,16 +152,21 @@ pub fn generate_agent_content(
     reasoning_effort: Option<&str>,
     context_window: Option<u64>,
 ) -> String {
+    let esc_model = escape_toml_basic_string(model);
+    let esc_name = escape_toml_basic_string(&agent_name(model));
     let mut out = String::new();
-    out.push_str(&format!("name = \"{}\"\n", agent_name(model)));
-    out.push_str(&format!("description = \"LLMUP sub-agent for {model}\"\n"));
-    out.push_str(&format!("model = \"{model}\"\n"));
+    out.push_str(&format!("name = \"{esc_name}\"\n"));
+    out.push_str(&format!(
+        "description = \"LLMUP sub-agent for {esc_model}\"\n"
+    ));
+    out.push_str(&format!("model = \"{esc_model}\"\n"));
     out.push_str(&format!("model_provider = \"{PROVIDER_ID}\"\n"));
     out.push_str(&format!(
         "developer_instructions = \"{DEVELOPER_INSTRUCTIONS}\"\n"
     ));
     if let Some(effort) = reasoning_effort {
-        out.push_str(&format!("model_reasoning_effort = \"{effort}\"\n"));
+        let esc_effort = escape_toml_basic_string(effort);
+        out.push_str(&format!("model_reasoning_effort = \"{esc_effort}\"\n"));
     }
     if let Some(window) = context_window {
         out.push_str(&format!("model_context_window = {window}\n"));
@@ -159,7 +196,8 @@ pub fn build_profile_content(
     );
     let mut out = String::new();
     if let Some(path) = catalog_json_path {
-        out.push_str(&format!("model_catalog_json = \"{path}\"\n"));
+        let esc_path = escape_toml_basic_string(path);
+        out.push_str(&format!("model_catalog_json = \"{esc_path}\"\n"));
     }
     let stripped = stripped.trim_end();
     if !stripped.is_empty() {
@@ -176,17 +214,19 @@ pub fn build_profile_content(
 /// Remove top-level TOML tables listed in `headers` from `content`. A table
 /// spans from its header line up to (but excluding) the next line beginning
 /// with `[` or the end of content. Non-matching lines are kept verbatim.
+///
+/// Matching is an **exact** comparison against the header text (after trimming
+/// surrounding whitespace) so that user-owned subsections such as
+/// `[features.advanced]` or `[model_providers.llmup.auth]` are preserved rather
+/// than wiped on re-run.
 fn strip_managed_tables(content: &str, headers: &[&str]) -> String {
     let mut out = String::new();
     let mut skipping: Option<&str> = None;
     for line in content.split_inclusive('\n') {
-        let trimmed = line.trim_start();
+        let trimmed = line.trim();
         if trimmed.starts_with('[') {
-            // Entering a new table: decide whether to skip it.
-            skipping = headers
-                .iter()
-                .find(|header| trimmed.starts_with(*header))
-                .copied();
+            // Entering a new table: skip only on an exact header match.
+            skipping = headers.iter().find(|header| trimmed == **header).copied();
         }
         match skipping {
             Some(_) => continue,
@@ -230,17 +270,39 @@ pub fn generate_state_content(
 /// `multi_agent_version = "v1"`, preserving all other fields. A model with the
 /// field absent gets it added; one set to `"v2"` or `null` is overwritten to
 /// `"v1"`. The input is returned cloned (never mutated).
+///
+/// If the catalog shape is unexpected (`models` missing / not an array, or any
+/// entry not an object), this prints a warning and returns the input unchanged
+/// rather than silently no-op'ing.
 pub fn patch_catalog_v1(catalog: &serde_json::Value) -> serde_json::Value {
+    const SHAPE_WARNING: &str =
+        "Warning: bundled catalog has unexpected shape; --force-v1 may not have taken effect";
+
+    let Some(models) = catalog.get("models") else {
+        eprintln!("{SHAPE_WARNING}");
+        return catalog.clone();
+    };
+    if !models.is_array() {
+        eprintln!("{SHAPE_WARNING}");
+        return catalog.clone();
+    }
+    // If any entry is not an object, bail with the warning (return unchanged).
+    if !models.as_array().unwrap().iter().all(|m| m.is_object()) {
+        eprintln!("{SHAPE_WARNING}");
+        return catalog.clone();
+    }
+
     let mut out = catalog.clone();
-    if let Some(models) = out.get_mut("models").and_then(|m| m.as_array_mut()) {
-        for model in models.iter_mut() {
-            if let Some(obj) = model.as_object_mut() {
-                obj.insert(
-                    "multi_agent_version".to_string(),
-                    serde_json::Value::String("v1".to_string()),
-                );
-            }
-        }
+    for model in out
+        .get_mut("models")
+        .and_then(|m| m.as_array_mut())
+        .unwrap()
+        .iter_mut()
+    {
+        model.as_object_mut().unwrap().insert(
+            "multi_agent_version".to_string(),
+            serde_json::Value::String("v1".to_string()),
+        );
     }
     out
 }
@@ -490,12 +552,28 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, String> {
         if opts.model.is_none() {
             return Err("--model is required".to_string());
         }
-        if opts.provider_key.is_none() {
-            return Err("--provider-key is required".to_string());
+        // N4: reject path traversal / shell metacharacters in the model alias.
+        if let Some(model) = &opts.model {
+            if !is_valid_model_name(model) {
+                return Err(format!(
+                    "--model contains invalid characters (allowed: letters, digits, '.', '_', '-'): `{model}`"
+                ));
+            }
         }
+        // --provider-key is optional for Generate (N7): it only gates the live
+        // connection test, so an omitted key is accepted.
     }
 
     Ok(opts)
+}
+
+/// A valid model alias contains only safe characters `[A-Za-z0-9._-]` and is
+/// non-empty, preventing path traversal and shell-injection via `--model`.
+fn is_valid_model_name(model: &str) -> bool {
+    !model.is_empty()
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 fn inline_value<'a>(arg: &'a str, flag: &str) -> Option<&'a str> {
@@ -549,6 +627,27 @@ fn state_dir(codex_home: &Path) -> PathBuf {
 
 fn state_path(codex_home: &Path) -> PathBuf {
     state_dir(codex_home).join("state.json")
+}
+
+/// Read the `managed_files` list from a prior `state.json`, if any. Returns an
+/// empty vec when the file is absent or unparseable so that a fresh install
+/// starts clean while a re-install can union in previously tracked files.
+fn read_previous_managed_files(state_file: &Path) -> Vec<String> {
+    let Ok(content) = fs::read_to_string(state_file) else {
+        return Vec::new();
+    };
+    let Ok(value): serde_json::Result<serde_json::Value> = serde_json::from_str(&content) else {
+        return Vec::new();
+    };
+    value
+        .get("managed_files")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| f.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Best-effort detection of the installed Codex CLI version. Returns
@@ -635,7 +734,8 @@ pub fn install(
     );
     write_config_file_atomic(&agent, &agent_content)?;
 
-    // State manifest (no keys).
+    // State manifest (no keys). UNION with any previously tracked files so a
+    // re-install with a different model does not orphan prior agent files.
     let codex_version = detect_codex_version();
     let created_at = timestamp_utc();
     let mut managed_files = vec![
@@ -644,6 +744,11 @@ pub fn install(
     ];
     if let Some(catalog) = &catalog_path {
         managed_files.push(catalog.to_string_lossy().into_owned());
+    }
+    for prev in read_previous_managed_files(&state_file) {
+        if !managed_files.iter().any(|f| f == &prev) {
+            managed_files.push(prev);
+        }
     }
     let state_content = generate_state_content(&codex_version, &managed_files, &created_at);
     write_config_file_atomic(&state_file, &state_content)?;
@@ -761,6 +866,7 @@ pub async fn connection_test(base_url: &str, provider_key: &str) -> Result<Vec<S
     let normalized = normalize_base_url(base_url);
     let url = format!("{normalized}/models");
     let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|error| format!("failed to build HTTP client: {error}"))?
         .get(&url)
@@ -800,7 +906,10 @@ pub async fn run(args: &[String]) -> Result<i32, String> {
     run_with(args, &mut stdout).await
 }
 
-async fn run_with(args: &[String], stdout: &mut dyn Write) -> Result<i32, String> {
+/// Testable entry point mirroring [`run`] but writing to a caller-supplied
+/// buffer. `pub` so integration tests can exercise the full action dispatch
+/// (including the optional-`--provider-key` skip path).
+pub async fn run_with(args: &[String], stdout: &mut dyn Write) -> Result<i32, String> {
     let opts = match parse_args(args) {
         Ok(opts) => opts,
         Err(message) => {
@@ -862,7 +971,12 @@ async fn run_with(args: &[String], stdout: &mut dyn Write) -> Result<i32, String
             writeln!(stdout, "  state:   {}", paths.state_path.display()).map_err(io_err)?;
 
             // Live connection test (best-effort; install already succeeded).
+            // --provider-key is optional (N7): skip the test entirely when not
+            // supplied instead of erroring out.
             if let Some(key) = opts.provider_key.as_deref() {
+                if let Some(warning) = base_url_http_warning(&input.base_url) {
+                    writeln!(stdout, "{warning}").map_err(io_err)?;
+                }
                 match connection_test(&input.base_url, key).await {
                     Ok(models) => {
                         writeln!(
@@ -881,6 +995,8 @@ async fn run_with(args: &[String], stdout: &mut dyn Write) -> Result<i32, String
                         .map_err(io_err)?;
                     }
                 }
+            } else {
+                writeln!(stdout, "Skipping connection test (no --provider-key)").map_err(io_err)?;
             }
 
             writeln!(
@@ -935,5 +1051,33 @@ mod tests {
         assert_eq!(v["managed_files"][0], "a");
         let lower = content.to_lowercase();
         assert!(!lower.contains("key") && !lower.contains("token"));
+    }
+
+    // ---------- M3: TOML basic-string escaping ----------
+
+    #[test]
+    fn escape_toml_basic_string_escapes_special_chars() {
+        assert_eq!(escape_toml_basic_string(r#"a"b"#), r#"a\"b"#);
+        assert_eq!(escape_toml_basic_string(r"a\b"), r"a\\b");
+        assert_eq!(escape_toml_basic_string("a\nb"), r"a\nb");
+        assert_eq!(escape_toml_basic_string("a\tb"), r"a\tb");
+        assert_eq!(escape_toml_basic_string("a\rb"), r"a\rb");
+        // Other control chars fall back to a TOML \uXXXX escape.
+        let escaped_ctrl = escape_toml_basic_string("\u{0001}");
+        assert!(
+            escaped_ctrl.starts_with('\\') && escaped_ctrl.contains('u'),
+            "control char should be \\u-escaped: {escaped_ctrl}"
+        );
+        // Plain values pass through untouched.
+        assert_eq!(escape_toml_basic_string("gpt-5.2"), "gpt-5.2");
+    }
+
+    // ---------- N2: HTTP-scheme warning helper ----------
+
+    #[test]
+    fn base_url_http_warning_detects_http_scheme() {
+        assert!(base_url_http_warning("http://example.com").is_some());
+        assert!(base_url_http_warning("https://example.com").is_none());
+        assert!(base_url_http_warning("not a url").is_none());
     }
 }

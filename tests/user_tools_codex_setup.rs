@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use llm_universal_proxy::user_tools::codex_setup::{
     agent_file_name, agent_name, build_profile_content, detect_codex_version,
     generate_agent_content, generate_provider_block, generate_state_content, install, parse_args,
-    patch_catalog_v1, run_status, run_uninstall, write_config_file_atomic, Action, CliOptions,
-    GeneratedPaths, SetupInput,
+    patch_catalog_v1, run_status, run_uninstall, run_with, write_config_file_atomic, Action,
+    CliOptions, GeneratedPaths, SetupInput,
 };
 
 struct TempDir {
@@ -569,3 +569,267 @@ fn install_without_force_v1_is_feature_flag_only_with_no_catalog() {
 
 #[allow(dead_code)]
 fn _ensure_cli_options_fields_present(_opts: CliOptions) {}
+
+// ===========================================================================
+// Adversarial-review fixes (M1, M2, M3, N3, N4, N7)
+// ===========================================================================
+
+// ---------- M1: re-install must UNION managed_files, not overwrite ----------
+
+fn input_for(model: &str) -> SetupInput {
+    SetupInput {
+        base_url: "https://proxy.example.com".to_string(),
+        model: model.to_string(),
+        reasoning_effort: Some("medium".to_string()),
+        context_window: Some(200_000),
+    }
+}
+
+#[test]
+fn install_unions_managed_files_across_reinstalls_and_uninstall_removes_all() {
+    let home = TempDir::new("m1-union");
+    let paths_a = install(&input_for("gpt-5"), home.path(), None).expect("install model A");
+    let paths_b = install(&input_for("claude"), home.path(), None).expect("install model B");
+
+    // state.json (written by the second install) must list BOTH agent files.
+    let state = read(&paths_b.state_path);
+    let value: serde_json::Value = serde_json::from_str(&state).expect("state json");
+    let files: Vec<String> = value["managed_files"]
+        .as_array()
+        .expect("managed_files array")
+        .iter()
+        .map(|f| f.as_str().expect("string").to_string())
+        .collect();
+    assert!(
+        files.iter().any(|f| f.ends_with("llmup-gpt-5.toml")),
+        "gpt-5 agent orphaned after re-install: {files:?}"
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("llmup-claude.toml")),
+        "claude agent missing from state: {files:?}"
+    );
+    // profile + state themselves tracked exactly once.
+    assert_eq!(
+        files
+            .iter()
+            .filter(|f| f == &&paths_a.profile_path.to_string_lossy().to_string())
+            .count(),
+        1
+    );
+
+    // Both agent paths still exist on disk after the second install.
+    assert!(
+        paths_a.agent_path.exists(),
+        "gpt-5 agent file dropped by re-install"
+    );
+    assert!(paths_b.agent_path.exists());
+
+    // Uninstall must remove BOTH agent files because both are tracked.
+    let mut buffer = Vec::new();
+    let code = run_uninstall(home.path(), &mut Cursor::new(&mut buffer)).expect("uninstall ok");
+    assert_eq!(code, 0);
+    assert!(
+        !paths_a.agent_path.exists(),
+        "gpt-5 agent should be removed on uninstall"
+    );
+    assert!(
+        !paths_b.agent_path.exists(),
+        "claude agent should be removed on uninstall"
+    );
+    assert!(
+        !paths_b.state_path.exists(),
+        "state should be removed on uninstall"
+    );
+}
+
+// ---------- M2: strip must not wipe user [features.*]/[provider.*] subsections ----------
+
+#[test]
+fn build_profile_preserves_user_feature_and_provider_subsections() {
+    let existing = "[features.advanced]\nenabled = true\n\n\
+                    [model_providers.llmup.auth]\ntoken_file = \"/secrets/token\"\n\n\
+                    [model_providers.openai]\nname = \"OpenAI\"\n";
+    let out = build_profile_content(Some(existing), "https://proxy.example.com", None);
+
+    // User subsections preserved verbatim.
+    assert!(
+        out.contains("[features.advanced]"),
+        "user [features.advanced] subsection was stripped: {out}"
+    );
+    assert!(out.contains("enabled = true"));
+    assert!(
+        out.contains("[model_providers.llmup.auth]"),
+        "user [model_providers.llmup.auth] subsection was stripped: {out}"
+    );
+    assert!(out.contains("token_file"));
+    // Unrelated table preserved.
+    assert!(out.contains("[model_providers.openai]"));
+    assert!(out.contains("name = \"OpenAI\""));
+    // Managed tables re-emitted exactly once (exact-header match, not subsections).
+    assert_eq!(
+        out.matches("[features]").count(),
+        1,
+        "managed [features] not unique: {out}"
+    );
+    assert_eq!(
+        out.matches("[model_providers.llmup]").count(),
+        1,
+        "managed provider table not unique: {out}"
+    );
+    // The subsections must NOT be counted as the managed header.
+    assert!(out.contains("multi_agent_v2 = false"));
+}
+
+// ---------- M3: interpolated values are TOML-escaped ----------
+
+#[test]
+fn provider_block_escapes_quote_and_backslash_in_base_url() {
+    // A `"` in the base URL must be emitted as `\"` (valid TOML), not raw.
+    let block = generate_provider_block("https://x\"evil");
+    assert!(
+        block.contains(r#"base_url = "https://x\"evil""#),
+        "expected escaped quote in base_url: {block}"
+    );
+    // No raw, unescaped quote leaks into the value position.
+    assert!(
+        !block.contains("https://x\"evil\"\n"),
+        "unescaped quote leaked into TOML: {block}"
+    );
+    // A backslash is doubled.
+    let with_slash = generate_provider_block("https://x\\y");
+    assert!(
+        with_slash.contains(r#"base_url = "https://x\\y""#),
+        "expected escaped backslash in base_url: {with_slash}"
+    );
+}
+
+#[test]
+fn agent_content_escapes_quote_in_reasoning_effort() {
+    let content = generate_agent_content("glm-5.2", Some("hi\"x"), None);
+    assert!(
+        content.contains(r#"model_reasoning_effort = "hi\"x""#),
+        "expected escaped reasoning_effort: {content}"
+    );
+}
+
+// ---------- N3: patch_catalog_v1 bails on unexpected shape ----------
+
+#[test]
+fn patch_catalog_v1_returns_unchanged_on_shape_mismatch() {
+    // `models` is a string, not an array.
+    let bad = serde_json::json!({"models": "not-an-array"});
+    assert_eq!(patch_catalog_v1(&bad), bad);
+
+    // `models` missing entirely.
+    let missing = serde_json::json!({"other": 1});
+    assert_eq!(patch_catalog_v1(&missing), missing);
+
+    // An entry is not an object.
+    let bad_entry = serde_json::json!({"models": ["string-entry", {"id": "ok"}]});
+    assert_eq!(patch_catalog_v1(&bad_entry), bad_entry);
+}
+
+// ---------- N4: model name validation ----------
+
+#[test]
+fn parse_args_rejects_invalid_model_name() {
+    let err = parse_args(&[
+        "--base-url".into(),
+        "https://proxy.example.com".into(),
+        "--model".into(),
+        "../evil".into(),
+    ])
+    .unwrap_err();
+    assert!(
+        err.contains("--model"),
+        "expected --model validation error: {err}"
+    );
+
+    let err2 = parse_args(&[
+        "--base-url".into(),
+        "https://proxy.example.com".into(),
+        "--model".into(),
+        "a b".into(),
+    ])
+    .unwrap_err();
+    assert!(
+        err2.contains("--model"),
+        "expected --model validation error for spaces: {err2}"
+    );
+}
+
+#[test]
+fn parse_args_accepts_valid_model_names() {
+    let opts = parse_args(&[
+        "--base-url".into(),
+        "https://proxy.example.com".into(),
+        "--model".into(),
+        "glm-5.2".into(),
+    ])
+    .expect("glm-5.2 is a valid model name");
+    assert_eq!(opts.model.as_deref(), Some("glm-5.2"));
+    assert_eq!(opts.action, Action::Generate);
+}
+
+// ---------- N7: --provider-key is optional for Generate ----------
+
+#[test]
+fn parse_args_generate_optional_provider_key() {
+    let opts = parse_args(&[
+        "--base-url".into(),
+        "https://proxy.example.com".into(),
+        "--model".into(),
+        "gpt-5".into(),
+    ])
+    .expect("provider-key should be optional for Generate");
+    assert_eq!(opts.action, Action::Generate);
+    assert!(
+        opts.provider_key.is_none(),
+        "provider_key should default to None when omitted"
+    );
+}
+
+#[tokio::test]
+async fn run_generate_without_provider_key_writes_config_and_skips_connection_test() {
+    let home = TempDir::new("n7-skip-test");
+    // run_with resolves CODEX_HOME from the env; no other test in this binary
+    // touches it, so a scoped set/restore is safe under the parallel runner.
+    let prev = std::env::var_os("CODEX_HOME");
+    std::env::set_var("CODEX_HOME", home.path());
+
+    let mut buffer = Vec::new();
+    let result = run_with(
+        &[
+            "--base-url".into(),
+            "https://example.com".into(),
+            "--model".into(),
+            "gpt-5".into(),
+        ],
+        &mut buffer,
+    )
+    .await;
+
+    // Restore the env regardless of outcome.
+    match prev {
+        Some(v) => std::env::set_var("CODEX_HOME", v),
+        None => std::env::remove_var("CODEX_HOME"),
+    }
+
+    let code = result.expect("generate without --provider-key should not error");
+    assert_eq!(code, 0);
+
+    let output = String::from_utf8(buffer).expect("utf8");
+    assert!(
+        output.contains("Skipping connection test"),
+        "expected skip-connection-test message: {output}"
+    );
+    // Config was still written.
+    assert!(
+        home.path().join("llmup.config.toml").exists(),
+        "profile should be written even without --provider-key"
+    );
+    assert!(
+        home.path().join("llmup").join("state.json").exists(),
+        "state should be written even without --provider-key"
+    );
+}
