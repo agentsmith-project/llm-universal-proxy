@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased / Next v0.3.2 (not published)
+## Unreleased / Next v0.3.3 (not published)
+
+- Advanced the main-branch release identity to Cargo package version `0.3.3` (release tag `v0.3.3`, not published), the next patch version after the published, occupied `v0.3.2` tag, without moving, deleting, or reusing the existing tag.
+
+## v0.3.2 - 2026-08-02
 
 - Added OpenAI Responses `agent_message` input-item translation so cross-provider Codex sub-agents receive inter-agent tasks instead of an "outside the portable cross-protocol subset" rejection (on `main` at commit `4b1ea7d`). The V2 encrypted `agent_message` form is accepted with a portability warning because its Fernet payload is opaque to anyone but the OpenAI server; the supported hybrid topology is V1 multi-agent, where an official main agent (ChatGPT login) dispatches to a local `llmup` sub-agent and the task arrives as a plain user message.
 - Hardened maximum-compatibility encrypted-content handling: the fourth `encrypted_content` site (`function_call_output` / `custom_tool_call_output` output arrays) is now assessment-owned, mirroring the existing `agent_message` / `reasoning` / `compaction` sites — text-surviving payloads warn-and-drop the opaque blob while encrypted-only outputs fail closed; a degraded custom-tool replay path that could leak the opaque blob is fixed; and malformed input items lacking both `type` and `role` now surface an explicit rejection instead of vanishing silently.
