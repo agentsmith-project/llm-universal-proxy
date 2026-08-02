@@ -190,9 +190,10 @@ pub fn build_profile_content(
 ) -> String {
     let provider_block = generate_provider_block(base_url);
     let features_block = generate_features_block();
-    let stripped = strip_managed_tables(
+    let stripped = strip_managed(
         existing.unwrap_or(""),
         &["[model_providers.llmup]", "[features]"],
+        &["model_catalog_json"],
     );
     let mut out = String::new();
     if let Some(path) = catalog_json_path {
@@ -211,27 +212,43 @@ pub fn build_profile_content(
     out
 }
 
-/// Remove top-level TOML tables listed in `headers` from `content`. A table
-/// spans from its header line up to (but excluding) the next line beginning
-/// with `[` or the end of content. Non-matching lines are kept verbatim.
+/// Remove managed TOML content from `content`:
+/// - **Tables** listed in `headers` — each spans from its header line up to (but
+///   excluding) the next line beginning with `[` or the end of content. Matching
+///   is an **exact** comparison against the header text (after trimming) so that
+///   user-owned subsections such as `[features.advanced]` or
+///   `[model_providers.llmup.auth]` are preserved rather than wiped on re-run.
+/// - **Bare top-level keys** listed in `bare_keys` — any line whose trimmed
+///   content is `<key> =` (whitespace around `=` tolerated) is dropped. This
+///   keeps the re-run idempotent for managed top-level scalars such as
+///   `model_catalog_json` while preserving user-owned keys like `env_key`.
 ///
-/// Matching is an **exact** comparison against the header text (after trimming
-/// surrounding whitespace) so that user-owned subsections such as
-/// `[features.advanced]` or `[model_providers.llmup.auth]` are preserved rather
-/// than wiped on re-run.
-fn strip_managed_tables(content: &str, headers: &[&str]) -> String {
+/// Non-matching lines are kept verbatim.
+fn strip_managed(content: &str, headers: &[&str], bare_keys: &[&str]) -> String {
     let mut out = String::new();
-    let mut skipping: Option<&str> = None;
+    let mut skipping_table = false;
     for line in content.split_inclusive('\n') {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
             // Entering a new table: skip only on an exact header match.
-            skipping = headers.iter().find(|header| trimmed == **header).copied();
+            skipping_table = headers.iter().any(|header| trimmed == *header);
+            if skipping_table {
+                continue;
+            }
+        } else if skipping_table {
+            // Still inside a managed table body.
+            continue;
         }
-        match skipping {
-            Some(_) => continue,
-            None => out.push_str(line),
+        // Drop managed bare top-level keys (e.g. `model_catalog_json = "..."`).
+        let is_managed_key = bare_keys.iter().any(|key| {
+            trimmed
+                .strip_prefix(key)
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        });
+        if is_managed_key {
+            continue;
         }
+        out.push_str(line);
     }
     out
 }
@@ -1024,7 +1041,7 @@ mod tests {
     #[test]
     fn strip_managed_tables_removes_only_named_tables() {
         let content = "[model_providers.openai]\nname = \"OpenAI\"\n\n[model_providers.llmup]\nname = \"LLMUP\"\n\n[features]\nmulti_agent_v2 = true\n\n[other]\nx = 1\n";
-        let stripped = strip_managed_tables(content, &["[model_providers.llmup]", "[features]"]);
+        let stripped = strip_managed(content, &["[model_providers.llmup]", "[features]"], &[]);
         assert!(stripped.contains("[model_providers.openai]"));
         assert!(stripped.contains("name = \"OpenAI\""));
         assert!(stripped.contains("[other]"));

@@ -504,6 +504,62 @@ fn profile_content_omits_model_catalog_json_when_no_path() {
     assert!(content.contains("multi_agent_v2 = false"));
 }
 
+// ---------- HOTFIX 1: model_catalog_json bare-key must not duplicate on re-run ----------
+
+#[test]
+fn profile_content_force_v1_model_catalog_json_idempotent_on_rerun() {
+    // An existing profile already carries a managed model_catalog_json bare key
+    // (from a prior --force-v1 run). Rebuilding once and then feeding the result
+    // back in (a second run) must leave exactly ONE such line.
+    let existing = "model_catalog_json = \"/old/.codex/llmup/model-catalog.json\"\n\
+                    [some_user_table]\nfoo = 1\n";
+    let first = build_profile_content(
+        Some(existing),
+        "https://proxy.example.com",
+        Some("/new/.codex/llmup/model-catalog.json"),
+    );
+    let second = build_profile_content(
+        Some(&first),
+        "https://proxy.example.com",
+        Some("/new/.codex/llmup/model-catalog.json"),
+    );
+    let count = second.matches("model_catalog_json").count();
+    assert_eq!(
+        count, 1,
+        "model_catalog_json duplicated on re-run (count={count}): {second}"
+    );
+    // And it carries the latest path.
+    assert!(second.contains("model_catalog_json = \"/new/.codex/llmup/model-catalog.json\""));
+}
+
+#[test]
+fn profile_content_force_v1_strips_old_catalog_key_and_preserves_user_bare_keys() {
+    let existing = "model_catalog_json = \"/old/model-catalog.json\"\n\
+                    my_setting = 42\n\
+                    env_key = \"MY_CUSTOM_KEY\"\n";
+    let out = build_profile_content(
+        Some(existing),
+        "https://proxy.example.com",
+        Some("/new/model-catalog.json"),
+    );
+    // User-owned bare keys are preserved verbatim.
+    assert!(
+        out.contains("my_setting = 42"),
+        "user bare key my_setting was dropped: {out}"
+    );
+    assert!(
+        out.contains("env_key = \"MY_CUSTOM_KEY\""),
+        "user bare key env_key was dropped: {out}"
+    );
+    // The managed catalog key is unique and updated to the new path.
+    assert_eq!(
+        out.matches("model_catalog_json").count(),
+        1,
+        "managed catalog key not unique: {out}"
+    );
+    assert!(out.contains("model_catalog_json = \"/new/model-catalog.json\""));
+}
+
 #[test]
 fn install_with_force_v1_catalog_writes_derived_catalog_and_state_entry() {
     let home = TempDir::new("force-v1");
