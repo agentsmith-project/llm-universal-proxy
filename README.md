@@ -2,7 +2,7 @@
 
 [中文文档](./README_CN.md) · [Documentation](./docs/README.md)
 
-`llmup` is a local proxy for model APIs and compatible endpoints. It lets Codex CLI and Claude Code talk to a provider through one local launcher path, while the real provider key stays on the proxy side.
+`llmup` is a local proxy for model APIs and compatible endpoints. It lets Codex CLI talk to a provider through one local proxy while the real provider key stays on the proxy side.
 
 It is built for maximum safe compatibility: when a feature can be translated safely, the proxy does that work locally; when it cannot, requests fail closed before the upstream call instead of being guessed into a provider shape.
 
@@ -13,43 +13,31 @@ It is built for maximum safe compatibility: when a feature can be translated saf
 
 Install the native client you plan to use first. `llmup` does not install Codex CLI or Claude Code.
 
-Install the binary and the three user commands:
+Install the binary and the `llmup` convenience alias with the one-line installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/agentsmith-project/llm-universal-proxy/releases/latest/download/install.sh | sh
 ```
 
-Configure your provider:
+The installer creates a `llmup` alias that points at `llm-universal-proxy`, so the single user-facing command is `llmup codex-setup`. The proxy is a local server, so start it with your provider configured (see the [Configuration Guide](./docs/configuration.md) for static YAML). Then generate the Codex config that routes a sub-agent through the proxy:
 
 ```bash
-llmup-config
+llmup codex-setup --base-url http://127.0.0.1:8080/openai/v1 --model main --provider-key <local-proxy-key>
 ```
 
-Start the client you use:
+`codex-setup` writes a `llmup` provider, a custom sub-agent, and a `llmup` profile under `~/.codex` so the official Codex main agent keeps its own credentials while a sub-agent routes through the proxy. The real provider key stays server-side; Codex only receives the local proxy key.
+
+Then run Codex with the generated profile:
 
 ```bash
-llmup-codex
+codex exec --profile llmup
 ```
 
-or:
+When the proxy config asks for a service type, use the API shape your provider documents: `openai-chat-completions`, `openai-responses`, or `anthropic-messages`. The default local model name is `main`; pass it to `codex-setup --model` unless you configured another alias.
 
-```bash
-llmup-claude
-```
+## Why a `llmup` Alias
 
-The real provider key is collected by `llmup-config` and kept in the local proxy configuration, not pasted into Codex or Claude Code. The launchers give the client a local proxy key and keep the upstream provider key on the proxy side.
-
-When the wizard asks for a service type, use the API shape your provider documents: `openai-chat-completions`, `openai-responses`, or `anthropic-messages`.
-
-The default local model name is `main`. `llmup-codex` and `llmup-claude` use `main` unless you choose another llmup alias.
-
-The launchers also manage the local proxy process, client base URL, selected model alias, and llmup-owned Codex/Claude state directories.
-
-## Why There Is No `llmup` Command
-
-There is intentionally no standalone `llmup` command. `llmup-config`, `llmup-codex`, and `llmup-claude` are the user commands.
-
-That keeps the first-use path small: configure once, then launch the native client you already use. `llm-universal-proxy --config` remains the advanced server entrypoint.
+The installer creates a `llmup` alias that points at the single `llm-universal-proxy` binary, so `llmup codex-setup` is the one user-facing command. `llm-universal-proxy --config` remains the advanced server entrypoint.
 
 ## Compatibility
 
@@ -61,7 +49,7 @@ That keeps the first-use path small: configure once, then launch the native clie
 
 ## Advanced
 
-- [docs/clients.md](./docs/clients.md): launcher-managed Codex and Claude Code behavior
+- [docs/clients.md](./docs/clients.md): `codex-setup` flow and the Codex V1 hybrid sub-agent topology
 - [docs/advanced-usage.md](./docs/advanced-usage.md): manual proxy startup, YAML, manual Codex/Claude wiring, and auth modes
 - [docs/container.md](./docs/container.md): container image usage
 - [docs/admin-dynamic-config.md](./docs/admin-dynamic-config.md): admin and dynamic config reference

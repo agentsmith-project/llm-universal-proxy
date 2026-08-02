@@ -126,7 +126,7 @@ check_user_tooling_doc_contract() {
     local readme
 
     for readme in "README.md" "README_CN.md"; do
-        check_contains_all "$readme" "install.sh" "llmup-config" "llmup-codex" "llmup-claude" "docs/advanced-usage.md"
+        check_contains_all "$readme" "install.sh" "codex-setup" "llmup codex-setup" "docs/advanced-usage.md"
         check_absent_all "$readme" \
             "llm-universal-proxy-macos-aarch64.tar.gz" \
             ".local/bin/llm-universal-proxy" \
@@ -152,15 +152,12 @@ check_user_tooling_doc_contract() {
     check_contains "README_CN.md" "请先安装你要使用的原生客户端"
 
     check_contains_all "docs/clients.md" \
-        "launcher-managed" \
-        "llmup-config" \
-        "llmup-codex" \
-        "llmup-claude" \
+        "codex-setup" \
         "does not install Codex CLI or Claude Code" \
-        "llmup-codex --llmup-no-proxy -- <native args>" \
-        "llmup-claude --llmup-no-proxy -- <native args>" \
-        "The launcher does not auto-detect native subcommands" \
-        "Advanced Usage"
+        "multi_agent_v2 = false" \
+        "model_provider" \
+        "V1 Hybrid Sub-Agent Topology" \
+        "[Advanced Usage](./advanced-usage.md)"
     check_absent_all "docs/clients.md" \
         "OPENAI_API_KEY=dummy" \
         "ANTHROPIC_API_KEY=dummy" \
@@ -772,9 +769,8 @@ check_installer_release_contract() {
     check_contains "install.sh" "absolute path"
     check_contains "install.sh" "unexpected archive entry"
     check_contains "install.sh" ".llmup-install-manifest"
-    check_contains "install.sh" "llmup-config"
-    check_contains "install.sh" "llmup-codex"
-    check_contains "install.sh" "llmup-claude"
+    check_contains "install.sh" "codex-setup"
+    check_contains "install.sh" "aliases=llmup"
     check_contains "install.sh" "reopen your terminal"
     check_contains "install.sh" "__LLMUP_RELEASE_TAG__"
     check_absent "install.sh" "sudo"
@@ -795,12 +791,8 @@ check_installer_release_contract() {
     check_contains ".github/workflows/release.yml" "--no-modify-path"
     check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llm-universal-proxy --help'
     check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llm-universal-proxy --version'
-    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-config --help'
-    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-config --version'
-    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-codex --llmup-help'
-    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-codex --llmup-version'
-    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-claude --llmup-help'
-    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup-claude --llmup-version'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llmup codex-setup --help'
+    check_contains ".github/workflows/release.yml" '"$BIN_DIR"/llm-universal-proxy codex-setup --status'
     check_contains ".github/workflows/release.yml" "Upload install.sh release asset"
     check_contains ".github/workflows/release.yml" "name: install-sh"
     check_contains ".github/workflows/release.yml" "path: artifacts/install.sh"

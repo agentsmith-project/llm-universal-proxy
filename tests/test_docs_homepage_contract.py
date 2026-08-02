@@ -76,24 +76,20 @@ class DocsHomepageContractTests(unittest.TestCase):
             with self.subTest(path=relative_path, snippet=snippet):
                 self.assertIn(snippet, text)
 
-    def test_readmes_make_the_three_step_launcher_path_the_homepage_story(self):
+    def test_readmes_make_the_codex_setup_path_the_homepage_story(self):
         expectations = {
             "README.md": (
                 "## Quick Start",
                 INSTALLER_COMMAND,
-                "llmup-config",
-                "llmup-codex",
-                "llmup-claude",
-                "## Why There Is No `llmup` Command",
+                "codex-setup",
+                "## Why a `llmup` Alias",
                 "## Advanced",
             ),
             "README_CN.md": (
-                "## 三步开始",
+                "## 快速开始",
                 INSTALLER_COMMAND,
-                "llmup-config",
-                "llmup-codex",
-                "llmup-claude",
-                "## 为什么没有独立的 `llmup` 命令",
+                "codex-setup",
+                "## 关于 `llmup` 别名",
                 "## 高级用法",
             ),
         }
@@ -102,20 +98,20 @@ class DocsHomepageContractTests(unittest.TestCase):
             with self.subTest(path=relative_path):
                 self.assert_in_order(self.read_text(relative_path), snippets)
 
-    def test_readmes_explain_no_standalone_llmup_command_is_intentional(self):
+    def test_readmes_explain_the_llmup_alias(self):
         self.assert_doc_mentions(
             "README.md",
             (
-                "There is intentionally no standalone `llmup` command.",
-                "`llmup-config`, `llmup-codex`, and `llmup-claude` are the user commands.",
+                "The installer creates a `llmup` alias that points at the single `llm-universal-proxy` binary",
+                "`llmup codex-setup` is the one user-facing command.",
                 "`llm-universal-proxy --config` remains the advanced server entrypoint.",
             ),
         )
         self.assert_doc_mentions(
             "README_CN.md",
             (
-                "第一版有意不提供独立的 `llmup` 主命令。",
-                "普通用户只需要记住 `llmup-config`、`llmup-codex` 和 `llmup-claude`。",
+                "安装脚本会创建一个 `llmup` 别名，指向唯一的 `llm-universal-proxy` 二进制",
+                "所以面向用户的命令只有 `llmup codex-setup`。",
                 "`llm-universal-proxy --config` 仍然保留给高级服务端用法。",
             ),
         )
@@ -131,38 +127,34 @@ class DocsHomepageContractTests(unittest.TestCase):
                 f"{relative_path} should not ask users to export API keys by hand",
             )
 
-    def test_user_entry_docs_keep_provider_secrets_in_the_config_tool_story(self):
+    def test_readmes_keep_provider_secrets_server_side(self):
         for relative_path in README_ENTRY_DOCS:
             text = self.read_text(relative_path)
             with self.subTest(path=relative_path):
-                self.assertIn("llmup-config", text)
+                self.assertIn("codex-setup", text)
                 self.assertNotIn("REPLACE_WITH_YOUR", text)
                 self.assertNotRegex(text, r"sk-(?:cp|ant|proj|live|test)-[A-Za-z0-9_-]+")
 
         self.assert_doc_mentions(
             "README.md",
             (
-                "The real provider key is collected by `llmup-config` and kept in the local proxy configuration, not pasted into Codex or Claude Code.",
-                "The launchers give the client a local proxy key and keep the upstream provider key on the proxy side.",
+                "The real provider key stays server-side; Codex only receives the local proxy key.",
             ),
         )
         self.assert_doc_mentions(
             "README_CN.md",
             (
-                "真实模型服务 Key 由 `llmup-config` 保存到本机代理配置里，不需要粘到 Codex CLI 或 Claude Code 里。",
-                "launcher 只把本地代理密码交给客户端，真实 provider key 留在 proxy 侧。",
+                "真实 provider key 留在服务端，Codex 只拿到本地代理密钥。",
             ),
         )
 
     def test_readme_new_user_model_name_is_main_not_default(self):
         expected = {
             "README.md": (
-                "The default local model name is `main`.",
-                "`llmup-codex` and `llmup-claude` use `main` unless you choose another llmup alias.",
+                "The default local model name is `main`; pass it to `codex-setup --model` unless you configured another alias.",
             ),
             "README_CN.md": (
-                "默认本地模型名是 `main`。",
-                "`llmup-codex` 和 `llmup-claude` 都会使用 `main`。",
+                "默认本地模型名是 `main`；除非你配置了别的别名，否则把它传给 `codex-setup --model`。",
             ),
         }
 
@@ -237,7 +229,7 @@ class DocsHomepageContractTests(unittest.TestCase):
                 f"{relative_path} should only point to the advanced server entrypoint briefly",
             )
 
-    def test_docs_index_points_to_launcher_and_advanced_user_docs(self):
+    def test_docs_index_points_to_codex_setup_and_advanced_user_docs(self):
         self.assert_doc_mentions(
             "docs/README.md",
             (
@@ -245,22 +237,21 @@ class DocsHomepageContractTests(unittest.TestCase):
                 "[advanced-usage.md](./advanced-usage.md)",
                 "[container.md](./container.md)",
                 "[admin-dynamic-config.md](./admin-dynamic-config.md)",
-                "Launcher-managed Codex and Claude Code setup",
+                "`codex-setup` subcommand flow",
                 "Manual proxy startup, multi-endpoint YAML, manual Codex/Claude wiring",
             ),
         )
 
-    def test_clients_guide_is_launcher_managed_overview_not_manual_tutorial(self):
+    def test_clients_guide_is_codex_setup_overview_not_manual_tutorial(self):
         text = self.read_text("docs/clients.md")
 
         for snippet in (
-            "`llmup-codex`",
-            "`llmup-claude`",
-            "`~/.llmup-codex`",
-            "`~/.llmup-claude`",
-            "`CODEX_HOME`",
-            "`CLAUDE_CONFIG_DIR`",
-            "native Codex or Claude Code arguments",
+            "codex-setup",
+            "`llmup codex-setup`",
+            "`~/.codex/llmup.config.toml`",
+            "`~/.codex/agents/llmup-<model>.toml`",
+            "`~/.codex/llmup/state.json`",
+            "`$CODEX_HOME`",
             "[Advanced Usage](./advanced-usage.md)",
         ):
             with self.subTest(snippet=snippet):
@@ -278,71 +269,6 @@ class DocsHomepageContractTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
 
-    def test_clients_guide_documents_managed_profile_projection(
-        self,
-    ):
-        text = self.read_text("docs/clients.md")
-
-        for snippet in (
-            "managed profile projection",
-            "`--llmup-model <alias>` selects the llmup alias",
-            "The default alias is `main`.",
-            "generates a Codex model catalog and supported tool hints",
-            "The Codex catalog contains every configured llmup alias.",
-            "Codex UI may or may not display every catalog alias",
-            "The hard contract is that the selected alias can start the Codex session.",
-            "`llmup.surface` metadata",
-            "does not append an automatic native `--model default` argument",
-            "`main` is the normal selected alias for Claude Code.",
-            "`ANTHROPIC_CUSTOM_MODEL_OPTION`",
-            "`ANTHROPIC_MODEL`",
-            "`ANTHROPIC_DEFAULT_HAIKU_MODEL=haiku`",
-            "`ANTHROPIC_DEFAULT_SONNET_MODEL=sonnet`",
-            "`ANTHROPIC_DEFAULT_OPUS_MODEL=opus`",
-            "`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` is not enabled by default.",
-            "`--llmup-no-profile-projection`",
-            "Protocol shaping and request enforcement stay in the proxy configuration and server-side conversion path.",
-        ):
-            with self.subTest(snippet=snippet):
-                self.assertIn(snippet, text)
-
-        for forbidden in (
-            "fixed minimal provider injection",
-            "does not read live `llmup.surface` metadata",
-            "native Codex client does not see live surface metadata",
-            "one-off model overrides stay native client behavior",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, text)
-
-    def test_clients_guide_documents_launcher_inheritance_boundary(self):
-        self.assert_doc_mentions(
-            "docs/clients.md",
-            (
-                "## Inheritance Boundary",
-                "The V1 launcher contract is narrow",
-                "main Codex or Claude Code session goes through the local proxy",
-                "native Codex subagents or Claude Code Task/subagent calls",
-                "same client runtime inherit that proxy wiring",
-                "does not guarantee proxy inheritance for Claude agent teams",
-                "bare `codex` or `claude` commands started from a shell",
-                "arbitrary shell child processes such as MCP servers, hooks, or scripts",
-                "background tasks that continue after the launcher-managed parent exits",
-            ),
-        )
-
-    def test_clients_guide_documents_explicit_no_proxy_escape_hatch(self):
-        text = self.read_text("docs/clients.md")
-
-        for snippet in (
-            "login, native help, native configuration, or MCP management",
-            "`llmup-codex --llmup-no-proxy -- <native args>`",
-            "`llmup-claude --llmup-no-proxy -- <native args>`",
-            "The launcher does not auto-detect native subcommands.",
-        ):
-            with self.subTest(snippet=snippet):
-                self.assertIn(snippet, text)
-
     def test_configuration_doc_is_advanced_static_yaml_reference_not_quickstart(self):
         text = self.read_text(CONFIG_DOC)
 
@@ -352,9 +278,7 @@ class DocsHomepageContractTests(unittest.TestCase):
                 "# Configuration Guide",
                 "Ordinary user path:",
                 "install.sh",
-                "llmup-config",
-                "llmup-codex",
-                "llmup-claude",
+                "codex-setup",
                 "This page is the advanced static YAML and server reference.",
             ),
         )
@@ -395,8 +319,7 @@ class DocsHomepageContractTests(unittest.TestCase):
             "Manual Proxy Startup",
             "Multi-Endpoint YAML",
             "Advanced Model Limits",
-            "llmup-config set-limits --alias main --context-window 200000 --max-output-tokens 128000",
-            "The command only updates `~/.llmup/config.yaml`",
+            "structured alias `limits`",
             'main: "openai_chat:provider-model"',
             'fast: "openai_chat:provider-fast-model"',
             'sonnet: "anthropic_messages:claude-sonnet-like"',
@@ -420,6 +343,7 @@ class DocsHomepageContractTests(unittest.TestCase):
             "PUT /admin/data-auth",
             'default: "',
             "--alias default",
+            "llmup-config set-limits",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)

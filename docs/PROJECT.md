@@ -46,9 +46,8 @@ src/
   streaming/
   translate/
   user_tools/
-    agent_launcher.rs
-    config_wizard.rs
-    env_file.rs
+    agent_model_profile.rs
+    codex_setup.rs
     mod.rs
 
 tests/
@@ -140,12 +139,10 @@ docs/
 
 | Path | Contributor entrypoint |
 | --- | --- |
-| `src/user_tools/config_wizard.rs` | Product entrypoints for `llmup-config`: interactive setup, hidden automation init, generated config, and checks |
-| `src/user_tools/agent_model_profile.rs` | Shared model alias, limits, surface, Codex catalog, and Claude profile projection helpers for the user launchers |
-| `src/user_tools/agent_launcher.rs` | Product entrypoints for `llmup-codex` and `llmup-claude`: launcher arg routing, no-proxy mode, proxy lifecycle, env isolation, native client execution |
-| `src/user_tools/env_file.rs` | Safe env-file parser/writer shared by the user tools |
-| `src/user_tools/mod.rs` | User-tool module boundary |
-| `install.sh` | Release installer product entrypoint that installs `llm-universal-proxy` and creates `llmup-config`, `llmup-codex`, and `llmup-claude` |
+| `src/user_tools/codex_setup.rs` | Product entrypoint for the `codex-setup` subcommand: CLI flag parsing, provider/agent/profile/state TOML generation, safe atomic writes, status/uninstall |
+| `src/user_tools/agent_model_profile.rs` | Shared model alias, limits, surface, and Codex catalog helpers used by the server `/models` handler |
+| `src/user_tools/mod.rs` | User-tool module boundary and shared `home_dir_from_env` helper |
+| `install.sh` | Release installer product entrypoint that installs `llm-universal-proxy` and creates the `llmup` convenience alias |
 
 ## Legacy/Test Harnesses And Release Gates
 
@@ -180,7 +177,7 @@ can publish.
 | Model surface or CLI capability flags | `src/config/model_surface.rs`, `src/server/models.rs`, `scripts/interactive_cli.py`, `tests/test_default_matrix_surface_contract.py` |
 | Protocol portability | `src/translate/assessment.rs`, `src/translate/internal/`, `docs/protocol-compatibility-matrix.md`, `docs/protocol-baselines/` |
 | Streaming/SSE behavior | `src/streaming/stream.rs`, `src/streaming/wire.rs`, `src/streaming/state.rs`, `src/streaming/tests/` |
-| User install/config/agent launcher behavior | `src/user_tools/`, `install.sh`, `tests/user_tools_config.rs`, `tests/user_tools_launcher.rs`, `tests/user_tools_entrypoints.rs`, `docs/clients.md` |
+| User `codex-setup` behavior | `src/user_tools/`, `install.sh`, `tests/user_tools_codex_setup.rs`, `tests/user_tools_agent_model_profile.rs`, `docs/clients.md` |
 | Legacy interactive harness behavior | `scripts/interactive_cli.py`, wrapper shell scripts, `tests/test_interactive_cli.py` |
 | Endpoint matrix or release compatible-provider smoke | `scripts/real_endpoint_matrix.py`, `tests/test_real_endpoint_matrix.py`, `tests/test_release_gates.py`, `.github/workflows/release.yml` |
 
@@ -195,9 +192,8 @@ can publish.
 | `src/streaming/tests/` | Parser, sink/source, and stream edge cases |
 | `src/translate/internal/tests/` | Provider translation internals and regression coverage |
 | `tests/test_interactive_cli.py` | Interactive CLI wrapper contract, provider-neutral presets, wrapper scripts, hermetic scripted interactive Codex wrapper gate |
-| `tests/user_tools_config.rs` | `llmup-config` user-tool config generation, summaries, env file handling, and checks |
-| `tests/user_tools_launcher.rs` | `llmup-codex` / `llmup-claude` launcher routing, env isolation, runtime config, no-proxy behavior |
-| `tests/user_tools_entrypoints.rs` | Installed entrypoint dispatch, installer aliases, help/version, and fake client full-flow checks |
+| `tests/user_tools_codex_setup.rs` | `codex-setup` subcommand flag parsing, TOML generation (provider/agent/profile/state), safe writes, status/uninstall |
+| `tests/user_tools_agent_model_profile.rs` | Shared model alias, limits, surface, and Codex catalog helpers reused by the server `/models` handler |
 | `tests/test_cli_matrix_contracts.py` | CLI contract verifier behavior for public tool names and debug-trace matching |
 | `tests/test_real_cli_matrix.py` | Real CLI matrix harness behavior |
 | `tests/test_real_endpoint_matrix.py` | Endpoint matrix case construction, modes, reports, provider-neutral compatible smoke |
@@ -213,7 +209,7 @@ can publish.
 | `docs/PRD.md` | Product and behavior requirements |
 | `docs/DESIGN.md` | Architecture snapshot and execution-chain design notes |
 | `docs/PROJECT.md` | Current repository and maintenance map |
-| `docs/clients.md` | Launcher-managed user tool behavior, native client boundary, and no-proxy escape hatch |
+| `docs/clients.md` | `codex-setup` subcommand flow, Codex V1 hybrid sub-agent topology, and managed-file contract |
 | `docs/configuration.md` | Advanced static YAML/server reference, auth policies, model aliases, model surface fields |
 | `docs/container.md` | Container build/smoke/release path and release gate summary |
 | `docs/ga-readiness-review.md` | GA posture, remaining evidence, and release-gate checklist |

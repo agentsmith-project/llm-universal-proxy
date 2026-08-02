@@ -1826,6 +1826,16 @@ print(json.dumps({{
         self.assertIn("as JSON", output)
 
     def test_real_codex_accepts_rust_launch_plan_generated_catalog(self):
+        # The argv[0] launcher (`llmup-codex`) and its
+        # `--llmup-internal-launch-plan-json` protocol were removed when the
+        # client-config tools were deprecated in favor of the `codex-setup`
+        # subcommand. This legacy matrix case exercised the deleted launcher
+        # against the real proxy binary, so it is kept as an explicit skip
+        # rather than dropped, to document the superseded coverage.
+        self.skipTest(
+            "launcher --llmup-internal-launch-plan-json protocol removed; "
+            "superseded by the codex-setup subcommand"
+        )
         module = load_module()
         if shutil.which("codex") is None:
             self.skipTest("codex binary is not available")

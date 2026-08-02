@@ -222,9 +222,8 @@ class GaDocsContractTests(unittest.TestCase):
             with self.subTest(path=path):
                 for snippet in (
                     "install.sh",
-                    "llmup-config",
-                    "llmup-codex",
-                    "llmup-claude",
+                    "codex-setup",
+                    "llmup codex-setup",
                     "docs/advanced-usage.md",
                     "docs/container.md",
                 ):
@@ -268,7 +267,7 @@ class GaDocsContractTests(unittest.TestCase):
             'check_contains "docs/container.md" "If the package is public"',
             'check_contains "docs/container.md" "unauthorized, 403, or package page appears 404"',
             "check_user_tooling_doc_contract",
-            'check_contains_all "$readme" "install.sh" "llmup-config" "llmup-codex" "llmup-claude" "docs/advanced-usage.md"',
+            'check_contains_all "$readme" "install.sh" "codex-setup" "llmup codex-setup" "docs/advanced-usage.md"',
             '"llm-universal-proxy-macos-aarch64.tar.gz"',
             '".local/bin/llm-universal-proxy"',
             '"scripts/run_codex_proxy.sh"',
@@ -280,7 +279,7 @@ class GaDocsContractTests(unittest.TestCase):
             '"data_auth:"',
             '"--model minimax"',
             'check_contains_all "docs/clients.md"',
-            '"launcher-managed"',
+            '"codex-setup"',
             'check_absent_all "docs/clients.md"',
             "'OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY'",
             '"llm-universal-proxy --config"',

@@ -1,7 +1,5 @@
 //! LLM Universal Proxy entrypoint.
 
-use std::ffi::OsString;
-
 #[derive(Debug, PartialEq, Eq)]
 struct CliArgs {
     config_path: Option<String>,
@@ -84,10 +82,12 @@ fn server_version() -> String {
 async fn main() {
     let args_os = std::env::args_os().collect::<Vec<_>>();
     // Subcommand dispatch for the `codex-setup` user tool. This peek runs
-    // before server arg parsing and outside the `LLMUP_FORCE_SERVER` guard:
-    // codex-setup is a user tool, not a server mode, so it must stay reachable
-    // regardless of that flag. The existing argv[0] dispatch below is
-    // untouched (llmup-config / llmup-codex / llmup-claude).
+    // before server arg parsing so `llm-universal-proxy codex-setup ...` (and
+    // the `llmup codex-setup ...` convenience alias) routes into the user tool
+    // instead of the server. The deprecated argv[0] aliases
+    // (`llmup-config` / `llmup-codex` / `llmup-claude`) have been removed; the
+    // binary now starts as a server by default and exposes `codex-setup` as the
+    // single user-facing subcommand.
     if args_os.len() >= 2 && args_os[1].to_str() == Some("codex-setup") {
         let rest: Vec<String> = args_os[2..]
             .iter()
@@ -98,49 +98,6 @@ async fn main() {
             Err(message) => {
                 eprintln!("{message}");
                 std::process::exit(2);
-            }
-        }
-    }
-    if !matches!(std::env::var("LLMUP_FORCE_SERVER").as_deref(), Ok("1")) {
-        if let Some(program) = args_os.first() {
-            if let Some(entrypoint) =
-                llm_universal_proxy::user_tools::entrypoint_from_argv0(program)
-            {
-                let tool_args = args_os.into_iter().skip(1).collect::<Vec<OsString>>();
-                let result = match entrypoint {
-                    llm_universal_proxy::user_tools::UserToolEntrypoint::Config => {
-                        let mut stdin = std::io::stdin();
-                        let mut stdout = std::io::stdout();
-                        llm_universal_proxy::user_tools::config_wizard::run_cli(
-                            tool_args,
-                            &mut stdin,
-                            &mut stdout,
-                        )
-                    }
-                    llm_universal_proxy::user_tools::UserToolEntrypoint::Codex => {
-                        let mut stdout = std::io::stdout();
-                        llm_universal_proxy::user_tools::agent_launcher::run_cli(
-                            llm_universal_proxy::user_tools::agent_launcher::AgentKind::Codex,
-                            tool_args,
-                            &mut stdout,
-                        )
-                    }
-                    llm_universal_proxy::user_tools::UserToolEntrypoint::Claude => {
-                        let mut stdout = std::io::stdout();
-                        llm_universal_proxy::user_tools::agent_launcher::run_cli(
-                            llm_universal_proxy::user_tools::agent_launcher::AgentKind::Claude,
-                            tool_args,
-                            &mut stdout,
-                        )
-                    }
-                };
-                match result {
-                    Ok(code) => std::process::exit(code),
-                    Err(message) => {
-                        eprintln!("{message}");
-                        std::process::exit(2);
-                    }
-                }
             }
         }
     }

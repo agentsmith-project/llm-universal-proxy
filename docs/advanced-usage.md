@@ -1,6 +1,6 @@
 # Advanced Usage
 
-The normal path is `llmup-config`, then `llmup-codex` or `llmup-claude`. Use this page when you intentionally want to start the proxy yourself, maintain YAML by hand, or wire a client without the launchers.
+The normal path is to start the proxy and run `llmup codex-setup`. Use this page when you intentionally want to start the proxy yourself, maintain YAML by hand, or wire a client without `codex-setup`.
 
 ## Manual Proxy Startup
 
@@ -62,13 +62,18 @@ In `client_provider_key` mode, the client SDK key is the real provider key. Use 
 
 ## Advanced Model Limits
 
-If the first-run wizard did not collect model limits, add them later with the advanced config entrypoint:
+Model limits live in the static YAML as structured alias `limits` rather than in a wizard. Set `context_window` and `max_output_tokens` on the alias so the proxy and Codex catalog advertise the right surface:
 
-```bash
-llmup-config set-limits --alias main --context-window 200000 --max-output-tokens 128000
+```yaml
+model_aliases:
+  main:
+    target: "openai_chat:provider-model"
+    limits:
+      context_window: 200000
+      max_output_tokens: 128000
 ```
 
-Use `--alias <name>` to override one model alias, or `--upstream <name>` to set limits shared by aliases that use the same upstream. The command only updates `~/.llmup/config.yaml`; provider secrets stay in `secrets.env`.
+These limits feed the Codex model catalog the same way the proxy exposes `llmup.surface` metadata. Provider credentials stay in the proxy's env sources, not in this file.
 
 ## Manual Codex Wiring
 

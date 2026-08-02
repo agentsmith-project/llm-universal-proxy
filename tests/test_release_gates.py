@@ -69,12 +69,8 @@ RELEASE_PUBLISH_JOB_MARKERS = (
 INSTALLER_SMOKE_COMMANDS = (
     "llm-universal-proxy --help",
     "llm-universal-proxy --version",
-    "llmup-config --help",
-    "llmup-config --version",
-    "llmup-codex --llmup-help",
-    "llmup-codex --llmup-version",
-    "llmup-claude --llmup-help",
-    "llmup-claude --llmup-version",
+    "llmup codex-setup --help",
+    "llm-universal-proxy codex-setup --status",
 )
 
 
@@ -222,7 +218,7 @@ set -eu
 name=${0##*/}
 arg=${1:-}
 case "$name:$arg" in
-  llm-universal-proxy:--help|llm-universal-proxy:--version|llmup-config:--help|llmup-config:--version|llmup-codex:--llmup-help|llmup-codex:--llmup-version|llmup-claude:--llmup-help|llmup-claude:--llmup-version)
+  llm-universal-proxy:--help|llm-universal-proxy:--version|llm-universal-proxy:codex-setup|llmup:codex-setup)
     printf '%s %s\\n' "$name" "$arg"
     exit 0
     ;;
@@ -349,9 +345,8 @@ exit 64
             "absolute path",
             "unexpected archive entry",
             ".llmup-install-manifest",
-            "llmup-config",
-            "llmup-codex",
-            "llmup-claude",
+            "codex-setup",
+            "aliases=llmup",
             "reopen your terminal",
             "__LLMUP_RELEASE_TAG__",
         ):
@@ -379,11 +374,10 @@ exit 64
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertTrue((bin_dir / "llm-universal-proxy").is_file())
-            for alias in ("llmup-config", "llmup-codex", "llmup-claude"):
+            for alias in ("llmup",):
                 with self.subTest(alias=alias):
                     self.assertTrue((bin_dir / alias).exists())
                     self.assertIn(str(bin_dir / alias), result.stdout)
-            self.assertFalse((bin_dir / "llmup").exists(), "installer must not create a standalone llmup command")
             self.assertTrue((bin_dir / ".llmup-install-manifest").is_file())
             self.assertFalse((tmp_path / "home" / ".profile").exists())
 
@@ -513,7 +507,7 @@ exit 64
             profile = tmp_path / "home" / ".profile"
             text = profile.read_text(encoding="utf-8")
             self.assertEqual(text.count(">>> llmup installer >>>"), 1)
-            self.assertIn(str(bin_dir / "llmup-config"), first.stdout)
+            self.assertIn(str(bin_dir / "llmup"), first.stdout)
 
     def test_release_workflow_uploads_install_sh_asset_and_runs_installer_smoke(self):
         release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -1004,13 +998,12 @@ exit 64
                 self.assertIn(snippet, ga_review)
 
         for snippet in (
-            "launcher-managed path",
-            "llmup-config",
-            "llmup-codex",
-            "llmup-claude",
+            "codex-setup",
+            "multi_agent_v2 = false",
+            "model_provider",
+            "V1 Hybrid Sub-Agent Topology",
             "CODEX_HOME",
-            "CLAUDE_CONFIG_DIR",
-            "real provider secret out of the client process",
+            "real provider key belongs to the proxy",
             "Advanced Usage](./advanced-usage.md)",
         ):
             with self.subTest(client_doc_snippet=snippet):
@@ -1027,7 +1020,7 @@ exit 64
                 self.assertNotIn(snippet, clients)
 
         for snippet in (
-            "wire a client without the launchers",
+            "wire a client without `codex-setup`",
             "Manual Proxy Startup",
             "Auth Modes",
             "Manual Codex Wiring",

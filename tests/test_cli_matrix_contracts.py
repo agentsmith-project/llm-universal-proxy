@@ -459,23 +459,6 @@ class CliMatrixContractTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("client_name", message)
 
-    def test_clients_guide_documents_launcher_profile_projection(self):
-        text = self.read_text("docs/clients.md")
-
-        self.assertIn("managed profile projection", text)
-        self.assertIn("generates a Codex model catalog and supported tool hints", text)
-        self.assertIn("`llmup.surface` metadata", text)
-        self.assertIn("`ANTHROPIC_CUSTOM_MODEL_OPTION`", text)
-        self.assertIn("`ANTHROPIC_MODEL`", text)
-        self.assertIn("Protocol shaping and request enforcement stay", text)
-        self.assertIn("proxy configuration and server-side conversion", text)
-        self.assertIn("`--llmup-no-profile-projection`", text)
-        self.assertNotIn("fixed minimal provider injection", text)
-        self.assertNotIn("does not read live `llmup.surface` metadata", text)
-        self.assertNotIn("native Codex client does not see live surface metadata", text)
-        self.assertNotIn("one-off model overrides stay native client behavior", text)
-        self.assertNotIn("temporary model metadata", text)
-
     def test_prd_and_plan_describe_current_real_cli_contract_scope(self):
         prd_text = self.read_text("docs/PRD.md")
         plan_text = self.read_text("docs/engineering/max-compat-development-plan.md")

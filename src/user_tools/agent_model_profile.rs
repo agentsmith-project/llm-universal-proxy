@@ -275,10 +275,10 @@ fn selected_alias_error(config: &Config, selected_alias: &str) -> String {
         && !config.model_aliases.contains_key(DEFAULT_AGENT_MODEL_ALIAS)
         && config.model_aliases.contains_key("default")
     {
-        return "default llmup model alias `main` was not found, and this config still has the legacy alias `default`; run `llmup-config` to rename `default` to `main`, or run `llmup-config list` to view configured aliases. Pass `--llmup-model default` only when you intentionally want the legacy alias.".to_string();
+        return "default llmup model alias `main` was not found, and this config still has the legacy alias `default`; rename the `default` alias to `main` in your proxy config (`model_aliases`). Pass the legacy alias only when you intentionally want it.".to_string();
     }
     format!(
-        "unknown llmup model alias `{selected_alias}`; run `llmup-config list` to view configured aliases"
+        "unknown llmup model alias `{selected_alias}`; check the `model_aliases` in your proxy config"
     )
 }
 

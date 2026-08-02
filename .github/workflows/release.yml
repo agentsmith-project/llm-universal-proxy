@@ -207,12 +207,8 @@ jobs:
           LLMUP_INSTALL_BASE_URL="file://$PWD/artifacts/local-release" HOME="$HOME" sh artifacts/install.sh --bin-dir "$BIN_DIR" --no-modify-path
           "$BIN_DIR"/llm-universal-proxy --help
           "$BIN_DIR"/llm-universal-proxy --version
-          "$BIN_DIR"/llmup-config --help
-          "$BIN_DIR"/llmup-config --version
-          "$BIN_DIR"/llmup-codex --llmup-help
-          "$BIN_DIR"/llmup-codex --llmup-version
-          "$BIN_DIR"/llmup-claude --llmup-help
-          "$BIN_DIR"/llmup-claude --llmup-version
+          "$BIN_DIR"/llmup codex-setup --help
+          "$BIN_DIR"/llm-universal-proxy codex-setup --status
 
       - name: Upload install.sh release asset
         uses: actions/upload-artifact@v4

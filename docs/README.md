@@ -5,7 +5,7 @@ This is the main docs entrypoint for `llmup`.
 Start here based on what you need:
 
 - [clients.md](./clients.md)
-  Launcher-managed Codex and Claude Code setup for native clients you install separately
+  `codex-setup` subcommand flow and Codex V1 hybrid sub-agent topology for native clients you install separately
 - [advanced-usage.md](./advanced-usage.md)
   Manual proxy startup, multi-endpoint YAML, manual Codex/Claude wiring, auth modes, Gemini through Google's OpenAI-compatible endpoint, and links to admin/container docs
 - [configuration.md](./configuration.md)

@@ -1,10 +1,10 @@
 # Configuration Guide
 
-Ordinary user path: `install.sh` -> `llmup-config` -> `llmup-codex` or `llmup-claude`.
+Ordinary user path: `install.sh` -> start the proxy -> `llmup codex-setup` -> `codex exec --profile llmup`.
 
-Use that path when you want launcher-managed Codex CLI or Claude Code setup without writing YAML. This page is the advanced static YAML and server reference. It is for operators and developers who run `llm-universal-proxy --config` directly, generate checked-in server config, or need the full field-level config contract.
+Use that path when you want `codex-setup` to wire Codex to the proxy without editing Codex config by hand. This page is the advanced static YAML and server reference. It is for operators and developers who run `llm-universal-proxy --config` directly, generate checked-in server config, or need the full field-level config contract.
 
-For launcher-managed user setup, see [Client Setup Guide](./clients.md). If you need to update config without restarting the process, see [Admin and Dynamic Config](./admin-dynamic-config.md).
+For the `codex-setup` user flow, see [Client Setup Guide](./clients.md). If you need to update config without restarting the process, see [Admin and Dynamic Config](./admin-dynamic-config.md).
 
 Reasoning effort such as `xhigh` stays on the client request; it is not part
 of the alias or upstream model name.

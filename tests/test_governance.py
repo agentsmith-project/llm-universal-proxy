@@ -823,7 +823,7 @@ os.execv(real_git, [real_git, *args])
 
         for snippet in (
             "check_user_tooling_doc_contract",
-            'check_contains_all "$readme" "install.sh" "llmup-config" "llmup-codex" "llmup-claude" "docs/advanced-usage.md"',
+            'check_contains_all "$readme" "install.sh" "codex-setup" "llmup codex-setup" "docs/advanced-usage.md"',
             'check_absent_all "$readme"',
             'check_contains_all "docs/clients.md"',
             'check_absent_all "docs/clients.md"',
@@ -871,9 +871,8 @@ os.execv(real_git, [real_git, *args])
                     self.assertNotIn(forbidden, text)
 
         for snippet in (
-            "llmup-config",
-            "llmup-codex",
-            "llmup-claude",
+            "codex-setup",
+            "llmup codex-setup",
             "advanced-usage.md",
         ):
             for path, text in user_entry_docs.items():
@@ -884,7 +883,7 @@ os.execv(real_git, [real_git, *args])
             with self.subTest(path=path, user_snippet="install.sh"):
                 self.assertIn("install.sh", text)
 
-        self.assertIn("launcher-managed", clients_doc)
+        self.assertIn("codex-setup", clients_doc)
         for forbidden in (
             "OPENAI_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",
             "ANTHROPIC_API_KEY=$LLM_UNIVERSAL_PROXY_KEY",

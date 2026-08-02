@@ -30,8 +30,8 @@ usage() {
     cat <<'EOF'
 Usage: sh install.sh [--bin-dir DIR] [--no-modify-path]
 
-Installs llm-universal-proxy and creates llmup-config, llmup-codex, and
-llmup-claude aliases in the target bin directory.
+Installs llm-universal-proxy and creates a llmup convenience alias in the
+target bin directory so `llmup codex-setup` works.
 
 Options:
   --bin-dir DIR       Install into DIR instead of ~/.local/bin
@@ -262,7 +262,7 @@ check_target_conflicts() {
         managed=1
     fi
 
-    for name in llm-universal-proxy llmup-config llmup-codex llmup-claude; do
+    for name in llm-universal-proxy llmup; do
         target=$BIN_DIR/$name
         if [ -e "$target" ] || [ -L "$target" ]; then
             if [ "$managed" -ne 1 ]; then
@@ -287,7 +287,7 @@ install_binary_and_aliases() {
     chmod 755 "$tmp_primary" || fail "failed to mark binary executable"
     mv -f "$tmp_primary" "$primary" || fail "failed to install binary atomically"
 
-    for alias in llmup-config llmup-codex llmup-claude; do
+    for alias in llmup; do
         tmp_alias=$BIN_DIR/.$alias.$$
         rm -f "$tmp_alias"
         if ln -s "llm-universal-proxy" "$tmp_alias" 2>/dev/null; then
@@ -302,7 +302,7 @@ install_binary_and_aliases() {
     {
         printf 'managed-by=llmup-install\n'
         printf 'primary=llm-universal-proxy\n'
-        printf 'aliases=llmup-config llmup-codex llmup-claude\n'
+        printf 'aliases=llmup\n'
     } > "$manifest_tmp" || fail "failed to write install manifest"
     mv -f "$manifest_tmp" "$BIN_DIR/.llmup-install-manifest" || fail "failed to install manifest atomically"
 }
@@ -332,15 +332,11 @@ print_next_steps() {
         log "Next:"
     fi
 
-    config_cmd=$(next_command llmup-config)
-    codex_cmd=$(next_command llmup-codex)
-    claude_cmd=$(next_command llmup-claude)
+    setup_cmd=$(next_command llmup)
     proxy_cmd=$(next_command llm-universal-proxy)
 
-    log "  $config_cmd        set up model service"
-    log "  $codex_cmd         start Codex CLI"
-    log "  $claude_cmd        start Claude Code"
-    log "  $proxy_cmd --help  advanced server usage"
+    log "  $setup_cmd codex-setup --help  configure Codex to use the proxy"
+    log "  $proxy_cmd --help             advanced server usage"
 }
 
 detect_platform
