@@ -4091,6 +4091,389 @@ fn translate_request_responses_compaction_summary_text_survives_default_translat
     );
 }
 
+// --- agent_message input item -> Chat user message (cross-provider subagent) ---
+
+const AGENT_MESSAGE_ENVELOPE: &str =
+    "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\nRun the analysis";
+
+fn agent_message_input_item(text: &str) -> serde_json::Value {
+    json!({
+        "type": "agent_message",
+        "id": "msg_1",
+        "author": "/root",
+        "recipient": "/root/worker",
+        "content": [{ "type": "input_text", "text": text }]
+    })
+}
+
+#[test]
+fn translate_request_responses_agent_message_input_becomes_user_message() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": [agent_message_input_item(AGENT_MESSAGE_ENVELOPE)]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect("agent_message input should translate to a Chat user message");
+
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "body = {body:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], AGENT_MESSAGE_ENVELOPE);
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(
+        !serialized.contains("agent_message"),
+        "agent_message tag should not leak: {serialized}"
+    );
+}
+
+#[test]
+fn translate_request_responses_agent_message_not_merged_with_developer_message() {
+    // On the Anthropic path, system/developer are lifted into the top-level
+    // `system` field and are NOT coalesced into user messages, so developer and
+    // agent_message remain structurally separate (the agent_message dispatch arm
+    // never appends into a developer accumulator). This faithfully checks the
+    // "not merged" contract; on the Chat Completions path a universal
+    // maximum-safe-compatibility pass would additionally join them (as it does
+    // for `compaction`).
+    let mut body = json!({
+        "model": "claude-3",
+        "input": [
+            { "type": "message", "role": "developer", "content": [{ "type": "input_text", "text": "Sub-agent instructions." }] },
+            agent_message_input_item(AGENT_MESSAGE_ENVELOPE)
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::Anthropic,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .expect("agent_message and developer should both translate");
+
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "body = {body:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(
+        messages[0]["content"][0]["text"], AGENT_MESSAGE_ENVELOPE,
+        "body = {body:?}"
+    );
+    // Developer content is lifted to the top-level Anthropic `system` field,
+    // separate from the agent_message user message.
+    let system_text = serde_json::to_string(body.get("system").unwrap_or(&Value::Null)).unwrap();
+    assert!(
+        system_text.contains("Sub-agent instructions."),
+        "developer content must survive independently in system: {system_text}"
+    );
+    assert!(
+        !system_text.contains(AGENT_MESSAGE_ENVELOPE),
+        "agent_message must not be merged into system: {system_text}"
+    );
+}
+
+#[test]
+fn translate_request_responses_agent_message_before_tool_call_not_treated_as_tool_output() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": [
+            agent_message_input_item(AGENT_MESSAGE_ENVELOPE),
+            { "type": "function_call", "call_id": "call_1", "name": "do_it", "arguments": "{}" },
+            { "type": "function_call_output", "call_id": "call_1", "output": "done" }
+        ],
+        "tools": [{ "type": "function", "name": "do_it", "parameters": { "type": "object" } }]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect("agent_message followed by tool i/o should translate");
+
+    let messages = body["messages"].as_array().expect("messages");
+    // The agent_message must be its own `user` message (not a `tool` message),
+    // must appear before the tool result, and must not contain the tool output.
+    let user_idx = messages
+        .iter()
+        .position(|m| m["role"] == "user" && m["content"] == AGENT_MESSAGE_ENVELOPE)
+        .expect("agent_message user message must exist");
+    let tool_idx = messages
+        .iter()
+        .position(|m| m["role"] == "tool")
+        .expect("tool result message must exist");
+    assert!(
+        user_idx < tool_idx,
+        "agent_message must precede the tool result: {messages:?}"
+    );
+    let tool_content = messages[tool_idx]["content"].as_str().unwrap_or("");
+    assert!(
+        tool_content.contains("done"),
+        "tool output should be present in its own message: {tool_content}"
+    );
+    let user_content = messages[user_idx]["content"].as_str().unwrap_or("");
+    assert!(
+        !user_content.contains("done"),
+        "agent_message must not absorb tool output: {user_content}"
+    );
+}
+
+#[test]
+fn translate_request_responses_encrypted_agent_message_warns_and_keeps_header_only() {
+    let header = "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n";
+    let body = json!({
+        "model": "gpt-4o",
+        "input": [{
+            "type": "agent_message",
+            "id": "msg_2",
+            "author": "/root/worker",
+            "recipient": "/root",
+            "content": [
+                { "type": "input_text", "text": header },
+                { "type": "encrypted_content", "encrypted_content": "OPAQUE_AGENT_BLOB" }
+            ]
+        }]
+    });
+
+    // Assessment must warn (translation layer has no warning channel).
+    let assessment = assess_request_translation(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        &body,
+    );
+    let TranslationDecision::AllowWithWarnings(warnings) = assessment.decision() else {
+        panic!(
+            "encrypted agent_message should be AllowWithWarnings, got {:?}",
+            assessment.decision()
+        );
+    };
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("encrypted_content") && w.contains("dropped")),
+        "expected an encrypted_content drop warning, got {warnings:?}"
+    );
+
+    // Translation keeps the visible envelope header and drops the opaque blob.
+    let mut body = body;
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect("encrypted agent_message should still translate (best-effort)");
+
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "body = {body:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], header);
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(
+        !serialized.contains("OPAQUE_AGENT_BLOB"),
+        "opaque blob must not leak: {serialized}"
+    );
+}
+
+#[test]
+fn translate_request_responses_agent_message_with_encrypted_reasoning_not_rejected() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": [
+            { "type": "reasoning", "summary": [], "encrypted_content": "opaque_reasoning_state" },
+            agent_message_input_item(AGENT_MESSAGE_ENVELOPE)
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect(
+        "agent_message provides visible portable context; encrypted reasoning should not reject",
+    );
+
+    let messages = body["messages"].as_array().expect("messages");
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "user" && m["content"] == AGENT_MESSAGE_ENVELOPE),
+        "agent_message user message must be present: {messages:?}"
+    );
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(
+        !serialized.contains("opaque_reasoning_state"),
+        "encrypted reasoning must be dropped: {serialized}"
+    );
+}
+
+#[test]
+fn translate_request_responses_multiple_agent_messages_become_ordered_user_messages() {
+    // On the Anthropic path adjacent user messages are not coalesced, so each
+    // agent_message becomes its own user message in order. (On the Chat
+    // Completions path they would additionally be joined by the universal
+    // maximum-safe-compatibility coalesce pass, as happens for `compaction`.)
+    let envelope_a = "Message Type: NEW_TASK\nTask name: /root/a\nSender: /root\nPayload:\nFirst";
+    let envelope_b = "Message Type: MESSAGE\nTask name: /root\nSender: /root/a\nPayload:\nSecond";
+    let mut body = json!({
+        "model": "claude-3",
+        "input": [
+            agent_message_input_item(envelope_a),
+            agent_message_input_item(envelope_b)
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::Anthropic,
+        "claude-3",
+        &mut body,
+        false,
+    )
+    .expect("multiple agent_messages should translate");
+
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 2, "body = {body:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["text"], envelope_a);
+    assert_eq!(messages[1]["role"], "user");
+    assert_eq!(messages[1]["content"][0]["text"], envelope_b);
+}
+
+#[test]
+fn translate_request_responses_agent_message_stream_and_nonstream_identical() {
+    let base = json!({
+        "model": "gpt-4o",
+        "input": [agent_message_input_item(AGENT_MESSAGE_ENVELOPE)]
+    });
+
+    let mut body_off = base.clone();
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body_off,
+        false,
+    )
+    .expect("non-stream translation");
+
+    let mut body_on = base.clone();
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body_on,
+        true,
+    )
+    .expect("stream translation");
+
+    assert_eq!(
+        body_off["messages"], body_on["messages"],
+        "stream vs non-stream must share inbound translation"
+    );
+}
+
+#[test]
+fn translate_request_responses_empty_agent_message_emits_no_user_message() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": [
+            { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] },
+            { "type": "agent_message", "author": "/root", "recipient": "/root/w", "content": [] },
+            { "type": "agent_message", "author": "/root", "recipient": "/root/w",
+              "content": [{ "type": "input_text", "text": "   \n  " }] }
+        ]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect("empty agent_messages should translate without error");
+
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "body = {body:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], "hi");
+}
+
+#[test]
+fn translate_request_responses_agent_message_not_rejected_as_outside_portable_subset() {
+    for upstream_format in [
+        UpstreamFormat::OpenAiChatCompletions,
+        UpstreamFormat::Anthropic,
+    ] {
+        let mut body = json!({
+            "model": "target-model",
+            "input": [agent_message_input_item(AGENT_MESSAGE_ENVELOPE)]
+        });
+
+        translate_request(
+            UpstreamFormat::OpenAiResponses,
+            upstream_format,
+            "target-model",
+            &mut body,
+            false,
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "agent_message must not be rejected as outside the portable subset for {upstream_format:?}: {err}"
+            )
+        });
+    }
+}
+
+#[test]
+fn translate_request_responses_agent_message_coexists_with_namespace_bridge() {
+    let mut body = json!({
+        "model": "gpt-4o",
+        "input": [agent_message_input_item(AGENT_MESSAGE_ENVELOPE)],
+        "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [{
+                "type": "function",
+                "name": "spawn_agent",
+                "parameters": { "type": "object", "properties": { "prompt": { "type": "string" } } }
+            }]
+        }]
+    });
+
+    translate_request(
+        UpstreamFormat::OpenAiResponses,
+        UpstreamFormat::OpenAiChatCompletions,
+        "target-model",
+        &mut body,
+        false,
+    )
+    .expect("namespace bridge and agent_message must coexist");
+
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "body = {body:?}");
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], AGENT_MESSAGE_ENVELOPE);
+
+    let tools = body["tools"].as_array().expect("chat tools");
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["function"]["name"], "multi_agent_v1__spawn_agent");
+}
+
 #[test]
 fn translate_request_responses_passthrough_preserves_compaction_fields() {
     let mut body = json!({

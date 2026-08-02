@@ -28,8 +28,9 @@ use super::openai_family::{
     openai_extra_body_google_cached_content, validated_openai_extra_body_anthropic_cache_control,
 };
 use super::openai_responses::{
-    responses_compaction_summary_text, responses_input_item_is_compaction,
-    responses_input_item_is_message, responses_input_item_type, responses_reasoning_summary_text,
+    responses_agent_message_text, responses_compaction_summary_text,
+    responses_input_item_is_compaction, responses_input_item_is_message, responses_input_item_type,
+    responses_reasoning_summary_text,
 };
 use super::tools::{
     normalized_responses_tool_definition, openai_custom_tool_format_is_plain_text,
@@ -788,6 +789,32 @@ pub(super) fn responses_has_warning_only_nonportable_tool_definitions(body: &Val
         .unwrap_or(false)
 }
 
+/// Whether an `agent_message` input item carries an `encrypted_content` part.
+/// The opaque blob is provider-owned (OpenAI Responses service round-trip only)
+/// and cannot be decrypted by a non-OpenAI upstream. The translator keeps the
+/// visible input_text envelope header and drops the blob, so the recipient model
+/// sees only routing metadata with an empty payload body. This is best-effort:
+/// the request stays portable (not rejected) but the warning surfaces the loss.
+pub(super) fn responses_has_warning_only_encrypted_agent_message(body: &Value) -> bool {
+    body.get("input")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter().any(|item| {
+                responses_input_item_type(item) == Some("agent_message")
+                    && item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .is_some_and(|parts| {
+                            parts.iter().any(|part| {
+                                part.get("type").and_then(Value::as_str)
+                                    == Some("encrypted_content")
+                            })
+                        })
+            })
+        })
+        .unwrap_or(false)
+}
+
 pub(super) fn responses_custom_tool_format_reject_message(
     body: &Value,
     target_format: UpstreamFormat,
@@ -894,6 +921,7 @@ pub(super) fn responses_portable_input_item_type(item_type: &str) -> bool {
             | "function_call_output"
             | "custom_tool_call_output"
             | "reasoning"
+            | "agent_message"
     )
 }
 
@@ -948,6 +976,13 @@ fn responses_input_item_has_visible_portable_context(item: &Value) -> bool {
         Some("compaction" | "compaction_summary") => {
             !responses_compaction_summary_text(item).trim().is_empty()
         }
+        // A cross-provider `agent_message` carries a visible text envelope
+        // (routing metadata + payload). Counting it as visible portable context
+        // prevents a multi-turn child's own accumulated reasoning.encrypted_content
+        // from triggering a native-continuity rejection when a new agent_message
+        // arrives in the same request. Fork-inherited reasoning is stripped
+        // before reaching the child, so this arm only covers that co-occurrence.
+        Some("agent_message") => responses_agent_message_text(item).is_some(),
         _ => false,
     }
 }
@@ -2481,6 +2516,11 @@ pub(crate) fn assess_request_translation_with_dialect(
         } else if responses_has_warning_only_nonportable_tool_definitions(body) {
             assessment.warning(format!(
                 "non-function Responses tools are not portable to {upstream_format} and will be dropped"
+            ));
+        }
+        if responses_has_warning_only_encrypted_agent_message(body) {
+            assessment.warning(format!(
+                "OpenAI Responses `agent_message` input carries an `encrypted_content` part whose payload is opaque to {upstream_format}; only the routing metadata envelope remains visible and the encrypted payload body is dropped"
             ));
         }
         if let Some(message) = responses_custom_tool_format_reject_message(body, upstream_format) {

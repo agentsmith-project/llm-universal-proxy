@@ -201,6 +201,41 @@ pub(super) fn responses_compaction_summary_text(item: &Value) -> String {
         .to_string()
 }
 
+/// Extracts the visible text of a cross-provider `agent_message` input item.
+///
+/// `agent_message` is a turn boundary between agents (semantically equivalent
+/// to a user turn). Its `content` parts are either `input_text` (already the
+/// full rendered envelope: `Message Type / Task name / Sender / Payload:`) or
+/// `encrypted_content` (a provider-opaque blob meaningful only to the OpenAI
+/// Responses service).
+///
+/// This concatenates all `input_text` parts verbatim and drops `encrypted_content`
+/// so the opaque blob never leaks into the translated user message. It MUST NOT
+/// reuse `map_responses_content_to_openai`, which has no `encrypted_content` arm
+/// and would pass the blob through. Returns `None` for empty/whitespace-only
+/// text so the dispatch arm skips emitting an empty user message.
+pub(super) fn responses_agent_message_text(item: &Value) -> Option<String> {
+    if responses_input_item_type(item) != Some("agent_message") {
+        return None;
+    }
+    let mut text = String::new();
+    if let Some(parts) = item.get("content").and_then(Value::as_array) {
+        for part in parts {
+            if part.get("type").and_then(Value::as_str) == Some("input_text") {
+                if let Some(t) = part.get("text").and_then(Value::as_str) {
+                    text.push_str(t);
+                }
+            }
+            // `encrypted_content` and any other part type are intentionally dropped.
+        }
+    }
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
 fn responses_output_audio_item_to_openai_audio(item: &Value) -> Option<Value> {
     if item.get("type").and_then(Value::as_str) != Some("output_audio") {
         return None;
@@ -1006,6 +1041,23 @@ pub(super) fn responses_to_messages(
                     messages.push(serde_json::json!({
                         "role": "user",
                         "content": summary
+                    }));
+                }
+            }
+            "agent_message" => {
+                // A cross-provider agent turn boundary maps to a Chat user
+                // message (mirroring `compaction`). The dedicated extractor drops
+                // any opaque `encrypted_content` blob and returns `None` for empty
+                // content so no empty user message is emitted.
+                if let Some(text) = responses_agent_message_text(&item) {
+                    flush_assistant(&mut messages, &mut current_assistant);
+                    flush_deferred_user_after_tool_results(
+                        &mut messages,
+                        &mut deferred_user_after_tool_results,
+                    );
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": text
                     }));
                 }
             }
