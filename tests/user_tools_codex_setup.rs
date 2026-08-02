@@ -11,9 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use llm_universal_proxy::user_tools::codex_setup::{
     agent_file_name, agent_name, build_profile_content, detect_codex_version,
-    generate_agent_content, generate_provider_block, generate_state_content, install, parse_args,
-    patch_catalog_v1, run_status, run_uninstall, run_with, write_config_file_atomic, Action,
-    CliOptions, GeneratedPaths, SetupInput,
+    extract_model_ids, generate_agent_content, generate_provider_block, generate_state_content,
+    install, parse_args, patch_catalog_v1, run_status, run_uninstall, run_with,
+    write_config_file_atomic, Action, CliOptions, GeneratedPaths, SetupInput,
 };
 
 struct TempDir {
@@ -558,6 +558,36 @@ fn profile_content_force_v1_strips_old_catalog_key_and_preserves_user_bare_keys(
         "managed catalog key not unique: {out}"
     );
     assert!(out.contains("model_catalog_json = \"/new/model-catalog.json\""));
+}
+
+// ---------- HOTFIX 2: extract_model_ids reads slug with id fallback ----------
+
+#[test]
+fn extract_model_ids_prefers_slug() {
+    let models = serde_json::json!([{"slug": "ds-flash"}, {"slug": "glm-5.2"}]);
+    let ids = extract_model_ids(models.as_array().unwrap());
+    assert_eq!(ids, vec!["ds-flash".to_string(), "glm-5.2".to_string()]);
+}
+
+#[test]
+fn extract_model_ids_falls_back_to_id() {
+    let models = serde_json::json!([{"id": "old-style"}]);
+    let ids = extract_model_ids(models.as_array().unwrap());
+    assert_eq!(ids, vec!["old-style".to_string()]);
+}
+
+#[test]
+fn extract_model_ids_empty_for_no_models() {
+    let models = serde_json::json!([]);
+    let ids = extract_model_ids(models.as_array().unwrap());
+    assert!(ids.is_empty(), "expected empty id list: {ids:?}");
+}
+
+#[test]
+fn extract_model_ids_handles_mixed_slug_and_id() {
+    let models = serde_json::json!([{"slug": "x"}, {"id": "y"}]);
+    let ids = extract_model_ids(models.as_array().unwrap());
+    assert_eq!(ids, vec!["x".to_string(), "y".to_string()]);
 }
 
 #[test]

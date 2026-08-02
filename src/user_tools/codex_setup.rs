@@ -877,6 +877,20 @@ fn io_err(error: std::io::Error) -> String {
 // Connection test + entry point
 // ===========================================================================
 
+/// Extract model identifiers from a `/models` response `models` array.
+///
+/// Reads the `slug` field first (the Codex-UA catalog key) and falls back to
+/// `id` (the conventional OpenAI shape), so the connection test is correct for
+/// both the llmup proxy catalog and any id-style upstream. Entries lacking both
+/// fields, or with a non-string value, are dropped.
+pub fn extract_model_ids(models: &[serde_json::Value]) -> Vec<String> {
+    models
+        .iter()
+        .filter_map(|model| model.get("slug").or_else(|| model.get("id")))
+        .filter_map(|value| value.as_str().map(|s| s.to_string()))
+        .collect()
+}
+
 /// Hit `<base_url>/models` with the provider key and the Codex user agent.
 /// Returns the list of model ids on success.
 pub async fn connection_test(base_url: &str, provider_key: &str) -> Result<Vec<String>, String> {
@@ -905,16 +919,7 @@ pub async fn connection_test(base_url: &str, provider_key: &str) -> Result<Vec<S
         .get("models")
         .and_then(|models| models.as_array())
         .ok_or_else(|| format!("connection test: no `models` array in response from {url}"))?;
-    let ids = models
-        .iter()
-        .filter_map(|model| {
-            model
-                .get("id")
-                .and_then(|id| id.as_str())
-                .map(|id| id.to_string())
-        })
-        .collect();
-    Ok(ids)
+    Ok(extract_model_ids(models))
 }
 
 /// Entry point invoked from `main.rs` when `argv[1] == "codex-setup"`.
@@ -995,6 +1000,17 @@ pub async fn run_with(args: &[String], stdout: &mut dyn Write) -> Result<i32, St
                     writeln!(stdout, "{warning}").map_err(io_err)?;
                 }
                 match connection_test(&input.base_url, key).await {
+                    Ok(models) if models.is_empty() => {
+                        // Reachable but no models: not a success state. The usual
+                        // cause is a missing `/openai/v1` suffix on the base URL
+                        // (the proxy exposes no bare `/models` route).
+                        writeln!(
+                            stdout,
+                            "connection test: WARNING — reachable but 0 models discovered \
+                             (check base_url includes /openai/v1)."
+                        )
+                        .map_err(io_err)?;
+                    }
                     Ok(models) => {
                         writeln!(
                             stdout,
