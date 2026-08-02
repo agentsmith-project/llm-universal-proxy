@@ -64,6 +64,16 @@ Use `llmup-codex --llmup-help` or `llmup-claude --llmup-help` for launcher-speci
 
 For commands that should not go through the proxy, such as login, native help, native configuration, or MCP management, use `llmup-codex --llmup-no-proxy -- <native args>` or `llmup-claude --llmup-no-proxy -- <native args>`. The launcher does not auto-detect native subcommands.
 
+## Hybrid Multi-Agent Topology (V1)
+
+Codex supports a hybrid V1 multi-agent setup where the main agent runs the official model via ChatGPT login and a custom sub-agent runs a local model through `llmup`. Codex routes each agent by its `model_provider`, so the two can use different providers in one session.
+
+Configure the sub-agent as a `~/.codex/agents/<name>.toml` file (or under `$CODEX_HOME/agents/`) that sets `model = <local-alias>` and `model_provider = <your-llmup-provider-id>`, where that provider is a `[model_providers.<id>]` entry whose `base_url` points at the `llmup` `/openai/v1` endpoint, with `wire_api = "responses"` and auth supplied through `env_key`. The main agent keeps `model_provider = "openai"` with the official model and ChatGPT login.
+
+Do not enable `[features] multi_agent_v2` — use the default V1 multi-agent. V2 encrypts the inter-agent task with an OpenAI server-held key (Fernet), so a non-OpenAI sub-agent cannot decrypt it and never receives the task. V1 delivers the task as a plain user message, which the local model receives normally. This matches Codex issue #33551 and has been verified empirically.
+
+Prefer fresh-context sub-agents over full-history forks to avoid history-fork constraints. Compaction is safe for long-running sub-agents: Codex uses local compaction for non-OpenAI providers and never calls the `/responses/compact` endpoint through `llmup`, so sub-agents compact normally.
+
 ## Auth Boundary
 
 `llmup-config` stores provider credentials for the proxy. The launchers give Codex or Claude Code only the local proxy credential needed to call the proxy. This keeps the provider key on the proxy side instead of putting it into the client environment.
