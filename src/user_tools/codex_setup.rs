@@ -36,6 +36,10 @@ const DEVELOPER_INSTRUCTIONS: &str =
 const VALID_REASONING_EFFORTS: &[&str] = &[
     "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
 ];
+/// Default wizard base URL. The proxy exposes no bare `/models` route, only
+/// `/openai/v1/models`, so the `/openai/v1` suffix is required for both the
+/// connection test and the Codex runtime.
+const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080/openai/v1";
 
 /// Inputs for file generation. `provider_key` is intentionally **not** stored;
 /// it is used only for the optional live connection test.
@@ -52,6 +56,9 @@ pub struct SetupInput {
 pub enum Action {
     #[default]
     Generate,
+    /// `--interactive` / `--tui`: launch the sequential prompt wizard. A
+    /// generate-mode variant — the same flags pre-fill the wizard defaults.
+    Interactive,
     Status,
     Uninstall,
     Help,
@@ -489,6 +496,7 @@ llm-universal-proxy codex-setup — configure Codex V1 hybrid sub-agents
 USAGE:
     llm-universal-proxy codex-setup --base-url <url> --model <alias> --provider-key <key>
                                     [--reasoning-effort <effort>] [--context-window <N>]
+    llm-universal-proxy codex-setup --interactive
     llm-universal-proxy codex-setup --status
     llm-universal-proxy codex-setup --uninstall
     llm-universal-proxy codex-setup --help
@@ -504,6 +512,9 @@ OPTIONS:
     --context-window <N>       optional model_context_window for the sub-agent
     --force-v1                 derive a per-model catalog pinning multi_agent_version = \"v1\"
                                (requires the codex CLI; falls back to feature-flag-only otherwise)
+    --interactive, --tui       launch a sequential prompt-based wizard (requires a terminal);
+                               the flags above act as pre-filled defaults in the wizard.
+                               Mutually exclusive with --status / --uninstall
     --status                   show what codex-setup has installed
     --uninstall                remove files managed by codex-setup
     --help, -h                 show this help
@@ -515,6 +526,7 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, String> {
     let mut opts = CliOptions::default();
     let mut status = false;
     let mut uninstall = false;
+    let mut interactive = false;
 
     let mut index = 0;
     while index < args.len() {
@@ -528,6 +540,7 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, String> {
             }
             "--status" => status = true,
             "--uninstall" => uninstall = true,
+            "--interactive" | "--tui" => interactive = true,
             "--force-v1" => opts.force_v1 = true,
             _ => {
                 if let Some(value) = inline_value(arg, "--base-url") {
@@ -562,10 +575,16 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, String> {
 
     let action = if status && uninstall {
         return Err("--status and --uninstall are mutually exclusive".to_string());
+    } else if interactive && (status || uninstall) {
+        return Err(
+            "--interactive is mutually exclusive with --status and --uninstall".to_string(),
+        );
     } else if status {
         Action::Status
     } else if uninstall {
         Action::Uninstall
+    } else if interactive {
+        Action::Interactive
     } else {
         Action::Generate
     };
@@ -912,6 +931,49 @@ pub fn extract_model_ids(models: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
+// ===========================================================================
+// Wizard decision logic (Feature 2)
+// ===========================================================================
+//
+// The wizard prompts are thin I/O wrappers over `dialoguer` (verified via the
+// binary, not unit tests). The *decisions* the wizard makes are factored into
+// the two pure helpers below so the logic is unit-testable.
+
+/// Resolve the final model for the wizard given everything known:
+/// - `discovered`: models returned by the connection test (may be empty);
+/// - `pre_filled`: the `--model` flag value, if any (a wizard pre-fill);
+/// - `free_text`: the model the user explicitly typed or selected this session.
+///
+/// Priority: an explicit current choice (`free_text`) beats the flag default
+/// (`pre_filled`), which beats the first discovered model. Empty strings are
+/// treated as absent. Returns an empty `String` when nothing is available (the
+/// caller validates with [`is_valid_model_name`] and aborts on failure).
+fn resolve_wizard_model(
+    discovered: &[String],
+    pre_filled: Option<&str>,
+    free_text: Option<&str>,
+) -> String {
+    free_text
+        .filter(|s| !s.is_empty())
+        .or(pre_filled.filter(|s| !s.is_empty()))
+        .or(discovered.first().map(String::as_str))
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
+
+/// Map a `Select` index from the reasoning-effort menu to an effort level.
+/// The menu is `[ "default (omit)", <8 levels...> ]`, so index `0` → `None`
+/// (omit the key) and indices `1..=8` map to [`VALID_REASONING_EFFORTS`].
+/// Out-of-range indices gracefully yield `None` (no panic).
+fn resolve_wizard_effort(selection: usize) -> Option<String> {
+    if selection == 0 {
+        return None;
+    }
+    VALID_REASONING_EFFORTS
+        .get(selection - 1)
+        .map(|s| s.to_string())
+}
+
 /// Hit `<base_url>/models` with the provider key and the Codex user agent.
 /// Returns the list of model ids on success.
 pub async fn connection_test(base_url: &str, provider_key: &str) -> Result<Vec<String>, String> {
@@ -941,6 +1003,225 @@ pub async fn connection_test(base_url: &str, provider_key: &str) -> Result<Vec<S
         .and_then(|models| models.as_array())
         .ok_or_else(|| format!("connection test: no `models` array in response from {url}"))?;
     Ok(extract_model_ids(models))
+}
+
+// ===========================================================================
+// Interactive wizard (Feature 2)
+// ===========================================================================
+
+/// Run the 9-step sequential wizard using `dialoguer`. Reuses the existing
+/// [`install`] / [`connection_test`] / [`build_profile_content`] /
+/// [`generate_agent_content`] / [`run_codex_debug_models_bundled`] — no new
+/// write logic. The caller ([`run_with`]) gates this on stdin being a TTY.
+///
+/// Cancellation safety: every prompt returns before [`install`] is called, so
+/// ESC / Ctrl-C at any step writes nothing. The provider key is used only for
+/// the step-3 connection test and is never persisted ([`SetupInput`] has no key
+/// field).
+async fn run_wizard(opts: &CliOptions, home: &Path, stdout: &mut dyn Write) -> Result<i32, String> {
+    use dialoguer::{Confirm, Input, Password, Select};
+
+    // Any prompt error (ESC / Ctrl-C / EOF) is a clean abort: nothing has been
+    // written yet because [`install`] runs only at the final confirm.
+    macro_rules! prompt {
+        ($expr:expr) => {
+            match $expr {
+                Ok(value) => value,
+                Err(_) => {
+                    writeln!(stdout, "Wizard aborted; no files were written.").map_err(io_err)?;
+                    return Ok(0);
+                }
+            }
+        };
+    }
+
+    // Step 1 — base_url (Input, pre-fill from --base-url).
+    let base_url: String = prompt!(Input::new()
+        .with_prompt("llmup proxy base URL")
+        .default(
+            opts.base_url
+                .clone()
+                .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+        )
+        .interact_text());
+
+    // Step 2 — provider_key (Password, masked, optional: empty = skip).
+    let provider_key: String = prompt!(Password::new()
+        .with_prompt("Provider key (connection test only; never stored — enter to skip)")
+        .allow_empty_password(true)
+        .interact());
+
+    // Step 3 — connection test (automatic; only when a key was entered).
+    let discovered: Vec<String> = if provider_key.trim().is_empty() {
+        writeln!(stdout, "Skipping connection test (no key entered).").map_err(io_err)?;
+        Vec::new()
+    } else {
+        if let Some(warning) = base_url_http_warning(&base_url) {
+            writeln!(stdout, "{warning}").map_err(io_err)?;
+        }
+        match connection_test(&base_url, &provider_key).await {
+            Ok(models) if models.is_empty() => {
+                writeln!(
+                    stdout,
+                    "connection test: WARNING — reachable but 0 models discovered \
+                     (check base_url includes /openai/v1)."
+                )
+                .map_err(io_err)?;
+                Vec::new()
+            }
+            Ok(models) => {
+                writeln!(
+                    stdout,
+                    "connection test: OK ({} models reachable).",
+                    models.len()
+                )
+                .map_err(io_err)?;
+                models
+            }
+            Err(error) => {
+                writeln!(stdout, "connection test: WARNING — {error}").map_err(io_err)?;
+                Vec::new()
+            }
+        }
+    };
+
+    // Step 4 — model: Select when models were discovered, else free-text Input.
+    let chosen: Option<String> = if discovered.is_empty() {
+        let default = opts.model.as_deref().unwrap_or("").to_string();
+        let entered: String = prompt!(Input::new()
+            .with_prompt("Model alias/id")
+            .default(default)
+            .interact_text());
+        Some(entered)
+    } else {
+        let items: Vec<&str> = discovered.iter().map(String::as_str).collect();
+        let default_idx = opts
+            .model
+            .as_deref()
+            .and_then(|m| discovered.iter().position(|d| d == m))
+            .unwrap_or(0);
+        let idx = prompt!(Select::new()
+            .with_prompt("Select model")
+            .items(&items)
+            .default(default_idx)
+            .interact());
+        Some(discovered.get(idx).cloned().unwrap_or_default())
+    };
+    let model = resolve_wizard_model(&discovered, opts.model.as_deref(), chosen.as_deref());
+    if !is_valid_model_name(&model) {
+        writeln!(
+            stdout,
+            "Invalid model name `{model}` (allowed: letters, digits, '.', '_', '-'); aborting."
+        )
+        .map_err(io_err)?;
+        return Ok(2);
+    }
+
+    // Step 5 — reasoning_effort (Select: "default (omit)" + 8 levels).
+    let effort_items: Vec<&str> = std::iter::once("default (omit)")
+        .chain(VALID_REASONING_EFFORTS.iter().copied())
+        .collect();
+    let default_effort_idx = opts
+        .reasoning_effort
+        .as_deref()
+        .and_then(|e| VALID_REASONING_EFFORTS.iter().position(|v| *v == e))
+        .map(|p| p + 1)
+        .unwrap_or(0);
+    let selection = prompt!(Select::new()
+        .with_prompt("Reasoning effort")
+        .items(&effort_items)
+        .default(default_effort_idx)
+        .interact());
+    let reasoning_effort = resolve_wizard_effort(selection);
+
+    // Step 6 — context_window (optional numeric Input; blank = omit).
+    let ctx_entered: String = prompt!(Input::new()
+        .with_prompt("Context window (blank to omit)")
+        .default(String::new())
+        .interact_text());
+    let context_window: Option<u64> = if ctx_entered.trim().is_empty() {
+        None
+    } else {
+        match ctx_entered.trim().parse::<u64>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                writeln!(
+                    stdout,
+                    "Context window must be a non-negative integer; aborting."
+                )
+                .map_err(io_err)?;
+                return Ok(2);
+            }
+        }
+    };
+
+    // Step 7 — force-v1 (Confirm).
+    let force_v1 = prompt!(Confirm::new()
+        .with_prompt("Force V1 for all official models? (requires codex CLI)")
+        .default(opts.force_v1)
+        .interact());
+
+    // Step 8 — preview (print the exact bodies that would be written).
+    let agent_content = generate_agent_content(&model, reasoning_effort.as_deref(), context_window);
+    let profile_content = build_profile_content(None, &base_url, None);
+    writeln!(stdout, "\n--- preview: agent TOML ---\n{agent_content}").map_err(io_err)?;
+    writeln!(stdout, "--- preview: profile TOML ---\n{profile_content}").map_err(io_err)?;
+    if force_v1 {
+        writeln!(
+            stdout,
+            "(--force-v1: a model_catalog_json key will be derived and added to the profile.)"
+        )
+        .map_err(io_err)?;
+    }
+
+    // Step 9 — confirm install (Confirm). No → exit without writing.
+    let proceed = prompt!(Confirm::new()
+        .with_prompt("Proceed with installation?")
+        .default(true)
+        .interact());
+    if !proceed {
+        writeln!(stdout, "Aborted; no files were written.").map_err(io_err)?;
+        return Ok(0);
+    }
+
+    // Install reuses the exact same path as flag mode.
+    let input = SetupInput {
+        base_url: base_url.clone(),
+        model: model.clone(),
+        reasoning_effort: reasoning_effort.clone(),
+        context_window,
+    };
+    let bundled_catalog = if force_v1 {
+        match run_codex_debug_models_bundled() {
+            Ok(raw) => Some(raw),
+            Err(_) => {
+                writeln!(
+                    stdout,
+                    "WARNING: --force-v1 requires the codex CLI; \
+                     falling back to feature-flag-only V1 defense."
+                )
+                .map_err(io_err)?;
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let paths = install(&input, home, bundled_catalog.as_deref())?;
+    writeln!(
+        stdout,
+        "codex-setup: wrote Codex V1 hybrid sub-agent config."
+    )
+    .map_err(io_err)?;
+    writeln!(stdout, "  profile: {}", paths.profile_path.display()).map_err(io_err)?;
+    writeln!(stdout, "  agent:   {}", paths.agent_path.display()).map_err(io_err)?;
+    writeln!(stdout, "  state:   {}", paths.state_path.display()).map_err(io_err)?;
+    writeln!(
+        stdout,
+        "Set {ENV_KEY_NAME}=<your-key>, then run: codex exec --profile llmup"
+    )
+    .map_err(io_err)?;
+    Ok(0)
 }
 
 /// Entry point invoked from `main.rs` when `argv[1] == "codex-setup"`.
@@ -974,6 +1255,21 @@ pub async fn run_with(args: &[String], stdout: &mut dyn Write) -> Result<i32, St
         Action::Uninstall => {
             let home = codex_home()?;
             run_uninstall(&home, stdout)
+        }
+        Action::Interactive => {
+            // Non-TTY stdin (CI / piped / nohup) makes dialoguer read EOF and
+            // misbehave; reject with guidance instead of hanging.
+            use std::io::IsTerminal;
+            if !std::io::stdin().is_terminal() {
+                writeln!(
+                    stdout,
+                    "--interactive requires a terminal; use flags for scripting."
+                )
+                .map_err(io_err)?;
+                return Ok(2);
+            }
+            let home = codex_home()?;
+            run_wizard(&opts, &home, stdout).await
         }
         Action::Generate => {
             let home = codex_home()?;
@@ -1133,5 +1429,133 @@ mod tests {
         assert!(base_url_http_warning("http://example.com").is_some());
         assert!(base_url_http_warning("https://example.com").is_none());
         assert!(base_url_http_warning("not a url").is_none());
+    }
+
+    // ---------- Feature 2: wizard decision logic ----------
+
+    #[test]
+    fn resolve_wizard_model_prefers_explicit_free_text() {
+        // The user typed/selected something this session — that wins over any
+        // pre-filled flag default or discovered model.
+        let discovered = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(
+            resolve_wizard_model(&discovered, Some("a"), Some("gpt-5")),
+            "gpt-5"
+        );
+        // Even with no discovery, free-text wins over the pre-filled default.
+        assert_eq!(
+            resolve_wizard_model(&[], Some("prefilled"), Some("typed")),
+            "typed"
+        );
+    }
+
+    #[test]
+    fn resolve_wizard_model_falls_back_to_prefilled() {
+        // No explicit choice → use the --model flag default.
+        assert_eq!(
+            resolve_wizard_model(&[], Some("flag-model"), None),
+            "flag-model"
+        );
+        // Pre-filled beats the first discovered model.
+        let discovered = vec!["first".to_string(), "second".to_string()];
+        assert_eq!(
+            resolve_wizard_model(&discovered, Some("flag-model"), None),
+            "flag-model"
+        );
+    }
+
+    #[test]
+    fn resolve_wizard_model_falls_back_to_first_discovered() {
+        // Nothing explicit and no flag → first discovered model is the default.
+        let discovered = vec!["first".to_string(), "second".to_string()];
+        assert_eq!(resolve_wizard_model(&discovered, None, None), "first");
+    }
+
+    #[test]
+    fn resolve_wizard_model_empty_when_nothing_available() {
+        assert_eq!(resolve_wizard_model(&[], None, None), "");
+        // Empty strings are treated as absent (e.g. user pressed Enter on a
+        // blank free-text prompt with no pre-fill).
+        assert_eq!(resolve_wizard_model(&[], Some(""), Some("")), "");
+    }
+
+    #[test]
+    fn resolve_wizard_effort_default_index_is_none() {
+        // Index 0 is the leading "default (omit)" menu choice.
+        assert_eq!(resolve_wizard_effort(0), None);
+    }
+
+    #[test]
+    fn resolve_wizard_effort_maps_levels() {
+        assert_eq!(resolve_wizard_effort(1), Some("none".to_string()));
+        assert_eq!(resolve_wizard_effort(2), Some("minimal".to_string()));
+        assert_eq!(resolve_wizard_effort(5), Some("high".to_string()));
+        assert_eq!(resolve_wizard_effort(8), Some("ultra".to_string()));
+    }
+
+    #[test]
+    fn resolve_wizard_effort_out_of_range_is_none() {
+        // Past the end of the 8-level menu → graceful None (no panic).
+        assert_eq!(resolve_wizard_effort(9), None);
+        assert_eq!(resolve_wizard_effort(usize::MAX), None);
+    }
+
+    #[test]
+    fn parse_args_interactive_flag_sets_action() {
+        let opts = parse_args(&["--interactive".into()]).expect("interactive");
+        assert_eq!(opts.action, Action::Interactive);
+    }
+
+    #[test]
+    fn parse_args_tui_alias_sets_action() {
+        let opts = parse_args(&["--tui".into()]).expect("tui alias");
+        assert_eq!(opts.action, Action::Interactive);
+    }
+
+    #[test]
+    fn parse_args_interactive_does_not_require_generate_flags() {
+        // --interactive gathers base-url/model via the wizard, so they must NOT
+        // be required at parse time.
+        let opts = parse_args(&["--interactive".into()]).expect("interactive ok");
+        assert_eq!(opts.action, Action::Interactive);
+        assert_eq!(opts.base_url, None);
+        assert_eq!(opts.model, None);
+    }
+
+    #[test]
+    fn parse_args_interactive_and_status_mutually_exclusive() {
+        let err = parse_args(&["--interactive".into(), "--status".into()]).unwrap_err();
+        assert!(
+            err.contains("mutually exclusive") && err.contains("--interactive"),
+            "expected interactive+status mutual-exclusion error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_args_interactive_and_uninstall_mutually_exclusive() {
+        let err = parse_args(&["--uninstall".into(), "--tui".into()]).unwrap_err();
+        assert!(
+            err.contains("mutually exclusive") && err.contains("--interactive"),
+            "expected interactive+uninstall mutual-exclusion error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_args_interactive_accepts_prefilled_generate_flags() {
+        // Generate flags alongside --interactive act as wizard pre-fills.
+        let opts = parse_args(&[
+            "--interactive".into(),
+            "--base-url".into(),
+            "https://proxy.example.com".into(),
+            "--model".into(),
+            "gpt-5".into(),
+            "--reasoning-effort".into(),
+            "high".into(),
+        ])
+        .expect("interactive + pre-fills");
+        assert_eq!(opts.action, Action::Interactive);
+        assert_eq!(opts.base_url.as_deref(), Some("https://proxy.example.com"));
+        assert_eq!(opts.model.as_deref(), Some("gpt-5"));
+        assert_eq!(opts.reasoning_effort.as_deref(), Some("high"));
     }
 }
